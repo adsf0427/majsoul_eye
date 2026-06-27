@@ -1,0 +1,49 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Test / coverage output
+.coverage
+coverage.xml
+htmlcov/
+
+# Local environments
+.venv/
+venv/
+env/
+
+# Local editor / OS files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+
+# Captures, datasets, and generated labels
+captures/
+datasets/
+*.jsonl
+*.jsonl.log
+
+# Browser/runtime data
+.spike_browser_data/
+liqi_proto/
+
+# Training, export, and analysis outputs
+fails/
+runs/
+outputs/
+wandb/
+mlruns/
+*.onnx
+*.engine
+*.tflite
