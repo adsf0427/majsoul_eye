@@ -73,15 +73,20 @@ def test_split_whole_game_holdout():
         assert all("g1" in p for p in train)
 
 
-def test_split_paths_are_absolute_native():
-    with tempfile.TemporaryDirectory() as tmp:
-        ydir = _make_fake_game(tmp, "g", [5])
+def test_split_paths_are_relative_posix():
+    # create the fake game UNDER the repo (relative yolodir in) so the output is a
+    # portable relative path; ultralytics recovers labels by swapping the '/images/'
+    # segment (forward slashes; it normalizes to os.sep at load).
+    d = "datasets/_bdd_test_tmp"
+    try:
+        ydir = _make_fake_game(d, "g", [5])
         train, val = bdd.split_images({"g": (ydir, "c")}, "", set())
         assert len(train) == 1 and not val
-        # ultralytics recovers labels by swapping the 'images' path segment, so the
-        # path must be absolute and use the native separator.
-        assert os.path.isabs(train[0])
-        assert (os.sep + "images" + os.sep) in train[0]
+        assert not os.path.isabs(train[0])          # relative → tar-and-go portable
+        assert "/images/" in train[0] and "\\" not in train[0]
+    finally:
+        import shutil
+        shutil.rmtree("datasets/_bdd_test_tmp", ignore_errors=True)
 
 
 def test_parse_data_arg():
