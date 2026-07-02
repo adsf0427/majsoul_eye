@@ -19,9 +19,22 @@ The precise geometry is calibrated at 1920x1080 fullscreen 16:9; frames are
 resized to that. Non-16:9 / letterboxed frames are skipped with a warning (their
 river/meld boxes would be garbage — see session4).
 
+``--from-annotations DIR`` REUSES the records ``annotate_ai_session.py`` already
+wrote (DIR/<capture-stem>.jsonl) instead of re-running ``annotate_frame`` — the
+expensive warp/mask/snap runs ONCE (in that script, which parallelizes it), and
+this step only cuts crops from the stored polys. Same crop/YOLO output, no double
+compute. Assumes the annotations were generated at the frame's native resolution
+(true for the 1080p AI games; the records store native-px polys, so this mode does
+NOT resize under them).
+
 Usage (conda `auto` env, repo root, PYTHONPATH=.):
+  # self-contained (re-annotates):
   python scripts/train/build_dataset.py captures/intermediate/gt/ai_run_3_game1.jsonl \
          captures/raw/ai_session/run_3/game1 --out datasets/ai_g_run3_1
+  # reuse annotate_ai_session output (no re-annotation):
+  python scripts/train/build_dataset.py captures/intermediate/gt/ai_run_3_game1.jsonl \
+         captures/intermediate/gt/ai_run_3_game1 --out datasets/precise_ai_run_3_game1 \
+         --from-annotations out/ai_session_annotations --no-yolo
 """
 
 from __future__ import annotations
@@ -42,6 +55,9 @@ def main() -> None:
                          "train/inference; a larger saved crop gives augmentation headroom.")
     ap.add_argument("--no-crops", action="store_true", help="Skip classifier crops.")
     ap.add_argument("--no-yolo", action="store_true", help="Skip YOLO detector labels.")
+    ap.add_argument("--from-annotations", metavar="DIR", default=None,
+                    help="Reuse annotate_ai_session records from DIR/<capture-stem>.jsonl "
+                         "instead of re-running annotate_frame (no warp/mask recompute).")
     args = ap.parse_args()
 
     import cv2  # auto env
@@ -53,10 +69,29 @@ def main() -> None:
     from majsoul_eye.capture.gtframes import build_seq_state, load_frames
     from majsoul_eye.annotate import build_homographies, annotate_frame, iter_tile_boxes, crop_box
 
-    # seq -> reconstructed state; seq -> frame path (keep 'timeout' frames as before)
-    seq_state = build_seq_state(args.capture)
+    # seq -> frame path (keep 'timeout' frames as before)
     frames = load_frames(args.frames_dir, statuses=("ok", "timeout"))
-    hom = build_homographies(1920, 1080)
+
+    if args.from_annotations:
+        import json
+        stem = os.path.splitext(os.path.basename(args.capture))[0]
+        ann_path = os.path.join(args.from_annotations, f"{stem}.jsonl")
+        recs = {}
+        with open(ann_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    r = json.loads(line)
+                    recs[r["seq"]] = r
+        # invariant filter still available (cheap replay; only annotate_frame is skipped)
+        seq_state = build_seq_state(args.capture) if args.drop_violations else {}
+        hom = None
+        seqs = sorted(recs)
+        print(f"reuse: {len(recs)} records <- {ann_path}")
+    else:
+        seq_state = build_seq_state(args.capture)
+        hom = build_homographies(1920, 1080)
+        seqs = sorted(seq_state)
 
     crops_dir = os.path.join(args.out, "crops")
     img_dir = os.path.join(args.out, "yolo", "images")
@@ -65,13 +100,14 @@ def main() -> None:
         os.makedirs(d, exist_ok=True)
 
     n_frames = n_crops = n_yolo = n_skip = n_letterbox = 0
-    for seq in sorted(seq_state):
+    for seq in seqs:
         if seq not in frames:
             continue
-        state = seq_state[seq]
-        if args.drop_violations and check_invariants(state):
-            n_skip += 1
-            continue
+        if args.drop_violations:
+            state = seq_state.get(seq)
+            if state is None or check_invariants(state):
+                n_skip += 1
+                continue
         frame = cv2.imread(frames[seq])
         if frame is None:
             n_skip += 1
@@ -80,10 +116,13 @@ def main() -> None:
         if abs(w / h - 16 / 9) > 0.02:       # letterboxed / non-16:9 → precise geom invalid
             n_letterbox += 1
             continue
-        if (w, h) != (1920, 1080):
+        # default path calibrates at 1920x1080 and resizes to match; reuse path keeps the
+        # native frame (the stored polys are native-px — don't rescale the frame under them).
+        if (w, h) != (1920, 1080) and not args.from_annotations:
             frame = cv2.resize(frame, (1920, 1080), interpolation=cv2.INTER_AREA)
+            h, w = 1080, 1920
 
-        rec = annotate_frame(frame, state, hom)
+        rec = recs[seq] if args.from_annotations else annotate_frame(frame, seq_state[seq], hom)
         yolo_lines = []
         ci = 0
         for box in iter_tile_boxes(rec):
@@ -100,8 +139,8 @@ def main() -> None:
             else:
                 x0, y0, x1, y1 = (float(v) for v in box.px_box)
             if not args.no_yolo:
-                cx, cy = (x0 + x1) / 2 / 1920, (y0 + y1) / 2 / 1080
-                bw, bh = (x1 - x0) / 1920, (y1 - y0) / 1080
+                cx, cy = (x0 + x1) / 2 / w, (y0 + y1) / 2 / h
+                bw, bh = (x1 - x0) / w, (y1 - y0) / h
                 yolo_lines.append(f"{cls} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
             # classifier crop: skip sideways (upright orientation not geometry-recoverable)
             if not args.no_crops and not box.sideways:
