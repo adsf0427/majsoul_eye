@@ -11,7 +11,7 @@ position-agnostic bag matching (baselines.score). Reports per-zone accuracy:
 
 Usage:
     PYTHONPATH=. $PY scripts/mycv_baseline.py \
-        --capture captures/session6.jsonl --frames captures/session6/frames \
+        --capture captures/raw/manual/session6.jsonl --frames captures/raw/manual/session6/frames \
         --overlay-dir <scratch>/mycv_gate --limit 0
 """
 

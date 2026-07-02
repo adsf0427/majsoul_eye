@@ -200,7 +200,9 @@ class FrameSyncer:
     def _record(self, key: int, path: Optional[str], status: str) -> None:
         self.counts[status] = self.counts.get(status, 0) + 1
         if self._index_fh:
-            self._index_fh.write(json.dumps({"seq": key, "file": path, "status": status, "ts": time.time()}) + "\n")
+            # Store index-relative ("frames/NNNNNN.png") so the frame dir stays portable.
+            rel = ("frames/" + os.path.basename(path)) if path else None
+            self._index_fh.write(json.dumps({"seq": key, "file": rel, "status": status, "ts": time.time()}) + "\n")
             self._index_fh.flush()
         if self.on_pair:
             self.on_pair(key, path, status)

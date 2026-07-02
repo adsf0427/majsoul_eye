@@ -11,9 +11,9 @@ Layout produced (self-contained, non-destructive):
     <out_dir>/frames.jsonl          index with "file" rewritten to the crops
 
 Usage:
-    python scripts/crop_game.py captures/session5 captures/session5_16x9
-    python scripts/crop_game.py captures/session5 captures/session5_16x9 --size 3840x2160
-    python scripts/crop_game.py captures/session5 out --box top,bottom,left,right
+    python scripts/crop_game.py captures/raw/manual/session5 captures/intermediate/derived/session5_16x9
+    python scripts/crop_game.py captures/raw/manual/session5 captures/intermediate/derived/session5_16x9 --size 3840x2160
+    python scripts/crop_game.py captures/raw/manual/session5 out --box top,bottom,left,right
 """
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ import os
 
 import cv2
 import numpy as np
+
+from majsoul_eye import paths
 
 
 def _gray(path: str) -> np.ndarray:
@@ -108,8 +110,13 @@ def main() -> None:
                 records.append(json.loads(line))
 
     # Pick a reference frame to detect the crop box.
-    ref = next((r["file"] for r in records
-                if r.get("file") and os.path.exists(r["file"])), None)
+    ref = None
+    for r in records:
+        if r.get("file"):
+            cand = paths.resolve_frame_path(r["file"], args.in_dir)
+            if os.path.exists(cand):
+                ref = cand
+                break
     if ref is None:
         raise SystemExit("no readable frame files referenced in frames.jsonl")
 
@@ -135,6 +142,8 @@ def main() -> None:
     done = skipped = 0
     for rec in records:
         src = rec.get("file")
+        if src:
+            src = paths.resolve_frame_path(src, args.in_dir)
         if not src or not os.path.exists(src):
             out_records.append(rec)  # preserve non-ok rows as-is
             skipped += 1
@@ -148,7 +157,7 @@ def main() -> None:
         dst = os.path.join(frames_out, os.path.basename(src))
         cv2.imwrite(dst, crop)
         new_rec = dict(rec)
-        new_rec["file"] = os.path.abspath(dst)
+        new_rec["file"] = paths.rel_frame(dst, args.out_dir)   # index-relative (portable)
         out_records.append(new_rec)
         done += 1
         if done % 100 == 0:

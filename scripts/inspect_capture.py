@@ -1,7 +1,7 @@
 """Join a GT capture with its screenshot frames and report sync quality.
 
 Run after a `record_gt.py --screenshots` session:
-    python scripts/inspect_capture.py captures/session1.jsonl captures/session1/
+    python scripts/inspect_capture.py captures/raw/manual/session1.jsonl captures/raw/manual/session1/
 
 Reports: frame status counts, how many board-changing steps got an 'ok' frame,
 and (with --step N) the reconstructed BoardState at a step beside its screenshot

@@ -7,9 +7,9 @@ parent of game*/ subdirs (each with frames.jsonl, like run_3). Both are handled.
 Examples (PowerShell):
   $PY = "C:/Users/zsx/miniforge3/envs/auto/python.exe"; $env:PYTHONPATH = "."
   # convert + build every game in a run, naming them ai_<run>_<game>:
-  & $PY scripts/ingest_run.py captures/ai_session/run_4
+  & $PY scripts/ingest_run.py captures/raw/ai_session/run_4
   # then retrain on ALL ingested games, holding out one as val:
-  & $PY scripts/ingest_run.py captures/ai_session/run_4 --train --val ai_run4_game1:*
+  & $PY scripts/ingest_run.py captures/raw/ai_session/run_4 --train --val ai_run4_game1:*
 
 Dev-only (convert step reaches into ../MahjongCopilot). Run in the `auto` env.
 """
@@ -21,6 +21,8 @@ import glob
 import os
 import subprocess
 import sys
+
+from majsoul_eye import paths
 
 
 def discover_games(run_dir: str) -> list[tuple[str, str]]:
@@ -50,7 +52,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir", help="MahjongCopilot run dir (single game or parent of game*/)")
     ap.add_argument("--mjcopilot", default="../MahjongCopilot")
-    ap.add_argument("--captures", default="captures")
+    ap.add_argument("--captures", default=paths.GT)
     ap.add_argument("--datasets", default="datasets")
     ap.add_argument("--train", action="store_true", help="retrain on ALL ingested+manual datasets after")
     ap.add_argument("--val", default="", help="train val spec, e.g. ai_run4_game1:* (whole game held out)")
@@ -94,8 +96,8 @@ def main():
             if os.path.isdir(crops):
                 data_args += ["--data", f"{nm}={crops}:{cap}"]
         # also pick up the erode-rebuilt manual sets if present
-        for nm, cap in (("session5_erode", "captures/session5.jsonl"),
-                        ("session6_erode", "captures/session6.jsonl")):
+        for nm, cap in (("session5_erode", os.path.join(paths.RAW_MANUAL, "session5.jsonl")),
+                        ("session6_erode", os.path.join(paths.RAW_MANUAL, "session6.jsonl"))):
             crops = os.path.join(args.datasets, nm, "crops")
             if os.path.isdir(crops) and os.path.exists(cap):
                 data_args += ["--data", f"{nm}={crops}:{cap}"]

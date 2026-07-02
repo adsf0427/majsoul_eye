@@ -30,7 +30,9 @@ def main() -> None:
     )
     ap.add_argument(
         "--out",
-        default=str(REPO_ROOT / "captures" / f"session_{datetime.now():%Y%m%d_%H%M%S}.jsonl"),
+        # raw/manual/ per the captures layout (see majsoul_eye/paths.py).
+        default=str(REPO_ROOT / "captures" / "raw" / "manual"
+                    / f"session_{datetime.now():%Y%m%d_%H%M%S}.jsonl"),
         help="Output JSONL capture path.",
     )
     ap.add_argument(

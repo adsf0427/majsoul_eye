@@ -7,7 +7,7 @@ the board, auto-label the easy zones, and emit:
   <out>/yolo/labels/<step>.txt     detector labels (YOLO: class cx cy w h)
 
 Usage:
-  python scripts/build_dataset.py captures/session2.jsonl captures/session2/ \
+  python scripts/build_dataset.py captures/raw/manual/session2.jsonl captures/raw/manual/session2/ \
          --out datasets/session2 --locator fullscreen
 
 ⚠️ Coordinates are seeded from mycv (web 1080p) and NOT yet calibrated — eyeball a
@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 
+from majsoul_eye import paths
 from majsoul_eye.capture.schema import read_records
 from majsoul_eye.capture.sync import RELEVANT_EVENTS
 from majsoul_eye.state.replay import Replayer, check_invariants
@@ -94,7 +95,8 @@ def main() -> None:
             if args.drop_violations and check_invariants(state):
                 n_skip += 1
                 continue
-            frame = cv2.imread(rec["file"])
+            src = paths.resolve_frame_path(rec["file"], args.frames_dir)
+            frame = cv2.imread(src)
             if frame is None:
                 n_skip += 1
                 continue
@@ -126,7 +128,7 @@ def main() -> None:
             n_crops += save_classification_crops(frame, region, samples, crops_dir, prefix=f"{seq:06d}_")
             lines = to_yolo_lines(samples)
             if lines:
-                shutil.copy(rec["file"], os.path.join(img_dir, f"{seq:06d}.png"))
+                shutil.copy(src, os.path.join(img_dir, f"{seq:06d}.png"))
                 with open(os.path.join(lbl_dir, f"{seq:06d}.txt"), "w") as lf:
                     lf.write("\n".join(lines) + "\n")
                 n_yolo += 1

@@ -20,14 +20,13 @@ Two gotchas this handles:
     each MJAI event at capture (otherwise start_kyoku.tehais gets overwritten with a
     later hand state and the hero hand desyncs — see git history / STATUS).
 
-Outputs (per game NAME):
+Outputs (per game NAME; defaults land under captures/intermediate/gt/):
   <out>/NAME.jsonl          -- our GTRecord JSONL (seq, mjai, raw_liqi, ...)
-  <out>/NAME/frames.jsonl   -- frame index {seq, file=<abspath to original png>, status}
+  <out>/NAME/frames.jsonl   -- frame index {seq, file=<captures-relative png>, status}
 
-Usage:
+Usage (defaults: --session captures/raw/ai_session, --out captures/intermediate/gt):
   PYTHONPATH=. $PY scripts/convert_mjcopilot.py \
-      --game run_3/game1=g_ai1 --game run_1=g_ai_r1 \
-      --session captures/ai_session --mjcopilot ../MahjongCopilot --out captures
+      --game run_3/game1=ai_run_3_game1 --game run_1=ai_run_1 --mjcopilot ../MahjongCopilot
 """
 
 from __future__ import annotations
@@ -43,6 +42,7 @@ import os
 import sys
 import types
 
+from majsoul_eye import paths
 from majsoul_eye.capture.schema import GTRecord, write_records
 
 
@@ -149,11 +149,11 @@ def convert_game(game_dir: str, liqimod, GameState, Bot, GameMode) -> tuple[list
             method=r["method"], action_name=r["action_name"], raw_liqi=r["raw"], mjai=r["mjai"],
         ))
 
-    # frame index: every png named by seq -> abspath
+    # frame index: every png named by seq -> captures-relative path (points into raw/)
     frame_index = []
     for p in sorted(glob.glob(os.path.join(game_dir, "frames", "*.png"))):
         seq = int(os.path.splitext(os.path.basename(p))[0])
-        frame_index.append({"seq": seq, "file": os.path.abspath(p), "status": "ok"})
+        frame_index.append({"seq": seq, "file": paths.rel_to_captures(p), "status": "ok"})
     return records, frame_index
 
 
@@ -161,15 +161,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--game", action="append", required=True,
                     help="REL_DIR=NAME (relative to --session). Repeatable.")
-    ap.add_argument("--session", default="captures/ai_session")
+    ap.add_argument("--session", default=paths.RAW_AI_SESSION)
     ap.add_argument("--mjcopilot", default="../MahjongCopilot")
-    ap.add_argument("--out", default="captures")
+    ap.add_argument("--out", default=paths.GT)
     args = ap.parse_args()
 
     # Resolve all our paths to absolute BEFORE switching cwd to MahjongCopilot
     # (LiqiProto/GameState load assets via cwd-relative paths).
     session_abs = os.path.abspath(args.session)
     out_abs = os.path.abspath(args.out)
+    os.makedirs(out_abs, exist_ok=True)          # create the GT dir if it doesn't exist yet
     mc_abs = os.path.abspath(args.mjcopilot)
     liqimod, GameState, Bot, GameMode = _import_mjcopilot(mc_abs)
     os.chdir(mc_abs)
