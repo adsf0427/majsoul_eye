@@ -21,15 +21,15 @@ Optional --qa-classifier runs the 97.6% tile classifier over sampled face crops
 and reports agreement with the GT labels per zone (end-to-end precision proxy).
 
 Run (conda `auto` env, repo root):
-  PYTHONPATH=. $PY scripts/annotate_ai_session.py                    # all captures/intermediate/gt/*
-  PYTHONPATH=. $PY scripts/annotate_ai_session.py \
+  PYTHONPATH=. $PY scripts/annotate/annotate_ai_session.py                    # all captures/intermediate/gt/*
+  PYTHONPATH=. $PY scripts/annotate/annotate_ai_session.py \
       --captures captures/intermediate/gt/ai_run_3_game1.jsonl --overlay-every 40 --qa-classifier
 
 By default the frames dir is derived from the capture name (X.jsonl -> X/, via
 majsoul_eye.paths.frames_dir_for). Pass --frames-dir to point one capture at a
 different frames folder (e.g. de-letterboxed frames from deletterbox_frames.py)
 while keeping the GT + output name of the original capture:
-  PYTHONPATH=. $PY scripts/annotate_ai_session.py --captures captures/intermediate/gt/ai_run_5_game2.jsonl \
+  PYTHONPATH=. $PY scripts/annotate/annotate_ai_session.py --captures captures/intermediate/gt/ai_run_5_game2.jsonl \
       --frames-dir captures/intermediate/derived/ai_run_5_game2_fixed --qa-classifier
 """
 from __future__ import annotations
@@ -43,97 +43,10 @@ from collections import defaultdict
 import cv2
 import numpy as np
 
-import mahjong_relative_annotation_pipeline as P
+from majsoul_eye.annotate import pipeline as P
 from majsoul_eye import paths
-from majsoul_eye.label.autolabel import label_frame
-from majsoul_eye.normalize import locate_fullscreen
-from scripts.calibrate_annotation_model import seat_gt
-from scripts.spike_topdown import build_seq_state, load_frames, _frames_dir_for
-
-FILL_OK = 0.25          # face-mask coverage below this = not rendered / occluded
-SNAP_MAX_ALONG = 70.0   # clamp for the rigid meld snap (the strip floats per round)
-SNAP_MAX_CROSS = 70.0   # the SELF strip also floats vertically (up to ~1/2 tile)
-
-
-def _fill(ii: np.ndarray, poly) -> float:
-    p = np.float32(poly)
-    return P._box_fill(ii, p[:, 0].min(), p[:, 1].min(), p[:, 0].max(), p[:, 1].max())
-
-
-def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False) -> dict:
-    """Full annotation record for one frame. `hand_suspect` marks frames right
-    after a kyoku start, where the deal/sort animation may not match GT order."""
-    Hinv = hom["H_full_inv"]
-    full = P.warp_to_full(img, hom["H_full"], hom["full_size"])
-    mw = P.tile_face_mask(full)
-    mb = P.tile_back_mask(full)
-    ii_w = cv2.integral(mw)
-    ii_b = cv2.integral(mb)
-
-    rec = {"hero_seat": state.hero_seat,
-           "kyoku": f"{state.bakaze}{state.kyoku}",
-           "discard_slots": {}, "meld_boxes": {}, "hand_boxes": [], "flags": []}
-
-    for pos in range(4):
-        river, sideways_idx, melds, seat = seat_gt(state, pos)
-        slots = P.generate_discard_slots(pos, river, Hinv, sideways_idx=sideways_idx)
-        newest = len(slots) - 1 if state.last_actor == seat else -1
-        for i, s in enumerate(slots):
-            f = _fill(ii_w, s["face_poly_fullwarp"])
-            s["fill"] = round(f, 3)
-            if f < FILL_OK:
-                s["reliable"] = False
-                if i == newest:
-                    s["unrendered"] = True      # GT leads the render by ~1 action
-                    rec["flags"].append(f"pos{pos}:river[{i}]:unrendered")
-                else:
-                    s["low_conf"] = True
-                    rec["flags"].append(f"pos{pos}:river[{i}]:low_fill={f:.2f}")
-        rec["discard_slots"][str(pos)] = slots
-
-        boxes = P.generate_meld_boxes_v2(pos, melds, Hinv)
-        if boxes:
-            da, dc, diag = P.snap_meld_strip(mw, mb, boxes, pos)
-            if diag["n_along"] + diag["n_cross"] >= 2:
-                da = float(np.clip(da, -SNAP_MAX_ALONG, SNAP_MAX_ALONG))
-                dc = float(np.clip(dc, -SNAP_MAX_CROSS, SNAP_MAX_CROSS))
-                boxes = P.shift_boxes(boxes, pos, da, dc, Hinv)
-            for b in boxes:
-                ii = ii_b if b["tile"] == "back" else ii_w
-                f = _fill(ii, b["poly_fullwarp"])
-                b["fill"] = round(f, 3)
-                b["snap"] = (round(da, 1), round(dc, 1))
-                if f < FILL_OK:
-                    b["reliable"] = False
-                    b["low_conf"] = True
-                    rec["flags"].append(f"pos{pos}:meld[{b['tile']}]:low_fill={f:.2f}")
-        rec["meld_boxes"][str(pos)] = boxes
-
-    # hero hand via the calibrated HandModel (settled 13-tile states only)
-    try:
-        region = locate_fullscreen(img)
-        hb = []
-        for s in label_frame(img, state, region, zones=frozenset({"hand"})):
-            x1, y1, x2, y2 = s.px_box
-            f = 0.0
-            if x2 > x1 and y2 > y1:
-                hsv = cv2.cvtColor(img[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
-                f = float(((hsv[..., 1] < 70) & (hsv[..., 2] > 165)).mean())
-            hb.append({"tile": s.label, "px_box": list(s.px_box), "fill": round(f, 3)})
-        if hb and float(np.median([h["fill"] for h in hb])) < 0.30:
-            # deal/draw animation still playing — GT leads the render
-            for h in hb:
-                h["reliable"] = False
-            rec["flags"].append("hand:unrendered")
-        elif hb and hand_suspect:
-            # kyoku just started: tiles may be rendered but not yet GT-sorted
-            for h in hb:
-                h["reliable"] = False
-            rec["flags"].append("hand:deal_unsorted")
-        rec["hand_boxes"] = hb
-    except Exception as e:                       # hand layout is best-effort
-        rec["flags"].append(f"hand:error:{e}")
-    return rec
+from majsoul_eye.annotate.frame import annotate_frame, crop_quad
+from majsoul_eye.capture.gtframes import build_seq_state, load_frames
 
 
 def render_overlay(img: np.ndarray, rec: dict, path: str) -> None:
@@ -151,14 +64,12 @@ def render_overlay(img: np.ndarray, rec: dict, path: str) -> None:
     for h in rec["hand_boxes"]:
         x1, y1, x2, y2 = h["px_box"]
         cv2.rectangle(vis, (x1, y1), (x2, y2), (255, 255, 255), 1)
+    for d in rec.get("dora_boxes", []):
+        x1, y1, x2, y2 = d["px_box"]
+        col = (0, 255, 255) if d.get("reliable", True) else (0, 0, 255)  # yellow = dora indicator
+        cv2.rectangle(vis, (x1, y1), (x2, y2), col, 2)
+        cv2.putText(vis, d["tile"], (x1, y1 - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1, cv2.LINE_AA)
     cv2.imwrite(path, vis)
-
-
-def _crop_quad(img: np.ndarray, poly, size: int = 64) -> np.ndarray:
-    src = np.float32(poly)
-    dst = np.float32([[0, 0], [size, 0], [size, size], [0, size]])
-    M = cv2.getPerspectiveTransform(src, dst)
-    return cv2.warpPerspective(img, M, (size, size))
 
 
 def main() -> None:
@@ -186,12 +97,21 @@ def main() -> None:
         from majsoul_eye.recognize.classifier import TileClassifier
         clf = TileClassifier("majsoul_eye/recognize/tile_classifier.pt")
 
+    # merge into an existing summary so multiple runs into the same --out (e.g.
+    # session6 then session5, which needs its own --frames-dir) accumulate rather
+    # than clobber. A clean regen starts from a freshly-deleted out/ dir anyway.
+    summary_path = os.path.join(args.out, "summary.json")
     summary = {}
+    if os.path.exists(summary_path):
+        try:
+            summary = json.load(open(summary_path, encoding="utf-8"))
+        except Exception:
+            summary = {}
     for cap in captures:
         name = os.path.splitext(os.path.basename(cap))[0]
         try:
             seq_state = build_seq_state(cap)
-            frames = load_frames(args.frames_dir or _frames_dir_for(cap))
+            frames = load_frames(args.frames_dir or paths.frames_dir_for(cap))
         except Exception as e:
             print(f"{name}: SKIP ({e})")
             continue
@@ -233,6 +153,8 @@ def main() -> None:
                     stats["meld_boxes"] += len(boxes)
                     stats["meld_ok"] += sum(1 for b in boxes if b.get("reliable", True))
                 stats["hand_boxes"] += len(rec["hand_boxes"])
+                stats["dora_boxes"] += len(rec["dora_boxes"])
+                stats["dora_ok"] += sum(1 for d in rec["dora_boxes"] if d.get("reliable", True))
 
                 if args.overlay_every and k % args.overlay_every == 0:
                     render_overlay(img, rec, os.path.join(args.out, "overlays", f"{name}_seq{seq}.png"))
@@ -244,7 +166,7 @@ def main() -> None:
                     for slots in rec["discard_slots"].values():
                         for s in slots:
                             if s.get("reliable", True):
-                                c = _crop_quad(img, s["face_poly_original"])
+                                c = crop_quad(img, s["face_poly_original"])
                                 if s.get("riichi"):
                                     crops += [np.rot90(c).copy(), np.rot90(c, 3).copy()]
                                     keys.append(("river", s["tile"], 2))
@@ -254,7 +176,7 @@ def main() -> None:
                     for boxes in rec["meld_boxes"].values():
                         for b in boxes:
                             if b.get("reliable", True):
-                                c = _crop_quad(img, b["poly_original"])
+                                c = crop_quad(img, b["poly_original"])
                                 if b.get("sideways"):
                                     crops += [np.rot90(c).copy(), np.rot90(c, 3).copy()]
                                     keys.append(("meld", b["tile"], 2))
@@ -288,13 +210,14 @@ def main() -> None:
         qa_str = ""
         if clf is not None:
             qa_str = "  QA " + " ".join(f"{z}:{v['agree']}" for z, v in s["qa"].items() if v["n"])
+        dora_pct = 100 * s.get("dora_ok", 0) / max(1, s.get("dora_boxes", 1))
         print(f"{name}: {s['frames']} frames  river {s.get('river_boxes',0)} boxes ({riv_pct:.1f}% ok, "
               f"{s.get('river_unrendered',0)} unrendered)  meld {s.get('meld_boxes',0)} ({meld_pct:.1f}% ok)"
-              f"  hand {s.get('hand_boxes',0)}{qa_str}", flush=True)
+              f"  hand {s.get('hand_boxes',0)}  dora {s.get('dora_boxes',0)} ({dora_pct:.1f}% ok){qa_str}", flush=True)
 
-    with open(os.path.join(args.out, "summary.json"), "w", encoding="utf-8") as f:
+    with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=1)
-    print(f"wrote {args.out}/summary.json")
+    print(f"wrote {summary_path}")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@
 > 参考实现：`D:\code\phoenix\MahjongCopilot`（latorc/MahjongCopilot，**GPLv3**，
 > 非 Akagi 的 AGPL+Commons Clause）。本方案三轮调研 + 对抗式核验产出，见会话记录。
 > **历史注记（2026-07）**：文中的 `scripts/spike_ws_tap.py` / `spike_decode_*.py` / `spike_autoplay.py`
-> 已完成验证并从仓库删除（结论固化进 `scripts/autoplay_ai.py` 与 `scripts/convert_mjcopilot.py`）；
+> 已完成验证并从仓库删除（结论固化进 `scripts/capture/autoplay_ai.py` 与 `scripts/data/convert_mjcopilot.py`）；
 > 需要时可在 git 历史（`861db68`）中找回。
 
 ## 1. 核心：一个 Playwright Chromium = 自驱 + 抓包 + 截图

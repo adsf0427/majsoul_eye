@@ -11,9 +11,9 @@ Layout produced (self-contained, non-destructive):
     <out_dir>/frames.jsonl          index with "file" rewritten to the crops
 
 Usage:
-    python scripts/crop_game.py captures/raw/manual/session5 captures/intermediate/derived/session5_16x9
-    python scripts/crop_game.py captures/raw/manual/session5 captures/intermediate/derived/session5_16x9 --size 3840x2160
-    python scripts/crop_game.py captures/raw/manual/session5 out --box top,bottom,left,right
+    python scripts/data/crop_game.py captures/raw/manual/session5 captures/intermediate/derived/session5_16x9
+    python scripts/data/crop_game.py captures/raw/manual/session5 captures/intermediate/derived/session5_16x9 --size 3840x2160
+    python scripts/data/crop_game.py captures/raw/manual/session5 out --box top,bottom,left,right
 """
 from __future__ import annotations
 

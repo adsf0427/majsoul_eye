@@ -18,8 +18,8 @@ The newest discard of the last actor is EXCLUDED (GT leads the render by ~1
 action; that slot may still be empty felt).
 
 Run (conda `auto` env, repo root):
-  PYTHONPATH=. $PY scripts/calibrate_annotation_model.py --per-game 40 --out scratchpad/calib.json
-  PYTHONPATH=. $PY scripts/calibrate_annotation_model.py --refit scratchpad/calib.json
+  PYTHONPATH=. $PY scripts/annotate/calibrate_annotation_model.py --per-game 40 --out scratchpad/calib.json
+  PYTHONPATH=. $PY scripts/annotate/calibrate_annotation_model.py --refit scratchpad/calib.json
 """
 from __future__ import annotations
 
@@ -32,31 +32,12 @@ from collections import defaultdict
 import cv2
 import numpy as np
 
-import mahjong_relative_annotation_pipeline as P
+from majsoul_eye.annotate import pipeline as P
+from majsoul_eye.annotate.seatgt import seat_gt, SEAT_POS
 from majsoul_eye import paths
-from majsoul_eye.label.river import _screen_to_seat
-from scripts.spike_topdown import build_seq_state, load_frames, _frames_dir_for
+from majsoul_eye.capture.gtframes import build_seq_state, load_frames
 
-SEAT_POS = ["self", "right", "across", "left"]
 HORIZ = {0: True, 1: False, 2: True, 3: False}   # river rows run along x?
-
-
-# --------------------------------------------------------------------------- #
-# GT plumbing
-# --------------------------------------------------------------------------- #
-
-def seat_gt(state, pos: int):
-    """(visible_river, sideways_idx, melds, abs_seat) for screen position pos."""
-    seat = _screen_to_seat(state.hero_seat, SEAT_POS[pos])
-    river = [{"pai": t.pai, "tsumogiri": bool(t.tsumogiri), "riichi": bool(t.riichi)}
-             for t in state.visible_river(seat)]
-    full = [{"pai": t.pai, "riichi": bool(t.riichi), "called": bool(t.called)}
-            for t in state.rivers[seat]]
-    melds = [{"type": m.type, "tiles": list(m.tiles),
-              "from_seat": (pos + ((m.from_seat - seat) % 4)) % 4,
-              "called_pai": m.called_pai, "added_pai": m.added_pai}
-             for m in state.melds[seat]]
-    return river, P.river_sideways_index(full), melds, seat
 
 
 def sample_seqs(seq_state: dict, frames: dict, k: int) -> list[int]:
@@ -400,7 +381,7 @@ def main() -> None:
     for cap in captures:
         try:
             seq_state = build_seq_state(cap)
-            frames = load_frames(_frames_dir_for(cap))
+            frames = load_frames(paths.frames_dir_for(cap))
         except Exception as e:
             print(f"  {cap}: SKIP ({e})")
             continue

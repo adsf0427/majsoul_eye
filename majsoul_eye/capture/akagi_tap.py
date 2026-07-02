@@ -14,7 +14,7 @@ proxy thread (``parse_liqi`` runs under Akagi's ``bridge_lock``).
 
 Activation
 ----------
-1. Launcher (recommended): ``python scripts/record_gt.py`` — sets up sys.path,
+1. Launcher (recommended): ``python scripts/capture/record_gt.py`` — sets up sys.path,
    installs the tap, then runs Akagi's ``main()``.
 2. Or add two lines to Akagi's ``run_akagi.py`` before ``main()``::
 

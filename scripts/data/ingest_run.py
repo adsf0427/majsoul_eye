@@ -7,9 +7,9 @@ parent of game*/ subdirs (each with frames.jsonl, like run_3). Both are handled.
 Examples (PowerShell):
   $PY = "C:/Users/zsx/miniforge3/envs/auto/python.exe"; $env:PYTHONPATH = "."
   # convert + build every game in a run, naming them ai_<run>_<game>:
-  & $PY scripts/ingest_run.py captures/raw/ai_session/run_4
+  & $PY scripts/data/ingest_run.py captures/raw/ai_session/run_4
   # then retrain on ALL ingested games, holding out one as val:
-  & $PY scripts/ingest_run.py captures/raw/ai_session/run_4 --train --val ai_run4_game1:*
+  & $PY scripts/data/ingest_run.py captures/raw/ai_session/run_4 --train --val ai_run4_game1:*
 
 Dev-only (convert step reaches into ../MahjongCopilot). Run in the `auto` env.
 """
@@ -72,12 +72,12 @@ def main():
     game_args = []
     for rel, name in games:
         game_args += ["--game", f"{rel}={name}"]
-    run([py, "scripts/convert_mjcopilot.py", *game_args,
+    run([py, "scripts/data/convert_mjcopilot.py", *game_args,
          "--session", parent, "--mjcopilot", args.mjcopilot, "--out", args.captures], env)
 
     # 2) build_dataset per game
     for _, name in games:
-        run([py, "scripts/build_dataset.py",
+        run([py, "scripts/train/build_dataset.py",
              os.path.join(args.captures, f"{name}.jsonl"),
              os.path.join(args.captures, name) + os.sep,
              "--out", os.path.join(args.datasets, name), "--drop-violations"], env)
@@ -101,7 +101,7 @@ def main():
             crops = os.path.join(args.datasets, nm, "crops")
             if os.path.isdir(crops) and os.path.exists(cap):
                 data_args += ["--data", f"{nm}={crops}:{cap}"]
-        cmd = [py, "scripts/train_classifier.py", *data_args,
+        cmd = [py, "scripts/train/train_classifier.py", *data_args,
                "--epochs", str(args.epochs), "--workers", "6", "--out", args.out]
         if args.val:
             cmd += ["--val", args.val]

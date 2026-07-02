@@ -84,7 +84,7 @@ docs/DESIGN.md      # design & rationale       docs/STATUS.md  # living status +
 
 ## 管线与脚本用法
 
-所有代码在 conda **`auto`** 环境跑（默认 PATH 的 python 没有 numpy）；仅 `record_gt.py`
+所有代码在 conda **`auto`** 环境跑；仅 `record_gt.py`
 在 **`akagi`** 环境（跑在 Akagi 进程内）。顶层 import 是 `from majsoul_eye import ...`，
 一律从仓库根运行。命令块为 **PowerShell** 语法（bash 等价见 `CLAUDE.md` /
 `docs/STATUS.md` §四）；每开一个新终端先执行一次：
@@ -105,7 +105,7 @@ $env:PYTHONPATH = "."
 
 ```powershell
 conda run -n akagi pip install mss opencv-python   # 一次性：截图依赖
-conda run -n akagi python scripts/record_gt.py --screenshots --quiet 0.30 --settle-cap 2.0
+conda run -n akagi python scripts/capture/record_gt.py --screenshots --quiet 0.30 --settle-cap 2.0
 # 默认写 captures/raw/manual/session_<ts>.jsonl + 同名帧目录；状态日志 → <out>.jsonl.log
 ```
 
@@ -116,7 +116,7 @@ conda run -n akagi python scripts/record_gt.py --screenshots --quiet 0.30 --sett
 截图 + MahjongCopilot 驱动点击）。默认 dry-run 只打日志，确认动作正确后再 `--live`；小号！
 
 ```powershell
-& $PY scripts/autoplay_ai.py --live --auto-next      # 整场循环采集
+& $PY scripts/capture/autoplay_ai.py --live --auto-next      # 整场循环采集
 # 每次运行写 captures/raw/ai_session/run_<N>/（一局一个 game<M>/：liqi 线流 + 1080p PNG）
 ```
 
@@ -126,14 +126,14 @@ conda run -n akagi python scripts/record_gt.py --screenshots --quiet 0.30 --sett
 **`crop_game.py`** — 非全屏手动局裁回 16:9 画布（一次检测、全局套用，非破坏性）。
 
 ```powershell
-& $PY scripts/crop_game.py captures/raw/manual/session5 captures/intermediate/derived/session5_16x9 --size 3840x2160
+& $PY scripts/data/crop_game.py captures/raw/manual/session5 captures/intermediate/derived/session5_16x9 --size 3840x2160
 ```
 
 **`deletterbox_frames.py`** — 去黑边（如 run_5 重连局）：检测黑条 → 裁剪 → resize 回
 1920×1080，写新的自包含帧目录（seq 一一对应），之后用 `--frames-dir` 喂给标注器。
 
 ```powershell
-& $PY scripts/deletterbox_frames.py --capture captures/intermediate/gt/ai_run_5_game2.jsonl `
+& $PY scripts/data/deletterbox_frames.py --capture captures/intermediate/gt/ai_run_5_game2.jsonl `
     --out captures/intermediate/derived/ai_run_5_game2_deletterboxed
 ```
 
@@ -143,8 +143,8 @@ conda run -n akagi python scripts/record_gt.py --screenshots --quiet 0.30 --sett
 build_dataset（→ 可选重训）。
 
 ```powershell
-& $PY scripts/ingest_run.py captures/raw/ai_session/run_4
-& $PY scripts/ingest_run.py captures/raw/ai_session/run_4 --train --val "ai_run_4_game1:*"
+& $PY scripts/data/ingest_run.py captures/raw/ai_session/run_4
+& $PY scripts/data/ingest_run.py captures/raw/ai_session/run_4 --train --val "ai_run_4_game1:*"
 ```
 
 **`convert_mjcopilot.py`** — 底层转换器（ingest 内部调用，也可单跑）：raw liqi 线流 →
@@ -152,7 +152,7 @@ MahjongCopilot 的 `LiqiProto`/`GameState`（stub bot）→ MJAI → `captures/i
 （帧索引指回 raw/ 的 PNG）。逐事件 deepcopy（GameState 原地改手牌）、按每条 input() 增量对 seq。
 
 ```powershell
-& $PY scripts/convert_mjcopilot.py --game "run_3/game1=ai_run_3_game1" --mjcopilot ../MahjongCopilot
+& $PY scripts/data/convert_mjcopilot.py --game "run_3/game1=ai_run_3_game1" --mjcopilot ../MahjongCopilot
 ```
 
 ### 3) 数据集构建
@@ -162,7 +162,7 @@ MahjongCopilot 的 `LiqiProto`/`GameState`（stub bot）→ MJAI → `captures/i
 （`--river-erode-bottom/--river-erode-side`）均已默认开启。
 
 ```powershell
-& $PY scripts/build_dataset.py captures/raw/manual/sessionN.jsonl captures/raw/manual/sessionN/ `
+& $PY scripts/train/build_dataset.py captures/raw/manual/sessionN.jsonl captures/raw/manual/sessionN/ `
     --out datasets/sessionN --locator fullscreen --drop-violations
 ```
 
@@ -174,7 +174,7 @@ MahjongCopilot 的 `LiqiProto`/`GameState`（stub bot）→ MJAI → `captures/i
 
 几何引擎是根级 **`mahjong_relative_annotation_pipeline.py`**（fullwarp 单应 + 数据标定的
 牌面网格/副露组成模型 + 缝隙/边缘掩膜检测器，被下述脚本 `import ... as P`）。
-`scripts/spike_topdown.py` 名为 spike 实为承重墙——三个标注脚本都从它 import GT plumbing
+`scripts/annotate/spike_topdown.py` 名为 spike 实为承重墙——三个标注脚本都从它 import GT plumbing
 （`build_seq_state` / `load_frames` / `CASES`），勿删。
 
 **`annotate_ai_session.py`** — 主产品：全帧标注器。4 家河（标定网格 + GT + 逐格 fill 置信，
@@ -182,8 +182,8 @@ MahjongCopilot 的 `LiqiProto`/`GameState`（stub bot）→ MJAI → `captures/i
 （HandModel + 白度门）。输出 `out/ai_session_annotations/`（每局 JSONL + overlays/ + summary.json）。
 
 ```powershell
-& $PY scripts/annotate_ai_session.py                 # 默认标注全部 captures/intermediate/gt/*.jsonl
-& $PY scripts/annotate_ai_session.py --captures captures/intermediate/gt/ai_run_3_game1.jsonl `
+& $PY scripts/annotate/annotate_ai_session.py                 # 默认标注全部 captures/intermediate/gt/*.jsonl
+& $PY scripts/annotate/annotate_ai_session.py --captures captures/intermediate/gt/ai_run_3_game1.jsonl `
     --overlay-every 40 --qa-classifier
 ```
 
@@ -193,7 +193,7 @@ MahjongCopilot 的 `LiqiProto`/`GameState`（stub bot）→ MJAI → `captures/i
 **`build_case_annotations.py`** — 11 个固化 case 的 AB 标注 JSON（弃牌带 GT 标签 + 副露框）。
 
 ```powershell
-& $PY scripts/build_case_annotations.py --overlays out/topdown_annot
+& $PY scripts/annotate/build_case_annotations.py --overlays out/topdown_annot
 # 写 out/mahjong_AB_relative_data_with_reliability.json
 ```
 
@@ -201,8 +201,8 @@ MahjongCopilot 的 `LiqiProto`/`GameState`（stub bot）→ MJAI → `captures/i
 （引擎常量漂了就复跑再校准）。
 
 ```powershell
-& $PY scripts/calibrate_annotation_model.py --per-game 40 --out scratchpad/calib.json
-& $PY scripts/calibrate_annotation_model.py --refit scratchpad/calib.json
+& $PY scripts/annotate/calibrate_annotation_model.py --per-game 40 --out scratchpad/calib.json
+& $PY scripts/annotate/calibrate_annotation_model.py --refit scratchpad/calib.json
 ```
 
 ### 5) 训练
@@ -212,7 +212,7 @@ MahjongCopilot 的 `LiqiProto`/`GameState`（stub bot）→ MJAI → `captures/i
 ⚠️ PowerShell 里 `--data`/`--val` 的值**必须加引号**（裸的 `,` 会被 PS 拆成数组）。
 
 ```powershell
-& $PY scripts/train_classifier.py `
+& $PY scripts/train/train_classifier.py `
     --data "s6=datasets/session6_erode/crops:captures/raw/manual/session6.jsonl" `
     --data "ai1=datasets/ai_g1/crops:captures/intermediate/gt/ai_g1.jsonl" `
     --val "s6:E3.0,S2.0" --epochs 20 --workers 6
@@ -225,18 +225,18 @@ MahjongCopilot 的 `LiqiProto`/`GameState`（stub bot）→ MJAI → `captures/i
 
 ```powershell
 # 帧↔GT 对账 + settle 质量（离线，不需客户端）
-& $PY scripts/inspect_capture.py captures/raw/manual/session6.jsonl captures/raw/manual/session6/ --step 120
+& $PY scripts/inspect/inspect_capture.py captures/raw/manual/session6.jsonl captures/raw/manual/session6/ --step 120
 # 把自动标注画到帧上，肉眼校准坐标
-& $PY scripts/overlay_labels.py captures/raw/manual/session6.jsonl captures/raw/manual/session6/ `
+& $PY scripts/inspect/overlay_labels.py captures/raw/manual/session6.jsonl captures/raw/manual/session6/ `
     --out out/overlay.png --step 120
 # 分类器错例蒙太奇（按 gt→pred 混淆对分组）
-& $PY scripts/visualize_failures.py --crops datasets/ai_g1/crops --out fails/ai_g1
+& $PY scripts/inspect/visualize_failures.py --crops datasets/ai_g1/crops --out fails/ai_g1
 # mycv 真实管线基线（对照精度）
-& $PY scripts/mycv_baseline.py --capture captures/raw/manual/session6.jsonl `
+& $PY scripts/inspect/mycv_baseline.py --capture captures/raw/manual/session6.jsonl `
     --frames captures/raw/manual/session6/frames
 # captures/ 布局再迁移（dry-run 默认；写 MIGRATION_MANIFEST.json，幂等可续跑）
-& $PY scripts/migrate_captures_layout.py            # 预览
-& $PY scripts/migrate_captures_layout.py --apply --strict
+& $PY scripts/data/migrate_captures_layout.py            # 预览
+& $PY scripts/data/migrate_captures_layout.py --apply --strict
 ```
 
 ### 测试（10 套，普通脚本、兼容 pytest）

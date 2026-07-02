@@ -16,8 +16,8 @@ strips with ~half-tile per-round tolerance (Majsoul places them relative to the
 hand; the periphery homography also drifts slightly cross-session).
 
 Run from repo root with PYTHONPATH=. and the conda `auto` python:
-    PYTHONPATH=. $PY scripts/build_case_annotations.py                 # write JSON
-    PYTHONPATH=. $PY scripts/build_case_annotations.py --overlays out/ # + PNGs
+    PYTHONPATH=. $PY scripts/annotate/build_case_annotations.py                 # write JSON
+    PYTHONPATH=. $PY scripts/annotate/build_case_annotations.py --overlays out/ # + PNGs
 """
 from __future__ import annotations
 
@@ -29,13 +29,13 @@ import cv2
 import numpy as np
 
 import mahjong_relative_annotation_pipeline as P
-from scripts.spike_topdown import CASES, load_pair, _screen_to_seat, SEAT_POS
+from scripts.annotate.spike_topdown import CASES, load_pair, _screen_to_seat, SEAT_POS
 
 FRAMES_DIR = "fails/topdown_demo/case_frames"
 DEFAULT_JSON = os.path.join("out", "mahjong_AB_relative_data_with_reliability.json")
 
 # cache the per-capture replay so 11 cases don't each re-parse the jsonl
-import scripts.spike_topdown as _spike
+import scripts.annotate.spike_topdown as _spike
 _SS: dict = {}
 _orig_bss = _spike.build_seq_state
 _spike.build_seq_state = lambda cap: _SS.setdefault(cap, _orig_bss(cap))

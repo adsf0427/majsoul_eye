@@ -20,10 +20,10 @@ a multi-GB copy — the script never iterates PNGs. Idempotent + resumable (writ
 moved entries; backs each index up to ``frames.jsonl.premigrate`` before rewriting).
 
 Dry-run by default. Run (conda `auto` env, repo root, PYTHONPATH=.):
-  $PY scripts/migrate_captures_layout.py                 # preview the plan
+  $PY scripts/data/migrate_captures_layout.py                 # preview the plan
   # BACK UP FIRST:  robocopy captures captures_backup /E
-  $PY scripts/migrate_captures_layout.py --apply
-  $PY scripts/migrate_captures_layout.py --apply --strict   # fail if any index unresolved
+  $PY scripts/data/migrate_captures_layout.py --apply
+  $PY scripts/data/migrate_captures_layout.py --apply --strict   # fail if any index unresolved
 """
 from __future__ import annotations
 

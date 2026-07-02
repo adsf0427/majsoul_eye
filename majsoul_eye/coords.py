@@ -47,7 +47,7 @@ class NormBox:
               left: float = 0.0, right: float = 0.0) -> "NormBox":
         """Shrink the box by per-side fractions of its own width/height. Used to
         trim next-tile bleed off packed river cells (the next discard bleeds into
-        the bottom of a cell — see scripts/build_dataset.py --river-erode-*)."""
+        the bottom of a cell — see scripts/train/build_dataset.py --river-erode-*)."""
         w, h = self.w, self.h
         return NormBox(self.x0 + left * w, self.y0 + top * h,
                        self.x1 - right * w, self.y1 - bottom * h)

@@ -32,9 +32,9 @@ Env (one-time):
 
 Usage (PowerShell):
   $PY = "C:/Users/zsx/miniforge3/envs/auto/python.exe"
-  & $PY scripts/autoplay_ai.py                         # dry-run
-  & $PY scripts/autoplay_ai.py --live --out captures/ai1
-  & $PY scripts/autoplay_ai.py --live --model ensemble_borda_models.pth   # stronger, slower
+  & $PY scripts/capture/autoplay_ai.py                         # dry-run
+  & $PY scripts/capture/autoplay_ai.py --live --out captures/ai1
+  & $PY scripts/capture/autoplay_ai.py --live --model ensemble_borda_models.pth   # stronger, slower
 """
 
 from __future__ import annotations

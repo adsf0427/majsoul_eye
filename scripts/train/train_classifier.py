@@ -6,7 +6,7 @@ whole KYOKU (or a whole SESSION) so val contains DIFFERENT physical tiles —
 the honest generalization test. With ≥2 games, a cross-session val is strongest.
 
     # train on both games, validate on held-out session6 kyoku:
-    python scripts/train_classifier.py \
+    python scripts/train/train_classifier.py \
         --data session5=datasets/session5/crops:captures/raw/manual/session5.jsonl \
         --data session6=datasets/session6_hr/crops:captures/raw/manual/session6.jsonl \
         --val session6:E3.0,S2.0 --epochs 20

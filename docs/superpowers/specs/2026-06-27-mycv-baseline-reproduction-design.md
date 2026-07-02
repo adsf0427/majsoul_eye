@@ -80,7 +80,7 @@ Akagi-free boundary). Files:
    - Ported helpers: `makeMask`, `dealContour`, `cutPic`, `getType`, `pickShapeRGB`,
      `lizhipai`, floodFill hand reader, and both net definitions. Copied verbatim in
      behaviour (same thresholds/constants) — fidelity over cleanliness.
-2. **`scripts/mycv_baseline.py`** — the scoring harness. Uses our `Replayer`,
+2. **`scripts/inspect/mycv_baseline.py`** — the scoring harness. Uses our `Replayer`,
    `coords`, `tiles`. Per session: replay GT, run the port per frame, align, score.
 
 ### Seat & resolution alignment

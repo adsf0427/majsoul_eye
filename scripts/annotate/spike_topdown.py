@@ -12,10 +12,10 @@ before integrating). It does NOT modify the package. Outputs to fails/topdown_de
 record of which seq validates which case.
 
 Run from repo root with PYTHONPATH=. and the conda `auto` python:
-    PYTHONPATH=. $PY scripts/spike_topdown.py --list-seqs --capture captures/intermediate/gt/ai_run_3_game1.jsonl
-    PYTHONPATH=. $PY scripts/spike_topdown.py --all-cases            # Mode A (warp) + B (original)
-    PYTHONPATH=. $PY scripts/spike_topdown.py --case C_kakan_single --mode both
-    PYTHONPATH=. $PY scripts/spike_topdown.py --warp --case rivers_full   # debug: warp + symmetry
+    PYTHONPATH=. $PY scripts/annotate/spike_topdown.py --list-seqs --capture captures/intermediate/gt/ai_run_3_game1.jsonl
+    PYTHONPATH=. $PY scripts/annotate/spike_topdown.py --all-cases            # Mode A (warp) + B (original)
+    PYTHONPATH=. $PY scripts/annotate/spike_topdown.py --case C_kakan_single --mode both
+    PYTHONPATH=. $PY scripts/annotate/spike_topdown.py --warp --case rivers_full   # debug: warp + symmetry
 
 FINDINGS (2026-06-30 spike, ai_run_3_game1/ai_run_3_game3 1080p):
   * A single H_table (fit from the 4 play-square corners, PLAY_CORNERS_NORM)
@@ -74,6 +74,7 @@ from majsoul_eye import paths
 from majsoul_eye.capture.schema import read_records
 from majsoul_eye.capture.sync import RELEVANT_EVENTS
 from majsoul_eye.state.replay import Replayer
+from majsoul_eye.capture.gtframes import build_seq_state, load_frames
 from majsoul_eye.normalize import BoardRegion, locate_fullscreen
 from majsoul_eye.coords import RIVER_QUADS, MELD_STRIPS
 from majsoul_eye.label.river import RiverGrid, _screen_to_seat
@@ -141,7 +142,7 @@ ROT_SIGN = -1
 
 
 # --------------------------------------------------------------------------- #
-# loading (frame, GT state) pairs — idiom copied from scripts/overlay_labels.py
+# loading (frame, GT state) pairs — idiom copied from scripts/inspect/overlay_labels.py
 # --------------------------------------------------------------------------- #
 
 def _frames_dir_for(capture: str) -> str:
@@ -151,33 +152,6 @@ def _frames_dir_for(capture: str) -> str:
     import this name (annotate_ai_session, calibrate_annotation_model, deletterbox).
     """
     return paths.frames_dir_for(capture)
-
-
-def build_seq_state(capture: str) -> dict[int, object]:
-    """seq -> BoardState snapshot at every board-changing record."""
-    rp = Replayer()
-    seq_state: dict[int, object] = {}
-    for r in read_records(capture):
-        rp.apply_record(r)
-        if r.mjai and any(ev.get("type") in RELEVANT_EVENTS for ev in r.mjai):
-            seq_state[r.seq] = rp.state.copy()
-    return seq_state
-
-
-def load_frames(frames_dir: str) -> dict[int, str]:
-    """seq -> image path (status 'ok' only)."""
-    out: dict[int, str] = {}
-    path = os.path.join(frames_dir, "frames.jsonl")
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            d = json.loads(line)
-            if d.get("status") == "ok" and d.get("file"):
-                seq = d.get("seq", d.get("step"))
-                out[seq] = paths.resolve_frame_path(d["file"], frames_dir)
-    return out
 
 
 def load_pair(capture: str, seq: int, frames_dir: Optional[str] = None):

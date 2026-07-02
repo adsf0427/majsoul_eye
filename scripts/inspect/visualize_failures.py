@@ -6,9 +6,9 @@ perspective, red fives, ...) rather than just reading a number.
 Examples (PowerShell):
   $PY = "C:/Users/zsx/miniforge3/envs/auto/python.exe"; $env:PYTHONPATH = "."
   # all crops of a game vs the shipped model:
-  & $PY scripts/visualize_failures.py --crops datasets/ai_g1/crops --out fails/ai_g1
+  & $PY scripts/inspect/visualize_failures.py --crops datasets/ai_g1/crops --out fails/ai_g1
   # only a held-out kyoku (true generalization failures):
-  & $PY scripts/visualize_failures.py --crops datasets/session6_erode/crops `
+  & $PY scripts/inspect/visualize_failures.py --crops datasets/session6_erode/crops `
         --val-capture captures/session6.jsonl --val-kyoku E3.0,S2.0 --out fails/s6val
 
 Outputs: <out>/confusions.png (montage), <out>/summary.txt (overall acc + top confusions

@@ -1,6 +1,6 @@
 """Draw the seeded ROIs/labels on a real frame to calibrate coords.py by eye.
 
-  python scripts/overlay_labels.py captures/session2.jsonl captures/session2/ \
+  python scripts/inspect/overlay_labels.py captures/session2.jsonl captures/session2/ \
          --out /tmp/overlay.png [--step N] [--max-width 1920]
 """
 from __future__ import annotations

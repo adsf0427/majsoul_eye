@@ -51,20 +51,20 @@ indexes (`frames.jsonl`) store RELATIVE paths; always resolve via `paths.resolve
 ```bash
 # 1. Record GT + time-synced screenshots (runs Akagi; akagi env; autoplay OFF, passive only).
 #    WEB client must be FULLSCREEN (F11). Defaults to captures/raw/manual/. Status → <out>.jsonl.log
-conda run -n akagi python scripts/record_gt.py --screenshots --quiet 0.30 --settle-cap 2.0
+conda run -n akagi python scripts/capture/record_gt.py --screenshots --quiet 0.30 --settle-cap 2.0
 # 2. Inspect sync quality (offline, no client):
-PYTHONPATH=. $PY scripts/inspect_capture.py captures/raw/manual/sessionN.jsonl captures/raw/manual/sessionN/ --step <N>
+PYTHONPATH=. $PY scripts/inspect/inspect_capture.py captures/raw/manual/sessionN.jsonl captures/raw/manual/sessionN/ --step <N>
 # 3. (only if not captured fullscreen) crop the 16:9 canvas out of a letterboxed session:
-$PY scripts/crop_game.py captures/raw/manual/sessionN captures/intermediate/derived/sessionN_16x9 --size 3840x2160
+$PY scripts/data/crop_game.py captures/raw/manual/sessionN captures/intermediate/derived/sessionN_16x9 --size 3840x2160
 # 4. Build auto-labeled dataset (replay → autolabel → crops/ + yolo/):
-PYTHONPATH=. $PY scripts/build_dataset.py captures/raw/manual/sessionN.jsonl captures/raw/manual/sessionN/ \
+PYTHONPATH=. $PY scripts/train/build_dataset.py captures/raw/manual/sessionN.jsonl captures/raw/manual/sessionN/ \
        --out datasets/sessionN --locator fullscreen --drop-violations
 # 5. Train the 38-class tile classifier (KYOKU-level split — never split by frame):
-PYTHONPATH=. $PY scripts/train_classifier.py \
+PYTHONPATH=. $PY scripts/train/train_classifier.py \
        --data sN=datasets/sessionN/crops:captures/raw/manual/sessionN.jsonl --val sN:E3.0,S2.0 --epochs 20
-# AI (MahjongCopilot) path: scripts/ingest_run.py captures/raw/ai_session/run_N discovers games →
+# AI (MahjongCopilot) path: scripts/data/ingest_run.py captures/raw/ai_session/run_N discovers games →
 #   convert_mjcopilot (→ captures/intermediate/gt/ai_run_*.jsonl) → build_dataset. Then annotate:
-#   scripts/annotate_ai_session.py (defaults to all captures/intermediate/gt/*.jsonl).
+#   scripts/annotate/annotate_ai_session.py (defaults to all captures/intermediate/gt/*.jsonl).
 # overlay_labels.py draws auto-labels onto a frame for visual coordinate calibration.
 ```
 
@@ -89,15 +89,23 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
     animation renders, so capture is async **debounce-to-quiet**: capture one frame once no
     board event has arrived for `quiet` s (plus optional pixel-stability confirm). Decision logic
     is injected (`grab`/`now`/`sleep`) so it is unit-testable without a client.
-  - `schema.py` (`GTRecord`, JSONL I/O), `screen.py` (win32/mss window grab).
+  - `schema.py` (`GTRecord`, JSONL I/O), `screen.py` (win32/mss window grab), `gtframes.py`
+    (shared `build_seq_state`/`load_frames` for the annotator + dataset builder — Akagi-free).
 - **`state/replay.py`** — pure, Akagi-free `Replayer` consuming MJAI events into a full
   seat-absolute `BoardState` (rivers with tsumogiri/riichi/called flags, melds, dora, hero hand,
   concealed counts, scores). `check_invariants()` flags desync (>4 of a kind, bad hand size) —
   drop/human-review violating frames.
-- **`label/`** — the auto-annotator. `autolabel.py` (`label_frame`) emits `LabelSample`s →
-  classifier crops + YOLO lines. `river.py`/`meld.py` handle the hard perspective zones: packed
-  discards merge into one blob, so they **don't detect per tile** — they subdivide a calibrated
-  per-seat quad by homography and assign classes from `state.visible_river(seat)` in GT order.
+- **`annotate/`** — the **precise** GT-driven annotator; the source `build_dataset.py` now consumes.
+  `pipeline.py` = a fullwarp top-down homography + data-calibrated `DISCARD_GRID`/`DISCARD_ROW_OFFSETS`
+  + composition-aware melds (`generate_meld_boxes_v2`/`meld_display_cells`) + per-frame mask snap
+  (`snap_meld_strip`); GT drives class assignment (not detection). `frame.py` = `annotate_frame`
+  (full per-frame record, original-px quads + fills/flags) plus `iter_tile_boxes`/`AnnBox`/`crop_box`
+  (the crop+YOLO seam: quad crops for river/meld, px_box for hand/dora). `seatgt.py` = `seat_gt`.
+  Root `mahjong_relative_annotation_pipeline.py` is a `sys.modules` compat shim → `annotate.pipeline`.
+- **`label/`** — **legacy** NormBox annotator. `autolabel.py` (`label_frame`) still supplies the hero
+  hand + dora boxes (`annotate_frame` calls it for those zones only). `river.py`/`meld.py`
+  (equal-subdivision `RIVER_QUADS`/`MELD_STRIPS`) are **superseded by `annotate/`** for the hard
+  river/meld zones and kept only for their tests, pending a deprecation PR.
 - **`recognize/classifier.py`** — `TileNet` (small CNN, 64px input, 38-class) + `TileClassifier`
   inference wrapper. The clean rewrite of mycv's classifier.
 
@@ -118,7 +126,7 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   `intermediate/{gt,derived}`, `legacy/`. Don't hardcode `captures/...` paths or re-derive the
   frames-dir stem rule; use `paths.frames_dir_for` / `paths.converted_gt_captures()` and resolve
   every `frames.jsonl` `file` (RELATIVE now) through `paths.resolve_frame_path` (accepts legacy
-  absolute too). To reorganize again, `scripts/migrate_captures_layout.py` moves dirs + rewrites
+  absolute too). To reorganize again, `scripts/data/migrate_captures_layout.py` moves dirs + rewrites
   indexes idempotently (dry-run default).
 - **Train/val split by kyoku, never by frame** — the same physical discard appears in many frames
   of one kyoku; a frame split leaks it and inflates accuracy.

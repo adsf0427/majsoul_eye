@@ -5,8 +5,8 @@ startup. Configure Akagi's MITM as usual and play / 观战 a game with autoplay 
 (passive capture; see docs/DESIGN.md §3.1, §7). Output is a JSONL capture.
 
 Usage:
-    python scripts/record_gt.py --out captures/session1.jsonl
-    python scripts/record_gt.py --akagi-dir D:/code/phoenix/Akagi --out captures/s.jsonl
+    python scripts/capture/record_gt.py --out captures/session1.jsonl
+    python scripts/capture/record_gt.py --akagi-dir D:/code/phoenix/Akagi --out captures/s.jsonl
 """
 
 from __future__ import annotations

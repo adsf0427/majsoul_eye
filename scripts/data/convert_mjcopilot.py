@@ -25,7 +25,7 @@ Outputs (per game NAME; defaults land under captures/intermediate/gt/):
   <out>/NAME/frames.jsonl   -- frame index {seq, file=<captures-relative png>, status}
 
 Usage (defaults: --session captures/raw/ai_session, --out captures/intermediate/gt):
-  PYTHONPATH=. $PY scripts/convert_mjcopilot.py \
+  PYTHONPATH=. $PY scripts/data/convert_mjcopilot.py \
       --game run_3/game1=ai_run_3_game1 --game run_1=ai_run_1 --mjcopilot ../MahjongCopilot
 """
 
