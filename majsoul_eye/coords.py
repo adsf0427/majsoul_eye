@@ -96,10 +96,12 @@ def dora_slot(i: int, n: int = MAX_DORA) -> NormBox:
 # Parametric model. Seeds: mycv flood-fill tiles are ~95×152 px at 1920×1080
 # starting x≈235, y≈1002 (seed point inside tile); Akagi's normalized hand centers
 # run x 0.139→0.788 at y 0.929. We model 13 concealed slots + a separated tsumo slot.
+# x0 data-calibrated: brightness-scan of the first-tile left edge over 132 rendered
+# session6 hands gives 223 px (mycv's 235 seed sat +12 px right); slot width 94.5≈95.
 @dataclass(frozen=True)
 class HandModel:
-    x0: float = 235 / 1920          # left edge of first tile      # CALIBRATE
-    slot_w: float = 95 / 1920       # tile width (also slot pitch)  # CALIBRATE
+    x0: float = 223 / 1920          # left edge of first tile (measured)
+    slot_w: float = 95 / 1920       # tile width (also slot pitch)  # measured 94.5
     y0: float = (1002 - 76) / 1080  # tile top (seed 1002 is mid; half-height ~76)
     tile_h: float = 152 / 1080      # tile height                   # CALIBRATE
     tsumo_gap: float = 0.015        # extra gap before the drawn tile (Akagi TSUMO_OFFSET_X)

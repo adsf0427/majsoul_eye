@@ -47,9 +47,13 @@ class Meld:
     type: str                        # chi | pon | daiminkan | ankan | kakan | nukidora
     from_seat: int                   # who the called tile came from (== actor for ankan/kakan/nukidora)
     tiles: list[str] = field(default_factory=list)
+    # Geometry needs the exact identity of the specially-rendered tiles, which the
+    # sorted `tiles` list loses (matters for chi ordering and red-5 vs normal-5):
+    called_pai: str = ""             # the claimed tile — rendered SIDEWAYS in the meld
+    added_pai: str = ""              # kakan's added tile — stacked beside the sideways one
 
     def copy(self) -> "Meld":
-        return Meld(self.type, self.from_seat, list(self.tiles))
+        return Meld(self.type, self.from_seat, list(self.tiles), self.called_pai, self.added_pai)
 
 
 @dataclass
@@ -206,7 +210,7 @@ class Replayer:
                 t.called = True
                 break
         self.state.melds[actor].append(
-            Meld(type=mtype, from_seat=target, tiles=_sort_hand([pai] + consumed))
+            Meld(type=mtype, from_seat=target, tiles=_sort_hand([pai] + consumed), called_pai=pai)
         )
         self.state.concealed_counts[actor] -= len(consumed)
         if actor == self.state.hero_seat:
@@ -236,9 +240,10 @@ class Replayer:
         if target_meld is not None:
             target_meld.type = "kakan"
             target_meld.tiles = _sort_hand(target_meld.tiles + [pai])
+            target_meld.added_pai = pai
         else:  # VALIDATE: pon not found (e.g. reconnect mid-state) — record anyway
             self.state.melds[actor].append(
-                Meld(type="kakan", from_seat=actor, tiles=list(ev.get("consumed", [pai])))
+                Meld(type="kakan", from_seat=actor, tiles=list(ev.get("consumed", [pai])), added_pai=pai)
             )
         self.state.concealed_counts[actor] -= 1
         if actor == self.state.hero_seat:

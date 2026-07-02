@@ -60,6 +60,7 @@ def test_pon_meld_and_called_tile_removed_from_river():
     meld = s.melds[0][0]
     assert meld.type == "pon" and meld.from_seat == 2
     assert meld.tiles.count("2p") == 3
+    assert meld.called_pai == "2p"       # identity of the sideways-rendered tile survives
     # seat 2's only discard was called away -> not visible in the 河
     assert len(s.rivers[2]) == 1 and s.rivers[2][0].called is True
     assert s.visible_river(2) == []
