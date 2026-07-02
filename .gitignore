@@ -48,6 +48,11 @@ mlruns/
 *.engine
 *.tflite
 
+# Large model weights — kept locally, too big for GitHub's 50MB limit.
+# (small classifier weights majsoul_eye/recognize/tile_classifier*.pt stay tracked)
+majsoul_eye/recognize/tile_detector*.pt
+/yolo*.pt
+
 out/
 scratchpad/
 
