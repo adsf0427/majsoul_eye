@@ -8,8 +8,14 @@ literal 90° rotations of one canonical seat.
 
 This is a VISUALIZATION spike (per docs/STATUS.md §1.9 precedent: see the boxes
 before integrating). It does NOT modify the package. Outputs to fails/topdown_demo/
-(git-ignored, regenerable); this committed script + its CASES dict is the durable
-record of which seq validates which case.
+(git-ignored, regenerable).
+
+Status (docs/STATUS.md §1.13): ARCHIVED + de-load-beared. Its H_table geometry is
+superseded by the precise fullwarp annotator (``majsoul_eye.annotate``); it is kept
+only as a runnable debug visualizer. The shared GT plumbing it used to own now lives
+in the package (``annotate.cases.CASES``, ``annotate.seatgt``, ``capture.gtframes.load_pair``),
+which it imports; the superseded ``RiverGrid`` + self meld strip are inlined below so
+this file stands alone.
 
 Run from repo root with PYTHONPATH=. and the conda `auto` python:
     PYTHONPATH=. $PY scripts/annotate/spike_topdown.py --list-seqs --capture captures/intermediate/gt/ai_run_3_game1.jsonl
@@ -63,47 +69,62 @@ FINDINGS (2026-06-30 spike, ai_run_3_game1/ai_run_3_game3 1080p):
 from __future__ import annotations
 
 import argparse
-import json
 import os
+from dataclasses import dataclass
 from typing import Optional
 
 import cv2
 import numpy as np
 
 from majsoul_eye import paths
-from majsoul_eye.capture.schema import read_records
-from majsoul_eye.capture.sync import RELEVANT_EVENTS
-from majsoul_eye.state.replay import Replayer
-from majsoul_eye.capture.gtframes import build_seq_state, load_frames
-from majsoul_eye.normalize import BoardRegion, locate_fullscreen
-from majsoul_eye.coords import RIVER_QUADS, MELD_STRIPS
-from majsoul_eye.label.river import RiverGrid, _screen_to_seat
-from majsoul_eye.label.meld import _flatten
-from majsoul_eye.tiles import NAME_TO_ID
+from majsoul_eye.annotate.cases import CASES
+from majsoul_eye.annotate.seatgt import SEAT_POS, _screen_to_seat
+from majsoul_eye.capture.gtframes import build_seq_state, load_frames, load_pair
+from majsoul_eye.normalize import BoardRegion
 
-SEAT_POS = ["self", "right", "across", "left"]   # screen position index 0..3
 
-# Re-discover seqs with --list-seqs, then bake them here so they're never lost
-# (the §1.9 generators lived in a deleted scratchpad/ and are gone).
-# Seat mapping (screen pos from hero): ai_run_3_game1 hero=3 → self3/right0/across1/left2;
-#                                      ai_run_3_game3 hero=1 → self1/right2/across3/left0.
-#   case -> {capture, seq, note}
-CASES: dict[str, dict] = {
-    "rivers_full":     {"capture": "captures/intermediate/gt/ai_run_3_game1.jsonl", "seq": 1458, "note": "rivers[13,12,12,13] + melds s0/s1/s2"},
-    "A_chi_daiminkan": {"capture": "captures/intermediate/gt/ai_run_3_game1.jsonl", "seq": 124,  "note": "right(s0): chi+daiminkan"},
-    "B_daiminkan_pon": {"capture": "captures/intermediate/gt/ai_run_3_game1.jsonl", "seq": 140,  "note": "right(s0): chi+daiminkan; left(s2): pon,pon"},
-    "E_ankan":         {"capture": "captures/intermediate/gt/ai_run_3_game1.jsonl", "seq": 390,  "note": "left(s2): ankan; across(s1): pon"},
-    "Z_longchain":     {"capture": "captures/intermediate/gt/ai_run_3_game1.jsonl", "seq": 1458, "note": "across(s1): pon,pon; left(s2): chi,pon"},
-    "C_kakan_single":  {"capture": "captures/intermediate/gt/ai_run_3_game3.jsonl", "seq": 118,  "note": "right(s2): kakan; left(s0): pon"},
-    "D_kakan_multi":   {"capture": "captures/intermediate/gt/ai_run_3_game3.jsonl", "seq": 118,  "note": "kakan + neighbour pon"},
-    # Riichi: the declaring discard is rendered SIDEWAYS in the river, so each seat
-    # exercises the sideways tile in a different river orientation. One case per
-    # screen position (self/right/across/left) so all 4 rotations are covered.
-    "F_riichi_self":   {"capture": "captures/intermediate/gt/ai_run_3_game1.jsonl", "seq": 1456, "note": "self(s3): riichi @river idx10, E4"},
-    "G_riichi_right":  {"capture": "captures/intermediate/gt/ai_run_3_game1.jsonl", "seq": 726,  "note": "right(s0): riichi @river idx8, E2 (left s2 also riichi)"},
-    "H_riichi_across": {"capture": "captures/intermediate/gt/ai_run_3_game3.jsonl", "seq": 782,  "note": "across(s3): riichi @river idx11, E4 (deep river)"},
-    "I_riichi_left":   {"capture": "captures/intermediate/gt/ai_run_3_game1.jsonl", "seq": 748,  "note": "left(s2): riichi @river idx12, E2 (right s0 also riichi)"},
-}
+# --------------------------------------------------------------------------- #
+# self-contained (archived-spike) geometry: the equal-subdivision RiverGrid and
+# the self meld strip were removed from the package (majsoul_eye.label.river /
+# coords.MELD_STRIPS) as superseded — inlined here so this spike stands alone.
+# --------------------------------------------------------------------------- #
+RIVER_COLS = 6
+RIVER_ROWS = 3
+
+
+@dataclass(frozen=True)
+class RiverGrid:
+    """A seat's discard grid as a quad subdivided into cols×rows cells.
+
+    Reading order: cell 0 at ``g00``, columns g00→g10 then rows g00→g01.
+    """
+    g00: tuple
+    g10: tuple
+    g11: tuple
+    g01: tuple
+    cols: int = RIVER_COLS
+    rows: int = RIVER_ROWS
+
+    @property
+    def capacity(self) -> int:
+        return self.cols * self.rows
+
+    def _homography(self):
+        src = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], np.float32)
+        dst = np.array([self.g00, self.g10, self.g11, self.g01], np.float32)
+        return cv2.getPerspectiveTransform(src, dst)
+
+    def cell_corners(self, i: int) -> np.ndarray:
+        """4 (x,y) normalized corners of cell i (reading order)."""
+        col, row = i % self.cols, i // self.cols
+        u0, u1 = col / self.cols, (col + 1) / self.cols
+        v0, v1 = row / self.rows, (row + 1) / self.rows
+        pts = np.array([[[u0, v0], [u1, v0], [u1, v1], [u0, v1]]], np.float32)
+        return cv2.perspectiveTransform(pts, self._homography())[0]
+
+
+# self meld strip (was coords.MELD_STRIPS["self"]): bottom-right, right-anchored.
+_MELD_SELF = {"quad": ((0.702, 0.861), (0.911, 0.873), (0.911, 0.960), (0.702, 0.950)), "count": 6}
 
 DEFAULT_CAPTURE = "captures/intermediate/gt/ai_run_3_game1.jsonl"
 OUT_DIR = "fails/topdown_demo"
@@ -142,35 +163,8 @@ ROT_SIGN = -1
 
 
 # --------------------------------------------------------------------------- #
-# loading (frame, GT state) pairs — idiom copied from scripts/inspect/overlay_labels.py
-# --------------------------------------------------------------------------- #
-
-def _frames_dir_for(capture: str) -> str:
-    """captures/.../ai_run_3_game1.jsonl -> captures/.../ai_run_3_game1/ (stem rule).
-
-    Kept as a thin alias of majsoul_eye.paths.frames_dir_for for the callers that
-    import this name (annotate_ai_session, calibrate_annotation_model, deletterbox).
-    """
-    return paths.frames_dir_for(capture)
-
-
-def load_pair(capture: str, seq: int, frames_dir: Optional[str] = None):
-    """Return (frame_bgr, BoardState, BoardRegion) for one seq."""
-    frames_dir = frames_dir or _frames_dir_for(capture)
-    seq_state = build_seq_state(capture)
-    frames = load_frames(frames_dir)
-    if seq not in seq_state:
-        raise SystemExit(f"seq {seq} not a board-changing seq; e.g. {sorted(seq_state)[:12]}")
-    if seq not in frames:
-        raise SystemExit(f"seq {seq} has no saved frame; e.g. {sorted(frames)[:12]}")
-    frame = cv2.imread(frames[seq])
-    if frame is None:
-        raise SystemExit(f"cv2.imread failed: {frames[seq]}")
-    return frame, seq_state[seq], locate_fullscreen(frame)
-
-
-# --------------------------------------------------------------------------- #
 # --list-seqs : print candidate seqs so cases can be (re)discovered
+# (load_pair / build_seq_state / load_frames come from majsoul_eye.capture.gtframes)
 # --------------------------------------------------------------------------- #
 
 def _meld_brief(state) -> str:
@@ -183,7 +177,7 @@ def _meld_brief(state) -> str:
 
 
 def list_seqs(capture: str, frames_dir: Optional[str] = None) -> None:
-    frames_dir = frames_dir or _frames_dir_for(capture)
+    frames_dir = frames_dir or paths.frames_dir_for(capture)
     seq_state = build_seq_state(capture)
     frames = load_frames(frames_dir)
     print(f"# {capture}  (board-changing seqs with a saved frame)")
@@ -448,7 +442,7 @@ def seat_meld_strip_quad(pos_idx: int, H: np.ndarray, outward: float = MELD_OUTW
     """Meld strip quad (norm) for screen position pos_idx, from the self strip
     mapped to rect, rotated, and pushed radially out toward the wall by `outward`
     rect-units (the self strip sits a touch inward of the real melds)."""
-    base_rect = norm_to_rect(MELD_STRIPS["self"]["quad"], H)
+    base_rect = norm_to_rect(_MELD_SELF["quad"], H)
     rot_rect = rotate_rect(base_rect, pos_idx)
     c = RECT / 2.0
     d = rot_rect.mean(axis=0) - c
@@ -484,7 +478,7 @@ def draw_meld_boxes(frame, region, state, H, thickness=2):
             continue
         cells = _meld_labels_with_kakan(state.melds[seat])
         quad = seat_meld_strip_quad(pos_idx, H)
-        count = MELD_STRIPS["self"]["count"]
+        count = _MELD_SELF["count"]
         grid = _strip_grid_norm(quad, count, len(cells))
         for i, (lab, is_kan) in enumerate(cells):
             pts = grid.cell_corners(i)
@@ -512,7 +506,7 @@ def draw_grids_on_warp(canvas, state, H, rect=RECT):
             poly_rect(grid.cell_corners(i), (0, 255, 255), 1)
         if state.melds[seat]:
             cells = _meld_labels_with_kakan(state.melds[seat])
-            mg = _strip_grid_norm(seat_meld_strip_quad(pos_idx, H), MELD_STRIPS["self"]["count"], len(cells))
+            mg = _strip_grid_norm(seat_meld_strip_quad(pos_idx, H), _MELD_SELF["count"], len(cells))
             for i, (lab, is_kan) in enumerate(cells):
                 poly_rect(mg.cell_corners(i), (255, 0, 255) if is_kan else (255, 200, 0), 2)
     return canvas

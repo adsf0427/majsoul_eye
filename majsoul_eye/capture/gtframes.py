@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Optional
 
 from majsoul_eye import paths
 from majsoul_eye.capture.schema import read_records
@@ -47,3 +48,26 @@ def load_frames(frames_dir: str, statuses: tuple[str, ...] = ("ok",)) -> dict[in
                 seq = d.get("seq", d.get("step"))
                 out[seq] = paths.resolve_frame_path(d["file"], frames_dir)
     return out
+
+
+def load_pair(capture: str, seq: int, frames_dir: Optional[str] = None):
+    """Return ``(frame_bgr, BoardState, BoardRegion)`` for one seq of a capture.
+
+    Convenience loader over ``build_seq_state`` + ``load_frames`` (used by the
+    top-down visualization spike). ``import cv2`` / ``locate_fullscreen`` are
+    deferred so importing this module stays free of the heavy vision deps.
+    """
+    import cv2
+    from majsoul_eye.normalize import locate_fullscreen
+
+    frames_dir = frames_dir or paths.frames_dir_for(capture)
+    seq_state = build_seq_state(capture)
+    frames = load_frames(frames_dir)
+    if seq not in seq_state:
+        raise SystemExit(f"seq {seq} not a board-changing seq; e.g. {sorted(seq_state)[:12]}")
+    if seq not in frames:
+        raise SystemExit(f"seq {seq} has no saved frame; e.g. {sorted(frames)[:12]}")
+    frame = cv2.imread(frames[seq])
+    if frame is None:
+        raise SystemExit(f"cv2.imread failed: {frames[seq]}")
+    return frame, seq_state[seq], locate_fullscreen(frame)

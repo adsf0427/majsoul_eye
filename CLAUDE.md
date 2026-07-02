@@ -77,7 +77,9 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   Shared by every component (classifier, detector, labels, state).
 - **`coords.py`** — normalized ROI model. Every box is normalized 0–1 against a **canonical
   16:9 board**, so it applies at any resolution. Holds easy-zone boxes (`REGIONS`), the
-  parametric `HandModel`, `DORA_STRIP`, and per-seat perspective `RIVER_QUADS` / `MELD_STRIPS`.
+  parametric `HandModel`, `DORA_STRIP`, and coarse per-quadrant `RIVER_ZONES`. (The precise
+  per-seat 河/副露 geometry lives in `annotate/`, not here — the old `RIVER_QUADS`/`MELD_STRIPS`
+  were removed with the `label/` river+meld modules; see §1.13.)
 - **`normalize.py`** — front-end that maps an arbitrary screenshot onto the canonical frame via
   a `BoardRegion` (`locate_fullscreen` / `locate_letterbox`; `AnchorLocator` is a TODO stub).
   This is what lets fixed-slot logic survive other resolutions.
@@ -100,12 +102,14 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   + composition-aware melds (`generate_meld_boxes_v2`/`meld_display_cells`) + per-frame mask snap
   (`snap_meld_strip`); GT drives class assignment (not detection). `frame.py` = `annotate_frame`
   (full per-frame record, original-px quads + fills/flags) plus `iter_tile_boxes`/`AnnBox`/`crop_box`
-  (the crop+YOLO seam: quad crops for river/meld, px_box for hand/dora). `seatgt.py` = `seat_gt`.
-  Root `mahjong_relative_annotation_pipeline.py` is a `sys.modules` compat shim → `annotate.pipeline`.
-- **`label/`** — **legacy** NormBox annotator. `autolabel.py` (`label_frame`) still supplies the hero
-  hand + dora boxes (`annotate_frame` calls it for those zones only). `river.py`/`meld.py`
-  (equal-subdivision `RIVER_QUADS`/`MELD_STRIPS`) are **superseded by `annotate/`** for the hard
-  river/meld zones and kept only for their tests, pending a deprecation PR.
+  (the crop+YOLO seam: quad crops for river/meld, px_box for hand/dora). `seatgt.py` = `seat_gt` +
+  `_screen_to_seat`/`SEAT_POS` (the seat mapping, owned here); `cases.py` = the named AB validation seqs
+  (`CASES`). (The precise pipeline was moved verbatim out of a former root
+  `mahjong_relative_annotation_pipeline.py`, now removed — import `from majsoul_eye.annotate import pipeline as P`.)
+- **`label/`** — **legacy** NormBox annotator, now just `autolabel.py` (`label_frame`): supplies the
+  hero hand + dora boxes only (`annotate_frame` calls it for those zones; `DEFAULT_ZONES = {hand}`).
+  The old `river.py`/`meld.py` + `coords.RIVER_QUADS`/`MELD_STRIPS` (equal-subdivision RiverGrid) were
+  **removed** — superseded by `annotate/` (see docs/STATUS.md §1.13).
 - **`recognize/classifier.py`** — `TileNet` (small CNN, 64px input, 38-class) + `TileClassifier`
   inference wrapper. The clean rewrite of mycv's classifier.
 

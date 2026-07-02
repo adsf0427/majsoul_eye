@@ -2,8 +2,9 @@
 discard grid + composition-aware melds + per-frame mask snap).
 
 - ``pipeline``  — pure geometry + image-evidence core (moved verbatim from the
-  root ``mahjong_relative_annotation_pipeline.py``; that name still re-exports it).
-- ``seatgt``    — GT plumbing (``seat_gt`` / ``SEAT_POS``).
+  former root ``mahjong_relative_annotation_pipeline.py``, now removed).
+- ``seatgt``    — GT plumbing (``seat_gt`` / ``_screen_to_seat`` / ``SEAT_POS``).
+- ``cases``     — the named AB validation seqs (``CASES``).
 - ``frame``     — per-frame orchestration: ``annotate_frame`` (full record),
   ``iter_tile_boxes`` / ``AnnBox`` / ``crop_box`` for crop+label consumers.
 """

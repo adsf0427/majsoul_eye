@@ -126,34 +126,7 @@ RIVER_ZONES_PX: dict[str, tuple[int, int, int, int]] = {
 }
 RIVER_ZONES: dict[str, NormBox] = {k: px_box(*v) for k, v in RIVER_ZONES_PX.items()}
 
-# --- per-seat 副露 (meld) strips (for a 1-row RiverGrid) ----------------------
-# Calibrated on session6 (T5). Each strip is a 1-row quad [g00,g10,g11,g01] bounding
-# the `count` meld tiles observed, with a per-seat layout rule:
-#   anchor: which end is FIXED as melds grow ('start'=g00 fixed, 'end'=g10 fixed)
-#   order : meld-GROUP screen order ('chrono'=oldest-first, 'reverse'=newest-first)
-# self melds sit bottom-right and grow LEFT (right-anchored, newest-first); the other
-# seats grow OUTWARD from their avatar (start-anchored, chronological). The rotated
-# called tile is ~1.3× wider (uniform cells are approximate); ankan shows 2 face-down
-# 'back' tiles + 2 face-up. # CALIBRATE — approximate (partial); bootstrap refines.
-MELD_STRIPS: dict[str, dict] = {
-    "self":   {"quad": ((0.702, 0.861), (0.911, 0.873), (0.911, 0.960), (0.702, 0.950)), "count": 6, "anchor": "end",   "order": "reverse"},
-    "right":  {"quad": ((0.863, 0.392), (0.926, 0.782), (0.964, 0.792), (0.901, 0.402)), "count": 6, "anchor": "start", "order": "chrono"},
-    "across": {"quad": ((0.206, 0.022), (0.316, 0.032), (0.316, 0.092), (0.206, 0.082)), "count": 4, "anchor": "start", "order": "chrono"},
-    "left":   {"quad": ((0.071, 0.695), (0.047, 0.875), (0.103, 0.875), (0.113, 0.695)), "count": 3, "anchor": "start", "order": "chrono"},
-}
-
-# --- per-seat discard GRID quads (for RiverGrid) -----------------------------
-# Each quad is the FULL 6×3 discard grid as 4 normalized corners
-# (g00=first-discard, g10=col-max/row0, g11=col-max/row-max, g01=col0/row-max).
-# SEED values are axis-aligned bboxes auto-detected on a full-river frame
-# (session6 seq 1458, 3840×2160); T2 calibration refines these into the true
-# perspective trapezoids and fixes per-seat corner order (reading direction /
-# rotation for side & top seats). # CALIBRATE (T2).
-RIVER_QUADS: dict[str, tuple[tuple[float, float], ...]] = {
-    # Calibrated on session6 seq 1458 (T2). Corner order [g00,g10,g11,g01] encodes
-    # each seat's reading direction (verified against wind-tile faces):
-    "self":   ((0.400, 0.498), (0.595, 0.497), (0.596, 0.696), (0.401, 0.698)),  # L→R, rows toward center
-    "across": ((0.584, 0.276), (0.416, 0.276), (0.418, 0.1445), (0.581, 0.1445)),  # 180° mirror: g00=bottom-right, R→L
-    "left":   ((0.402, 0.268), (0.395, 0.480), (0.300, 0.484), (0.292, 0.267)),  # 90° rot: g00=top-right, read down
-    "right":  ((0.598, 0.500), (0.600, 0.268), (0.722, 0.273), (0.720, 0.500)),  # 90° rot: g00=bottom-left, read up
-}
+# NOTE: the per-seat 河/副露 geometry (``RIVER_QUADS`` / ``MELD_STRIPS``, the
+# equal-subdivision RiverGrid model) was removed here — it is superseded by the
+# precise fullwarp annotator in ``majsoul_eye.annotate`` (data-calibrated
+# DISCARD_GRID / composition-aware melds). See docs/STATUS.md §1.13.

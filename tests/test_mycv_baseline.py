@@ -63,8 +63,8 @@ def test_tally_aggregation():
 
 
 def test_screen_to_seat_consistency():
-    # the engine's opponent-mask convention must match label/river._screen_to_seat
-    from majsoul_eye.label.river import _screen_to_seat
+    # the engine's opponent-mask convention must match annotate.seatgt._screen_to_seat
+    from majsoul_eye.annotate.seatgt import _screen_to_seat
     from majsoul_eye.baselines.mycv_engine import OPPONENT_MASKS
     hero = 1
     # raw mask k -> (hero+k)%4 ; k=1 right, k=2 across, k=3 left

@@ -7,7 +7,9 @@ match ``tiles.TILE_NAMES`` so no conversion is needed.
 Scope (skeleton): hand is labeled only on *settled* concealed states
 (len % 3 == 1, i.e. no separated drawn tile) — the drawn-tile (14-tile) layout
 puts the tsumo in a gapped slot and needs the unsorted draw tracked; TODO once
-session2 frames confirm the gap geometry. Hard zones (河/副露) come in P4.
+session2 frames confirm the gap geometry. The hard 河/副露 zones now live in the
+precise fullwarp pipeline (``majsoul_eye.annotate``); ``annotate.frame`` calls
+this module only for the hand + dora zones.
 """
 
 from __future__ import annotations
@@ -45,15 +47,12 @@ def _seat_screen_map(hero: int) -> dict[str, int]:
 
 # Zones whose normalized coords are calibrated and resolution-stable.
 #   'hand'  : 3D-table element — scales linearly, calibrated (session2). ✓
-#   'river' : 3D-table 河 — per-seat perspective grid, calibrated (session6 T2). ✓
-#   'meld' : 3D-table 副露 — per-seat strip, calibrated (session6 T5). OPT-IN:
-#     self/left are decent but right/across (3D-angled side seats + the rotated
-#     called-tile gap) give loose boxes (~88-93% on-tile) — too noisy for default.
-#     Refine via bootstrap (detector trained on hand+river relabels meld tiles).
 #   'dora'  : 2D HUD top-left panel — calibrated (T3) but RESOLUTION-DEPENDENT. opt-in.
 #   'score'/'meta': 2D HUD — does NOT scale with resolution; needs anchor-relative
 #     placement; also exact GT, so low priority. opt-in.
-DEFAULT_ZONES = frozenset({"hand", "river"})
+# The hard 河/副露 zones moved to the precise fullwarp pipeline
+# (``majsoul_eye.annotate``); this legacy annotator now supplies only hand + dora.
+DEFAULT_ZONES = frozenset({"hand"})
 
 
 def label_frame(frame: np.ndarray, state, region: BoardRegion,
@@ -72,22 +71,6 @@ def label_frame(frame: np.ndarray, state, region: BoardRegion,
     if "hand" in zones and state.hero_seat >= 0 and hand and "?" not in hand and len(hand) % 3 == 1:
         for i, tile in enumerate(hand):
             add("hand", tile, "tile", HAND.slot_box(i), NAME_TO_ID.get(tile))
-
-    # four discard rivers (per-seat perspective grid + GT order)
-    if "river" in zones and state.hero_seat >= 0:
-        from .river import RiverGrid, label_river   # lazy: avoids import cycle
-        from ..coords import RIVER_QUADS
-        for sp in ("self", "across", "left", "right"):
-            if sp in RIVER_QUADS:
-                rs, _ = label_river(region, state, sp, RiverGrid(*RIVER_QUADS[sp]))
-                out.extend(rs)
-
-    # four meld (副露) strips
-    if "meld" in zones and state.hero_seat >= 0:
-        from .meld import label_meld           # lazy: avoids import cycle
-        for sp in ("self", "across", "left", "right"):
-            ms, _ = label_meld(region, state, sp)
-            out.extend(ms)
 
     # dora indicators
     for i, d in enumerate(state.dora_markers[:MAX_DORA]):

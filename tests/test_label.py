@@ -84,14 +84,16 @@ def test_save_classification_crops():
         assert n == 15  # 13 hand + 2 dora tiles
 
 
-def test_default_zones_are_hand_and_river():
+def test_default_zone_is_hand_only():
+    # 河/副露 moved to the precise fullwarp pipeline (majsoul_eye.annotate); this
+    # legacy annotator now defaults to the hand zone only (dora/score/meta opt-in).
     from majsoul_eye.state.replay import RiverTile
     frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
     s = _state()
     s.rivers[1] = [RiverTile("1m"), RiverTile("2m")]   # someone has discards
     samples = label_frame(frame, s, locate_fullscreen(frame))
     zones = {x.zone for x in samples}
-    assert "hand" in zones and "river" in zones and zones <= {"hand", "river"}
+    assert zones == {"hand"}
 
 
 if __name__ == "__main__":

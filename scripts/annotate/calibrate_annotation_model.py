@@ -1,6 +1,6 @@
 """Measure & refit the fullwarp annotation geometry against many real frames.
 
-The generator in ``mahjong_relative_annotation_pipeline`` places boxes from
+The generator in ``majsoul_eye.annotate.pipeline`` places boxes from
 static constants (DISCARD_GRID / MELD_STRIP2) calibrated on a handful of AB
 case frames. This script measures those constants against MANY frames across
 MANY games using the skirt-free image features (see pipeline §9d):

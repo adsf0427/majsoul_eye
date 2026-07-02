@@ -40,15 +40,15 @@ discard list" *is* a free auto-annotator.
 ```text
 majsoul_eye/
   tiles.py          # unified 38-class taxonomy + MJAI interop (shared by all components)
-  coords.py         # normalized ROI model (hand/dora slots, per-seat river quads, meld strips)
+  coords.py         # normalized ROI model (hand/dora slots, coarse per-quadrant river zones)
   normalize.py      # board locators: fullscreen / letterbox / anchor(TODO) -> canonical 16:9 frame
   paths.py          # captures/ layout single source of truth (frames_dir_for / resolve_frame_path)
   capture/          # ⚠️ DEV-ONLY, Akagi-coupled recorder (schema / akagi_tap / screen / sync)
   state/replay.py   # pure replayer: MJAI events -> full 4-player BoardState + invariants
-  label/            # auto-annotator: autolabel (easy zones), river/meld (perspective), quality gate
+  label/            # legacy easy-zone auto-annotator: autolabel (hand+dora) + quality gate
+  annotate/         # PRECISE fullwarp annotator: pipeline (geometry engine) / frame / seatgt / cases
   recognize/classifier.py  # TileNet 38-class classifier (+ tile_classifier.pt, 6 games 97.6%)
   baselines/        # real-mycv engine adapter + bag-matching scorer (accuracy baseline)
-mahjong_relative_annotation_pipeline.py  # fullwarp geometry ENGINE for annotation v2 (imported as P)
 scripts/
   record_gt.py / autoplay_ai.py          # capture: manual F11 (Akagi) / Mortal-AI autoplay (--auto-next)
   crop_game.py / deletterbox_frames.py   # frame repair: crop to 16:9 / strip letterbox bars
@@ -57,10 +57,10 @@ scripts/
   annotate_ai_session.py                 # annotation v2: per-frame river/meld/hand boxes + QA
   build_case_annotations.py              # 11-case AB JSON (out/mahjong_AB_relative_data_with_reliability.json)
   calibrate_annotation_model.py          # measure / refit the fullwarp constants
-  spike_topdown.py                       # H_table spike; load-bearing GT plumbing (CASES/build_seq_state)
+  spike_topdown.py                       # ARCHIVED H_table viz spike (self-contained; superseded by annotate/)
   inspect_capture.py / overlay_labels.py / visualize_failures.py / mycv_baseline.py  # QA & debug
   migrate_captures_layout.py             # one-shot captures/ layout migrator (dry-run default)
-tests/              # 10 suites: tiles replay sync label river meld classifier mycv_baseline quality coords
+tests/              # 10 suites: tiles replay sync label classifier mycv_baseline quality coords annotate_pipeline annotate_frame
 docs/DESIGN.md      # design & rationale       docs/STATUS.md  # living status + roadmap (中文)
 ```
 
@@ -167,15 +167,17 @@ MahjongCopilot 的 `LiqiProto`/`GameState`（stub bot）→ MJAI → `captures/i
 ```
 
 关键 flag：`--locator fullscreen|letterbox`、`--drop-violations`（丢弃 invariant 违例帧）、
-`--min-bright` / `--min-face-frac`（P1 空毡门）。默认标注区 = hand+river（meld/dora 为 opt-in，
-见 `label/autolabel.DEFAULT_ZONES`）。
+`--min-bright` / `--min-face-frac`（P1 空毡门）。河/副露走精确 `annotate/` 管线；`label/autolabel`
+只剩易区，`DEFAULT_ZONES = {hand}`（dora/score/meta 为 opt-in）。
 
 ### 4) 精准标注 v2（河/副露/手牌逐帧框）
 
-几何引擎是根级 **`mahjong_relative_annotation_pipeline.py`**（fullwarp 单应 + 数据标定的
-牌面网格/副露组成模型 + 缝隙/边缘掩膜检测器，被下述脚本 `import ... as P`）。
-`scripts/annotate/spike_topdown.py` 名为 spike 实为承重墙——三个标注脚本都从它 import GT plumbing
-（`build_seq_state` / `load_frames` / `CASES`），勿删。
+几何引擎是包内 **`majsoul_eye/annotate/pipeline.py`**（fullwarp 单应 + 数据标定的
+牌面网格/副露组成模型 + 缝隙/边缘掩膜检测器，脚本 `from majsoul_eye.annotate import pipeline as P`；
+曾在根级 `mahjong_relative_annotation_pipeline.py`，已移除）。共享 GT plumbing 也已进包：
+`capture.gtframes`（`build_seq_state`/`load_frames`/`load_pair`）、`annotate.seatgt`（`_screen_to_seat`/`SEAT_POS`）、
+`annotate.cases`（`CASES`）。`scripts/annotate/spike_topdown.py` 现为**已归档的自足可视化 spike**（不再承重，
+从包 import；其 H_table 几何被 `annotate/` 取代）。
 
 **`annotate_ai_session.py`** — 主产品：全帧标注器。4 家河（标定网格 + GT + 逐格 fill 置信，
 最新弃牌未渲染 → `unrendered`）、4 家副露（组成感知 strip + 逐帧 snap）、英雄手牌

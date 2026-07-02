@@ -37,8 +37,8 @@ Legend: 🔴 dev-only / coupled to a sibling repo (`recognize/` never imports th
 | script | role | out |
 |---|---|---|
 | `annotate_ai_session.py` 🔁 | full-frame **precise annotator** (river/meld/hand/dora boxes + fills/flags), `--qa-classifier` agreement. Calls `majsoul_eye.annotate`. | `out/ai_session_annotations/` |
-| `build_case_annotations.py` 🔁 | corrected relative-seat annotations for the 11 AB validation cases (**imports `annotate/spike_topdown`**). | `out/mahjong_AB_relative_data_with_reliability.json` |
-| `spike_topdown.py` ⚙️🔁 | 1.9b top-down `H_table` rectify spike; **also the shared hub** (`CASES`/`load_pair`/`_screen_to_seat`/`SEAT_POS`). | overlays |
+| `build_case_annotations.py` 🔁 | corrected relative-seat annotations for the 11 AB validation cases (imports only the **`majsoul_eye` package**: `annotate.cases`/`annotate.seatgt`/`annotate.pipeline`/`capture.gtframes`). | `out/mahjong_AB_relative_data_with_reliability.json` |
+| `spike_topdown.py` ⚙️ | **ARCHIVED** 1.9b top-down `H_table` rectify spike; self-contained viz tool (superseded by `annotate/`). Imports its GT plumbing from the package; no longer load-bearing. | overlays |
 | `calibrate_annotation_model.py` 🔁 | measure & `--refit` the fullwarp geometry (`DISCARD_GRID`/`ROW_OFFSETS`/`MELD_STRIP2`) against many real frames — the tool that produced `annotate/pipeline.py`'s constants. | suggested constants |
 
 ## `train/` — labeled → training data → model
@@ -63,8 +63,9 @@ Legend: 🔴 dev-only / coupled to a sibling repo (`recognize/` never imports th
 
 The import/exec graph is intentionally shallow:
 
-- **Python import:** `annotate/build_case_annotations.py` → `annotate/spike_topdown.py` (only inter-script import).
+- **Python import:** NONE between scripts — every script imports only the **`majsoul_eye` package**.
+  (The former `build_case_annotations.py` → `spike_topdown.py` edge was removed: the shared hub
+  `CASES`/`load_pair`/`_screen_to_seat`/`SEAT_POS` moved into `annotate.cases`/`capture.gtframes`/`annotate.seatgt`.)
 - **Subprocess (by path):** `data/ingest_run.py` shells out to `data/convert_mjcopilot.py`,
   `train/build_dataset.py`, `train/train_classifier.py` — move those and update the paths in `ingest_run.py`.
-- Everything else imports only the **`majsoul_eye` package** (never another script). Shared annotation
-  logic lives in `majsoul_eye/annotate/` + `majsoul_eye/capture/gtframes.py`, not in these scripts.
+- Shared annotation logic lives in `majsoul_eye/annotate/` + `majsoul_eye/capture/gtframes.py`, not in these scripts.

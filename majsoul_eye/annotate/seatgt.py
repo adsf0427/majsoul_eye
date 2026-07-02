@@ -3,16 +3,26 @@
 Map a screen position (self/right/across/left) to the absolute seat and pull that
 seat's visible river / riichi-sideways index / melds from a replayed BoardState.
 
-Moved verbatim out of ``scripts/annotate/calibrate_annotation_model.py`` so the package
-(``annotate.frame``) and both scripts share one definition instead of the script
-importing from another script.
+``seat_gt`` was moved verbatim out of ``scripts/annotate/calibrate_annotation_model.py``;
+``_screen_to_seat`` / ``SEAT_POS`` were relocated here from the now-removed
+``majsoul_eye.label.river`` so the package owns the seat mapping and neither the
+package nor the scripts import from a deprecated module.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 from majsoul_eye.annotate import pipeline as P
-from majsoul_eye.label.river import _screen_to_seat  # relocated in the deprecation PR
 
 SEAT_POS = ["self", "right", "across", "left"]
+
+
+def _screen_to_seat(hero: int, seat_pos: str) -> Optional[int]:
+    """Absolute seat of a screen position, counter-clockwise from the hero."""
+    if hero < 0:
+        return None
+    return {"self": hero, "right": (hero + 1) % 4,
+            "across": (hero + 2) % 4, "left": (hero + 3) % 4}.get(seat_pos)
 
 
 def seat_gt(state, pos: int):

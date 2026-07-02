@@ -2,10 +2,10 @@
 
 Ties the two halves of the annotation thesis together for the AB case set:
   * WHAT  = Akagi/MahjongCopilot ground truth (river tile ids, riichi index, meld
-            composition), read from the captures via scripts.spike_topdown.
-  * WHERE = the fixed-camera fullwarp geometry calibrated in
-            ``mahjong_relative_annotation_pipeline`` (generate_discard_slots /
-            generate_meld_boxes).
+            composition), replayed from the captures via ``majsoul_eye.capture.gtframes``
+            (case seqs in ``majsoul_eye.annotate.cases``, seat mapping in ``annotate.seatgt``).
+  * WHERE = the fixed-camera fullwarp geometry in ``majsoul_eye.annotate.pipeline``
+            (generate_discard_slots / generate_meld_boxes_v2).
 
 Output = out/mahjong_AB_relative_data_with_reliability.json (all 11 cases,
 GT-labeled discards + reliable-but-approximate melds), plus optional overlay PNGs.
@@ -28,23 +28,26 @@ import os
 import cv2
 import numpy as np
 
-import mahjong_relative_annotation_pipeline as P
-from scripts.annotate.spike_topdown import CASES, load_pair, _screen_to_seat, SEAT_POS
+from majsoul_eye.annotate import pipeline as P
+from majsoul_eye.annotate.cases import CASES
+from majsoul_eye.annotate.seatgt import SEAT_POS, _screen_to_seat
+from majsoul_eye.capture.gtframes import build_seq_state
 
 FRAMES_DIR = "fails/topdown_demo/case_frames"
 DEFAULT_JSON = os.path.join("out", "mahjong_AB_relative_data_with_reliability.json")
 
 # cache the per-capture replay so 11 cases don't each re-parse the jsonl
-import scripts.annotate.spike_topdown as _spike
 _SS: dict = {}
-_orig_bss = _spike.build_seq_state
-_spike.build_seq_state = lambda cap: _SS.setdefault(cap, _orig_bss(cap))
+
+
+def _seq_state(capture: str) -> dict:
+    return _SS.setdefault(capture, build_seq_state(capture))
 
 
 def gt_for(case: str) -> dict:
     """Ground truth per seat (relative position) for a case: river tile list + melds."""
     cfg = CASES[case]
-    _, state, _ = load_pair(cfg["capture"], cfg["seq"], None)
+    state = _seq_state(cfg["capture"])[cfg["seq"]]
     seats = []
     for pos, name in enumerate(SEAT_POS):
         seat = _screen_to_seat(state.hero_seat, name)
