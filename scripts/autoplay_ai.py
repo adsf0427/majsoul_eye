@@ -41,9 +41,11 @@ from __future__ import annotations
 
 import argparse
 import base64
+import io
 import json
 import os
 import queue
+import random
 import sys
 import time
 from collections import deque
@@ -69,6 +71,12 @@ def main() -> None:
     ap.add_argument("--live", action="store_true", help="Actually click. Default = dry-run (log only).")
     ap.add_argument("--randomize", type=int, default=2, help="ai_randomize_choice 0-5 (discard diversity).")
     ap.add_argument("--autojoin", action="store_true", help="Auto-join ranked + rejoin (lobby template; may need recalibration).")
+    ap.add_argument("--auto-next", action="store_true",
+                    help="After a complete game, guarded-click the result confirms and the 'one more game' button.")
+    ap.add_argument("--auto-next-confirms", type=int, default=2,
+                    help="How many guarded yellow confirm clicks to try before clicking 'one more game'.")
+    ap.add_argument("--auto-next-timeout", type=float, default=90.0,
+                    help="Seconds to wait for the guarded auto-next UI flow before falling back to --autojoin, if enabled.")
     ap.add_argument("--quiet", type=float, default=0.40, help="Screenshot once the board is event-quiet this long.")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
@@ -91,11 +99,19 @@ def main() -> None:
     from common.utils import GameMode  # noqa: F401
     from game.browser import GameBrowser
     from game.game_state import GameState
-    from game.automation import Automation
+    from game.automation import (
+        ActionStepClick,
+        ActionStepDelay,
+        ActionStepMove,
+        Automation,
+        AutomationTask,
+        Positions,
+    )
     from bot.local.bot_local import BotMortalLocal
 
     if args.out is None:
-        args.out = os.path.join("captures", "ai_session")
+        # raw/ai_session/ per the captures layout (see majsoul_eye/paths.py).
+        args.out = os.path.join("captures", "raw", "ai_session")
     parent = os.path.abspath(os.path.join(_ORIG_CWD, args.out))    # session parent; each run -> run_<N>/
     os.makedirs(parent, exist_ok=True)
     _runs = [d[4:] for d in os.listdir(parent) if d.startswith("run_") and d[4:].isdigit()]
@@ -125,7 +141,8 @@ def main() -> None:
     st = Settings(settings_path)
 
     print(f"[{'LIVE' if args.live else 'DRY-RUN'}] server={args.server} model={args.model} "
-          f"randomize={st.ai_randomize_choice} autojoin={args.autojoin}  out={out_dir}")
+          f"randomize={st.ai_randomize_choice} autojoin={args.autojoin} "
+          f"auto_next={args.auto_next}  out={out_dir}")
     print("Loading Mortal …", flush=True)
     model_path = os.path.join(mjc, "models", args.model)
     if not os.path.exists(model_path):
@@ -188,6 +205,122 @@ def main() -> None:
         except Exception:
             return None
 
+    # Game-end "one more game" flow.  Coordinates are in MahjongCopilot's 16x9
+    # logical space; guard boxes are sampled from the current screenshot before
+    # each click so late animations / missing buttons do not receive blind clicks.
+    AUTO_NEXT_BUTTON = (12.25, 8.45)
+    BUTTON_GUARDS = {
+        "confirm": {
+            "label": "yellow confirm",
+            "box": (13.30, 7.88, 15.85, 8.85),
+            "min_frac": 0.035,
+            "pred": lambda r, g, b: r > 170 and g > 115 and b < 150 and r > b + 45,
+        },
+        "next": {
+            "label": "blue one-more-game",
+            "box": (11.00, 7.88, 13.60, 8.85),
+            "min_frac": 0.025,
+            "pred": lambda r, g, b: b > 105 and g > 65 and r < 165 and b > r + 20,
+        },
+    }
+
+    def button_guard(kind: str) -> tuple[bool, float]:
+        spec = BUTTON_GUARDS[kind]
+        png = screenshot_png()
+        if not png:
+            return False, 0.0
+        try:
+            from PIL import Image
+            img = Image.open(io.BytesIO(png)).convert("RGB")
+        except Exception as e:
+            print(f"  auto-next guard image error: {e}", flush=True)
+            return False, 0.0
+
+        w, h = img.size
+        x0, y0, x1, y1 = spec["box"]
+        px0, py0 = max(0, round(x0 / 16 * w)), max(0, round(y0 / 9 * h))
+        px1, py1 = min(w, round(x1 / 16 * w)), min(h, round(y1 / 9 * h))
+        if px1 <= px0 or py1 <= py0:
+            return False, 0.0
+
+        step = max(1, min(px1 - px0, py1 - py0) // 80)
+        total = hits = 0
+        pred = spec["pred"]
+        pix = img.load()
+        for y in range(py0, py1, step):
+            for x in range(px0, px1, step):
+                r, g, b = pix[x, y]
+                total += 1
+                if pred(r, g, b):
+                    hits += 1
+        frac = hits / total if total else 0.0
+        return frac >= spec["min_frac"], frac
+
+    def guarded_click_steps(x16: float, y9: float,
+                            jitter_x: float = 0.18, jitter_y: float = 0.10):
+        rx = (x16 + random.uniform(-jitter_x, jitter_x)) * automation.scaler
+        ry = (y9 + random.uniform(-jitter_y, jitter_y)) * automation.scaler
+        yield ActionStepMove(rx, ry, random.randint(2, 5))
+        yield ActionStepDelay(random.uniform(0.12, 0.25))
+        yield ActionStepClick(random.randint(60, 100))
+
+    auto_next_state = {"active": False, "started": 0.0, "clicked_next": False, "failed": False}
+
+    def auto_next_iter():
+        deadline = time.time() + args.auto_next_timeout
+        confirm_clicks = 0
+
+        yield ActionStepDelay(random.uniform(2.0, 4.0))
+        while confirm_clicks < max(0, args.auto_next_confirms) and time.time() < deadline:
+            ok, frac = button_guard("confirm")
+            if ok:
+                print(f"  auto-next guard OK confirm frac={frac:.3f}", flush=True)
+                x, y = Positions.END_KYOKU_CONFIRM
+                yield from guarded_click_steps(x, y, 0.20, 0.12)
+                confirm_clicks += 1
+                yield ActionStepDelay(random.uniform(1.0, 2.0))
+                continue
+
+            next_ok, next_frac = button_guard("next")
+            if next_ok:
+                print(f"  auto-next sees next button before confirm #{confirm_clicks + 1} "
+                      f"(next frac={next_frac:.3f})", flush=True)
+                break
+
+            print(f"  auto-next waiting confirm frac={frac:.3f}", flush=True)
+            yield ActionStepDelay(0.5)
+
+        while time.time() < deadline:
+            ok, frac = button_guard("next")
+            if ok:
+                print(f"  auto-next guard OK next frac={frac:.3f}", flush=True)
+                yield from guarded_click_steps(*AUTO_NEXT_BUTTON, 0.18, 0.10)
+                auto_next_state["clicked_next"] = True
+                # Keep the flow active while matchmaking; the next authGame clears it.
+                return
+
+            ok_confirm, confirm_frac = button_guard("confirm")
+            if ok_confirm:
+                print(f"  auto-next extra confirm frac={confirm_frac:.3f}", flush=True)
+                x, y = Positions.END_KYOKU_CONFIRM
+                yield from guarded_click_steps(x, y, 0.20, 0.12)
+                yield ActionStepDelay(random.uniform(1.0, 2.0))
+                continue
+
+            print(f"  auto-next waiting next frac={frac:.3f}", flush=True)
+            yield ActionStepDelay(0.5)
+
+        auto_next_state["failed"] = True
+        auto_next_state["active"] = False
+        print("  auto-next guard timed out before clicking next", flush=True)
+
+    def start_auto_next() -> None:
+        auto_next_state.update(active=True, started=time.time(), clicked_next=False, failed=False)
+        automation.stop_previous()
+        task = AutomationTask(browser, "Auto_NextGame", "Confirming game end and requesting another game")
+        automation._task = task
+        task.start_action_steps(auto_next_iter(), None)
+
     game_state = None
     game_idx = 0                # which game in this run (-> out_dir/game<idx>/)
     game_raw_fh = None          # current game's frames.jsonl handle
@@ -224,6 +357,7 @@ def main() -> None:
 
                 # new game: authGame REQ -> new game<M>/ dir + fresh GameState (sets seat + re-inits bot)
                 if (mtype, method) == (liqi.MsgType.REQ, liqi.LiqiMethod.authGame):
+                    auto_next_state.update(active=False, started=0.0, clicked_next=False, failed=False)
                     if game_raw_fh is not None:
                         game_raw_fh.close()
                     game_idx += 1
@@ -283,14 +417,21 @@ def main() -> None:
 
                 if game_state.is_game_ended:
                     print(f"  [g{game_idx} seq {seq}] GAME ENDED", flush=True)
-                    automation.on_end_game()
+                    if args.live and args.auto_next:
+                        start_auto_next()
+                    else:
+                        automation.on_end_game()
                     game_state = None
                     if game_raw_fh is not None:
                         game_raw_fh.close()
                         game_raw_fh = None
 
             maybe_screenshot()
-            if args.live and args.autojoin and game_state is None:
+            if auto_next_state["failed"] and args.live and args.autojoin and game_state is None:
+                print("  auto-next failed; falling back to lobby autojoin", flush=True)
+                auto_next_state["failed"] = False
+                automation.on_end_game()
+            if args.live and args.autojoin and game_state is None and not auto_next_state["active"]:
                 automation.decide_lobby_action()           # auto-join next game (lobby template)
             time.sleep(0.005)
     except KeyboardInterrupt:
