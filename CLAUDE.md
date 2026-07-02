@@ -43,21 +43,28 @@ PYTHONPATH=. $PY tests/test_classifier.py
 
 ### Data pipeline (capture → dataset → model)
 
+`captures/` uses a role-based layout (single source of truth: `majsoul_eye/paths.py`):
+`raw/ai_session/` (MahjongCopilot) + `raw/manual/` (record_gt) → `intermediate/gt/` (converted
+GT) + `intermediate/derived/` (cropped / de-letterboxed) → `legacy/` (archived dupes). Frame
+indexes (`frames.jsonl`) store RELATIVE paths; always resolve via `paths.resolve_frame_path`.
+
 ```bash
 # 1. Record GT + time-synced screenshots (runs Akagi; akagi env; autoplay OFF, passive only).
-#    WEB client must be FULLSCREEN (F11) so the 16:9 board fills the grab. Status → <out>.jsonl.log
-conda run -n akagi python scripts/record_gt.py --screenshots --out captures/sessionN.jsonl \
-       --quiet 0.30 --settle-cap 2.0
+#    WEB client must be FULLSCREEN (F11). Defaults to captures/raw/manual/. Status → <out>.jsonl.log
+conda run -n akagi python scripts/record_gt.py --screenshots --quiet 0.30 --settle-cap 2.0
 # 2. Inspect sync quality (offline, no client):
-PYTHONPATH=. $PY scripts/inspect_capture.py captures/sessionN.jsonl captures/sessionN/ --step <N>
+PYTHONPATH=. $PY scripts/inspect_capture.py captures/raw/manual/sessionN.jsonl captures/raw/manual/sessionN/ --step <N>
 # 3. (only if not captured fullscreen) crop the 16:9 canvas out of a letterboxed session:
-$PY scripts/crop_game.py captures/sessionN captures/sessionN_16x9 --size 3840x2160
+$PY scripts/crop_game.py captures/raw/manual/sessionN captures/intermediate/derived/sessionN_16x9 --size 3840x2160
 # 4. Build auto-labeled dataset (replay → autolabel → crops/ + yolo/):
-PYTHONPATH=. $PY scripts/build_dataset.py captures/sessionN.jsonl captures/sessionN/ \
+PYTHONPATH=. $PY scripts/build_dataset.py captures/raw/manual/sessionN.jsonl captures/raw/manual/sessionN/ \
        --out datasets/sessionN --locator fullscreen --drop-violations
 # 5. Train the 38-class tile classifier (KYOKU-level split — never split by frame):
-PYTHONPATH=. $PY scripts/train_classifier.py --crops datasets/sessionN/crops \
-       --capture captures/sessionN.jsonl --val-kyoku E3.0,S2.0 --epochs 20
+PYTHONPATH=. $PY scripts/train_classifier.py \
+       --data sN=datasets/sessionN/crops:captures/raw/manual/sessionN.jsonl --val sN:E3.0,S2.0 --epochs 20
+# AI (MahjongCopilot) path: scripts/ingest_run.py captures/raw/ai_session/run_N discovers games →
+#   convert_mjcopilot (→ captures/intermediate/gt/ai_run_*.jsonl) → build_dataset. Then annotate:
+#   scripts/annotate_ai_session.py (defaults to all captures/intermediate/gt/*.jsonl).
 # overlay_labels.py draws auto-labels onto a frame for visual coordinate calibration.
 ```
 
@@ -107,6 +114,12 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   HUD zones are opt-in and are exact GT anyway. Coord seeds are marked `# CALIBRATE`.
 - **Sync/dataset key is the global record `seq`, NOT `last_op_step`** — `last_op_step` resets
   every kyoku, so frame filenames would collide and later rounds overwrite earlier ones.
+- **`captures/` layout is defined once in `majsoul_eye/paths.py`** — `raw/{ai_session,manual}`,
+  `intermediate/{gt,derived}`, `legacy/`. Don't hardcode `captures/...` paths or re-derive the
+  frames-dir stem rule; use `paths.frames_dir_for` / `paths.converted_gt_captures()` and resolve
+  every `frames.jsonl` `file` (RELATIVE now) through `paths.resolve_frame_path` (accepts legacy
+  absolute too). To reorganize again, `scripts/migrate_captures_layout.py` moves dirs + rewrites
+  indexes idempotently (dry-run default).
 - **Train/val split by kyoku, never by frame** — the same physical discard appears in many frames
   of one kyoku; a frame split leaks it and inflates accuracy.
 - **Recording must never break the bridge or the TUI.** `parse_liqi` runs under Akagi's lock on

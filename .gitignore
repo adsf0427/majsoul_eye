@@ -47,3 +47,9 @@ mlruns/
 *.onnx
 *.engine
 *.tflite
+
+out/
+scratchpad/
+
+# Reference repo clones (own .git; never track)
+_external/

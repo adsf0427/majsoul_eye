@@ -1,7 +1,7 @@
 # majsoul_eye — 项目状态与路线图
 
 > 活文档：**已完成的部分 + 未来计划**。设计与论证见 [DESIGN.md](DESIGN.md)。
-> 最后更新对应进度：完成 P0–T6（自动标注全链路 + 首版牌分类器，2 局数据）。
+> 最后更新对应进度：6 局分类器 97.6%（§1.8）；**副露单桌面单应 H_table 几何 spike 已可视化验证**（§1.9，2026-06-29，未并管线）。
 
 ## TL;DR
 
@@ -40,7 +40,7 @@
 | 板面定位 | `majsoul_eye/normalize.py` | `locate_fullscreen`/`locate_letterbox`/`AnchorLocator`(TODO) | 全屏 16:9 ✓ |
 | 易区 | `majsoul_eye/label/autolabel.py` | 确定性 ROI 裁剪 + GT；手牌/dora/分数/文本 | 手牌 99.8% on-tile ✓ |
 | 河(难区) | `majsoul_eye/label/river.py` | **每家透视网格(单应) + GT 顺序赋类** | **98.5–99.5% on-tile** ✓ |
-| 副露 | `majsoul_eye/label/meld.py` | 每家 1 行 strip + GT 顺序；ankan 2 背面 | self/left ~95–98%，**right/across 3D 侧家偏松(88–93%) → opt-in** |
+| 副露 | `majsoul_eye/label/meld.py` | 每家 1 行 strip + GT 顺序；ankan 2 背面 | self/left ~95–98%，**right/across 3D 侧家偏松(88–93%) → opt-in**；几何重写 spike 见 §1.9（未并） |
 | 默认区 | `autolabel.DEFAULT_ZONES` | = `{hand, river}`（meld/dora/score 为 opt-in） | — |
 
 > **校准方式**：4 家河 quad + dora + 4 家副露 strip 均由**并行 subagent**在满盘帧上"看图返回坐标"标定（不改代码、可并发）；代码任务串行。
@@ -116,6 +116,115 @@ mycv 基线启发的"借轮廓孤立"实验，**经混淆矩阵诊断被否定**
   ② `scripts/visualize_failures.py --crops ... [--val-capture --val-kyoku] --out DIR` —— 按混淆对(gt→pred)出错例蒙太奇 + summary.txt。
   实测 session6 held-out（97.6% 模型）主错：**红五跨花色**(5mr/5pr→5sr)、2s→3s、个别难牌；多数"错误"是同一物理牌跨~N 近重复帧。
 
+### 1.9 副露几何 spike：单桌面单应 H_table + 三种杠（2026-06-29，**纯可视化验证，未并管线**）
+针对 §3 痛点（副露 **right/across 3D 侧家 strip 偏松 88–93%，opt-in**）做的几何重写 spike，对应路线图"副露精修"。
+**思路**：一个**单桌面平面单应 `H_table`**（在河上拟合，存 `scratchpad/H_table.npy`）统一覆盖所有**共面**元素
+（4 家 副露/河/立直/杠），取代每家独立 strip。**GT 驱动赋类**（非检测——副露密排 + 背面牌 defeat 亮度检测）。
+新 `captures/ai_session`（MahjongCopilot 原始线流 + 1080p PNG，13 局/多 run）解锁了 **session6 没有的 大明杠/加杠** 验证；
+`H_1080 = scale(0.5)·H_4k`（两者皆全屏 16:9 同板，box-y 比实测 0.497 → 精确 2×）。
+
+**每家列布局模型**（本 session 定，经 labeled-slot + **原始牌面 ground-truth** 核对）：
+
+| 座 | order | anchor | corner | ly | lift(dx,dy)px |
+|---|---|---|---|---|---|
+| self | reverse | end | -8.10 | 8.67 | (0,-18\*) |
+| right | reverse | end | -7.50 | 9.01 | (0,-14) |
+| across | chrono | end | -8.76 | 7.65 | (0,-11) |
+| left | reverse | end | -7.20 | 9.05 | (0,-14) |
+
+> 统一规律：**self/right/left = reverse + anchor=end**（锚定**首副露**于固定近角 → 单/多副露帧用同一 corner 对齐）；across 唯一 chrono。值绑定当前 river-fit H_table。
+
+**三种杠**（与玩家权威写法核对一致）：
+- **大明杠**：4 落地牌，1 横置；位置编码来源（上家=横最左 / 对家=横中间 / 下家=横最右）——共面，被列模型覆盖。
+- **暗杠**：`[背][正][正][背]`（两端背面，中间正面）——共面。
+- **加杠**：3 落地槽（= 原碰）+ 1 张沿**桌面法向**堆叠的加牌 —— **唯一离面元素**，H_table 单独放不了（需投影桌面法向；当前仅 self 标定堆叠方向）。
+
+**z 视差 lift**：H_table 映**桌面**(z=0)，牌面在桌面上方一个牌厚 → 落地中心投影偏低 ~14px。按座加常量屏幕 lift 校正；
+量级随牌像素大小（相机距离）：across(远)最小、侧家中、self(近)最大——与视差预测一致。
+
+**本 session 两个根因 bug（证据驱动，非眼测猜测）**：
+1. 侧家原 `order=chrono` → 必须 **reverse**（列从错误端构建；labeled-slot + 原始牌面核对发现 right 把 daiminkan 中 放到了底部，实际在顶部）。
+2. 侧家 `anchor=start` 把**末副露**锚到固定角（位置随副露数漂移）→ 单副露帧落到空毡；必须 **anchor=end**（锚首副露，使单/多副露帧同 corner 对齐）。
+
+**产物 / 状态**：spike 代码全在 `scratchpad/`（`meld_ai.py` 主验证、`H_table.npy`、各 sweep/diag 脚本）；验证图在
+`fails/s6val_boxes/`（`ROOTCAUSE_raw_tiles_*`/`ROOTCAUSE_diag_slots_*_FLIPPED`/`FINAL_*`）。已验证：右(大明杠+碰、单加杠、吃+大明杠)、
+左(碰+碰+加杠)、对家(暗杠、大明杠)，box 居中贴面。**未并入** `meld.py`/`coords.py`（按要求先看可视化效果）。
+**残留**（均亚牌级，可选）：① left 长列 pitch 微漂（末牌略欠，0.82→~0.80 可收）；② self lift 未在 1080p 验证；③ kakan 堆叠 lift 方向仅 self 标定。
+
+### 1.9b 全图俯视 spike：单 H_table rectify 整桌 + 4 重对称 + 加杠共面（2026-06-30，可视化，未并）
+§1.9 的 H_table **只在河上拟合** → 桌边/远家漂；且把加杠当**离面 z-lift** → box 浮到空毡（见 `fails/bbox_demo/C_kakan_single_zoom`、`D_kakan_multi_zoom`）。本 spike 改做用户提的"把整张图 warp 成俯视"路线：
+- **脚本** `scripts/spike_topdown.py`（committed，不像丢失的 scratchpad；`CASES` 字典固化验证 seq；`--list-seqs/--grid/--warp/--all-cases/--check-symmetry`）。输出 `fails/topdown_demo/`（gitignored，可再生）。验证数据：`captures/ai_g1`(大明杠/暗杠/吃/碰)、`ai_g3`(**加杠**) 1080p。
+- **H_table**：从**蓝毡方框 4 角**(`PLAY_CORNERS_NORM`)拟合，覆盖整桌（修 §1.9 只拟合河的根因）；归一化存储，相机固定→常量、跨分辨率通用（缩放被 `BoardRegion` 吸收）。
+- **河**：4 家全部由**可信的 self quad** `RIVER_QUADS["self"]` →rect→旋转 90°·k→映回 派生。cell 贴面、**远家漂移消失**（远胜 4 家独立 quad）。`ROT_SIGN=-1`（+1 会静默左右家互换——经副露暴露）。
+- **加杠 = 共面**（证实用户判断，否定 §1.9 z-lift）：加牌建模为**面内额外 cell**，warp 实证 8m 加杠是桌面上的平块、不浮。
+- **副露**：self strip + 旋转 + 径向 `MELD_OUTWARD` 外移，对**直列副露(大明杠/吃)**对齐尚可。**残留→并入前修**：① 手量毡角的 H 轻微不对称 → 左侧远端(长列/暗杠)偏 → 用 `findHomography`(毡角+中央场风牌 anchor)重拟收紧；② 1 行等距 cell 未建模**横置被鸣牌**(更宽/侧置)与**加杠并排牌**(2D 偏移)；③ 直接在 rect 空间标定 canonical 副露 strip 取代外移 hack。
+- **结论**：俯视 rectify 是正确方向，**河+加杠已解决**；副露需上述 rect 标定后再并入 `coords/river/meld`。
+- **2026-06-30 续：方正性修复 + AutoMajsoul 调研**。初版 warp **歪**：根因是手量 4 角**左右不对称**(等价一个旋转)。采集相机无 roll/yaw(仅 pitch)→ 牌桌在图像里**左右镜像对称**：用 Hough 可靠拿到的**左 play 边**绕竖轴 `CX` 镜像构造四角 → 对称梯形 = 真·投影正方形 → warp 不再歪(`PLAY_CORNERS_NORM` 现由 `_TL/_BL/CX` 派生)。注意**牌桌物理四角在画面外**(需外推)，我们标定的是可见的**内圈 play 边界**。AutoMajsoul(`_external/AutoMajsoul`)靠 **HSV 色块**分割毡→取四角→warp，但要求毡是**内嵌形+四周暗**(其 Android/拉远视角)；我们**全屏 16:9 毡铺满整帧**(跑其真实 `detect()` 返回≈整帧、掩膜覆盖 60%+)，Hough/边缘也分不开上下 play 边(被牌行+手牌行干扰)→ 故用**固定相机标定**取代 per-frame 自动检测;`scripts/spike_topdown.py --detect` 保留了 AutoMajsoul 端口供内嵌视角用。
+
+### 1.9c AB case_frame 标注器：GT 驱动生成（2026-07-01，已交付；独立于 spike 的第二条线）
+与 §1.9/§1.9b 的 `H_table`（majsoul_eye 包内）**不同管线**：根级独立脚本 `mahjong_relative_annotation_pipeline.py`（自带单应 `SRC_TABLE_CORNERS`→1280 方→加 pad 的 fullwarp，与 spike 的 `H_table` 是两套坐标）。用户要求"参考它继续修正 `fails/topdown_demo/case_frames` 的标注"。原脚本只会 **resize 已有多边形**；本次给它加了 **GT 驱动的生成模型**：
+- `generate_discard_slots` / `generate_meld_boxes` + 常量 `DISCARD_GRID`（每家 fullwarp 河格，origin+dcol+drow，**实测为精确线性**，0px 残差，4 家互为 90° 旋转）、`DISCARD_READ`（每家读序 = 4 重旋转；right/across 为 **R→L**，用 GT pai 对齐 tile-id 实证）、riichi 横置（`RIICHI_FOOT` 旋转足迹 + 同行后续牌右移 extra）、第 4 行溢出（>18 弃牌，罕见近流局；楔在顶行左侧）、`MELD_STRIP`（**角锚**：self 右下往左 / right 右上往下 / across 左上往右 / left 左下往上；加杠 = 3 直列 + 1 垂直 stack；暗杠 = back/face/face/back）。
+- 驱动 `scripts/build_case_annotations.py`：经 spike `CASES`/replay 读 GT → 调管线生成 → 写 `out/mahjong_AB_relative_data_with_reliability.json`（**全 11 case**，弃牌带 GT 标签、副露 reliable）+ overlay `fails/topdown_demo/annot/`。
+- **河：稳**（格精确、ai_g1/ai_g3 通吃、深河 ≤19、riichi 4 向、溢出）。**副露：够用**——角锚 strip 有 **~半张牌的逐局容差**（Majsoul 副露随手牌位置浮动；ai_g3 外围额外漂 ~1 张）。
+- 11 并行 agent 复核确认；其"漏框"报告经 GT-pai 复核为**误报**（白板/暗牌上的细线框难辨）。真实 bug（第 4 行幽灵框）已修。
+
+### 1.10 河/副露精准标注 v2 + ai_session 全帧标注器（2026-07-02）
+解决 §1.9c 遗留的"副露需逐 case 标注、河偏移"，交付 `captures/ai_session` 全帧标注。
+
+**理论澄清（用户问题：warp 能否得到真俯视/平行投影）**：单应只能对**一个平面**精确消除透视
+（该平面→度量正射）；对离面点（牌厚、立牌）2D 变换原则上无法消除视差（需 3D/换视点），warp 后
+仍是原相机光线的重参数化。但所有**平放牌的上表面共面**（z=牌厚平面），把标定对准**牌面平面**即可
+让全部河/副露/dora 牌面零视差、全桌等大。牌厚只剩下"白色侧裙"（朝相机方向的可见厚度面），
+它不进入牌面框——这就是本次校准的关键：**所有测量特征取"背裙边"的一侧**。
+
+**实测事实（16 局 AI 数据、每座 ~5k 缝隙对 + ~800 边缘对，rmse 0.8–1.6px）**：
+- 牌面在 fullwarp 里 ≈ **70.5×92.5 px、四家一致**；河**列**间距 72.5–74.9。
+- **河的行间距非线性且四家不同**（`DISCARD_ROW_OFFSETS` 逐行标定，不能用等距 drow）：
+  self r1→r2 = **96.4**、across r1→r2 = **104.9**、r2→r3 各家 ≈ 97–98；across 行 1（最靠中）
+  比旧拟合再低 6.5px。教训：一次线性拟合的行顶检测曾被"裙边→缝隙"假特征污染出 108–110 的假行距，
+  被 11-agent 视觉复核抓出后改用**逐行 边缘/缝隙链**测量收敛到 ±1px。
+- 左右河原点纵向偏 ~10px = 旧标定用了含裙边的 blob 中心（视差方向 = 朝 nadir，+y 加横向 sign(1536−x)）。
+- **横置立直牌 = 行内居中**（先前"顶对齐 Δ−11.5"实为行位置偏差的混淆；修正行后重测 ±2.5px ≈ 0）。
+- **副露串随局浮动可达 ~½ 张牌**——along（沿串）与 self 串的 cross（纵向，屏幕底部锚定随手牌 UI）
+  都会漂 → 静态角点只是先验，**必须逐帧 snap**。副露间**无间隙**（gap=0）。局内 σ<1px。
+- 大明杠/碰的**横置被鸣牌**（上家=首/对家=中/下家=末、chi=首）与加杠并排、暗杠 back/face/face/back
+  的**组成建模**是旧"半张牌容差"的主因——cell 宽度随直立(70.5)/横置(92.5)变化，串长随组成变化。
+
+**实现**：
+- `replay.py`：`Meld.called_pai/added_pai`（排序 tiles 丢失的被鸣/加杠牌身份，横置渲染必需）。
+- 管线 §9b/9c/9d（`mahjong_relative_annotation_pipeline.py`）：重标定 `DISCARD_GRID/FOOT/RIICHI_FOOT`
+  + `DISCARD_ROW_OFFSETS`（逐行）；组成感知 `generate_meld_boxes_v2`（`meld_display_cells`）；
+  `river_sideways_index`（立直牌被鸣→下一张横置）；掩膜检测器 `tile_face_mask/tile_back_mask`、
+  `find_crevice`（缝隙暗谷）、`find_edge`（**非对称平台差分**，前窗 12px/后窗 5px——宽缝隙(≥5px，
+  周边拉伸处)塞不进前窗，冒充不了毡→面真边缘）、`snap_meld_strip`（**多候选评分**：干净端边缘 +
+  blob 覆盖扫描 + 零偏移 各自过缝隙/边精调，以特征对比度总和选优——均匀网格里缝隙是周期性的，
+  单一粗定位会静默锁错半格；cross 另有 ±60 宽窗粗锁吸收 self 串纵向漂移）。
+- `scripts/calibrate_annotation_model.py`：跨局测量→稳健线性拟合→建议常量（可复跑再校准）。
+- `scripts/annotate_ai_session.py`：**全帧标注器**——河（网格+GT+逐格 fill 置信、最新弃牌未渲染→
+  `unrendered`）、副露（v2+逐帧 snap+fill）、英雄手牌（HandModel+白度门，发牌动画→`hand:unrendered`）；
+  输出 per-game JSONL + overlay 抽样 + `summary.json`（含 97.6% 分类器 crop 一致率 QA）。
+- `scripts/build_case_annotations.py`：11 case 用 v2+snap 重建（`fails/topdown_demo/annot/` +
+  `out/mahjong_AB_relative_data_with_reliability.json`）。
+- 数据：`captures/ai_session` run_1–8 全部 16 局转换为 `captures/ai_run_*.jsonl`（~8.9k 帧）。
+
+**QA（分类器一致率 = 端到端框质量代理；分类器自身天花板 97.6%）**：
+ai_g3 河 **100%** / 副露 **100%** / 手牌 **100%**；ai_g1 河 97.7% / 副露 96.6% / 手牌 100%
+（残余=游戏光标手遮挡 + 3s→4s 单牌分类混淆，非几何）。河框 99.8–99.9% 通过 fill 门。
+
+### 1.11 captures/ 目录重构：角色分层 + 相对路径索引（2026-07-02）
+`captures/` 顶层曾散落 26 个裸 `.jsonl` + ~24 个帧目录，无原始/中间区分。重构为角色分层：
+- **布局**：`raw/{ai_session,manual}`（原始，不可再生）、`intermediate/{gt,derived}`（可再生：
+  转换后 GT + 索引 / 裁剪·去黑边像素）、`legacy/`（归档 `ai_g*/ai_r1` 逐字节重复）。
+- **单一真源** `majsoul_eye/paths.py`：布局常量 + `frames_dir_for`（`X.jsonl↔X/` stem 规则）+
+  `resolve_frame_path`（解析 `frames.jsonl` 的 `file`，向后兼容旧绝对路径）+ `converted_gt_captures()`。
+  ~10 处散落的 `"captures/…"` 字面量/glob 收敛到此。
+- **根治绝对路径脆弱性**：所有 `frames.jsonl` 的 `file` 由绝对路径改为**相对**（自包含目录存
+  `frames/NNN.png`；gt/ 空壳索引存 captures 相对 `raw/ai_session/…`）——今后移动帧目录不再破坏索引。
+- **迁移器** `scripts/migrate_captures_layout.py`（dry-run 默认、幂等、可续跑）：同卷 rename（非拷贝，
+  不遍历 PNG）+ 逐索引 `.premigrate` 备份 + `MIGRATION_MANIFEST.json`。实测：60 顶层项迁移、
+  12,499 条 `file` 改写、0 未解析（--strict）。生产者（convert/ingest/record_gt/autoplay/crop/
+  deletterbox/sync）全部改为写新子目录 + 相对路径；10 套测试全绿。
+
 ### GPU（2026-06-27）
 `auto` 环境已装 **torch 2.11.0+cu128 + torchvision 0.26.0+cu128**（替掉 +cpu），RTX 5080 可用。
 `train_classifier.py` 自动用 cuda；加了 `--workers`（GPU 建议 6）+ 逐轮 `train_loss/val_acc/耗时` 打印（`python -u` 看实时进度）。
@@ -145,6 +254,8 @@ mycv 基线启发的"借轮廓孤立"实验，**经混淆矩阵诊断被否定**
 | **合计** | **6 局** | ~3,060 | **~112k**（含训练用增广前裁剪） |
 > 旧 `session6_hr`/`session5`（污染标签前）保留作对照。erode 版是当前正式训练集。
 > 红五现充足：4 AI 局合计 5mr 286 / 5pr 357 / 5sr 246（手动局每局~1 张）。
+> **新增原始数据** `captures/ai_session`（MahjongCopilot 线流 + 1080p PNG，多 run/13 局）：当前用于 §1.9 副露几何 spike 验证（含 session6 缺的 大明杠/加杠），
+> 尚**未**建成训练集。注：`run4` 为掉线局、`run5` 为重连局（见 `captures/ai_session/notes.txt`）——并入训练前需注意此类局的状态连续性。
 > 权重：`tile_classifier.pt`=正式(6局,97.6%)；备份 `_preAI`(P2 erode)/`_erode`/`_clean`/`_prePollutionFix`。
 
 ## 四、怎么运行（conda `auto` 环境）
@@ -179,7 +290,9 @@ for t in tiles replay sync label river meld classifier; do PYTHONPATH=. $PY test
 ### 中期
 - **锚点归一化** (`normalize.AnchorLocator`)：检测 UI 地标 → 拟合变换 → 支持任意分辨率/手机/外部截图（手机端中间不变、两侧延伸）。
 - **主动学习闭环**：检测器自动标注新帧 → 用协议 GT 交叉校验 → 低置信/不一致路由人工 → 重训。
-- **副露精修**：per-meld 几何（处理 3D 透视 + 旋转召唤牌的间隙）或 OBB；或直接靠 bootstrap。
+- **副露精修**【几何模型 ✅ 可视化验证 2026-06-29，见 §1.9，待并入】：单桌面单应 `H_table` + 每家 reverse/anchor=end 列模型 + 三种杠 + z 视差 lift，
+  已在 AI 1080p + session6 4K 上 GT 驱动验证 box 贴面。**下一步**：并入 `coords.py`/`meld.py`（替代 strip 补偿），用其重建副露标注并实测 on-tile 精度；
+  加杠离面堆叠牌需补桌面法向投影。（替代旧"per-meld strip 偏松/OBB/bootstrap"路线。）
 - **HUD 区**（分数/场风/局/余牌/名字）：锚点相对定位 + 数字分类器/OCR（多为协议 GT，优先级低）。
 - **红五/稀有类专项**：过采样、copy-paste 增广、合成、定向采集。
 
