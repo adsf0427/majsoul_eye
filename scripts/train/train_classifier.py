@@ -126,7 +126,7 @@ def main():
     opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
     lossf = nn.CrossEntropyLoss()
     best = 0.0
-    last_per, last_tot = Counter(), Counter()
+    best_per, best_tot = Counter(), Counter()
     for ep in range(args.epochs):
         model.train(); t0 = time.time(); run_loss = 0.0; nb = 0
         for x, y in tl:
@@ -144,19 +144,20 @@ def main():
                 correct += (pred == y).sum().item()
                 for p_, y_ in zip(pred.numpy(), y.numpy()):
                     per_tot[y_] += 1; per[y_] += int(p_ == y_)
-        acc = correct / len(val); last_per, last_tot = per, per_tot
+        acc = correct / len(val)
         print(f"epoch {ep+1:2d}/{args.epochs}  train_loss={train_loss:.4f}  val_acc={acc:.4f}  ({dt:.1f}s)", flush=True)
         if acc >= best:
             best = acc
+            best_per, best_tot = per, per_tot     # snapshot per-class of the SAVED weight
             os.makedirs(os.path.dirname(args.out), exist_ok=True)
             torch.save(model.state_dict(), args.out)
     if not vl:
         os.makedirs(os.path.dirname(args.out), exist_ok=True)
         torch.save(model.state_dict(), args.out)
     print(f"\nbest val_acc={best:.4f}  saved -> {args.out}")
-    if last_tot:
-        worst = sorted(((last_per[y] / last_tot[y], TILE_NAMES[y], last_tot[y]) for y in last_tot), key=lambda t: t[0])
-        print("worst classes (acc, class, n_val):")
+    if best_tot:
+        worst = sorted(((best_per[y] / best_tot[y], TILE_NAMES[y], best_tot[y]) for y in best_tot), key=lambda t: t[0])
+        print("worst classes of the SAVED (best-epoch) model (acc, class, n_val):")
         for a, c, n in worst[:12]:
             print(f"  {a:.3f}  {c:4s}  n={n}")
 
