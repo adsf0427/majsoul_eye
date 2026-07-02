@@ -76,12 +76,15 @@ _MYCV_ROIS_PX: dict[str, tuple[int, int, int, int]] = {
 
 REGIONS: dict[str, NormBox] = {name: px_box(*roi) for name, roi in _MYCV_ROIS_PX.items()}
 
-# Dora indicators are NOT on the dead wall — they're in the TOP-LEFT HUD panel
-# (calibrated T3 on session6: the single 'N' tile = (0.015,0.036,0.054,0.111),
-# tile width ~0.0395), growing rightward as kan-dora reveal. NOTE: this is 2D HUD,
-# so it's RESOLUTION-DEPENDENT (like scores) — fine at this 16:9 res; needs
-# anchor-normalization for other resolutions. # CALIBRATE multi-dora spacing.
-DORA_STRIP: NormBox = NormBox(0.015, 0.036, 0.2125, 0.111)
+# Dora indicators are NOT on the dead wall — they're in the TOP-LEFT HUD panel,
+# growing rightward as kan-dora reveal. NOTE: this is 2D HUD, so it's
+# RESOLUTION-DEPENDENT (like scores) — fine at this 16:9 res; needs
+# anchor-normalization for other resolutions.
+# x-extent data-calibrated: brightness-scan of the 5-slot strip on session6 puts
+# tile seams at px 82/138/194/250/306 → pitch ~56 px (0.0292), first edge ~28 px.
+# The earlier single-tile 0.0395 width was ~33% too wide (boxes bled into the next
+# slot), so x1 pulled 0.2125 → 0.1608 (5 × 56 px).
+DORA_STRIP: NormBox = NormBox(0.015, 0.036, 0.1608, 0.111)
 MAX_DORA = 5
 
 

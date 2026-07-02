@@ -66,55 +66,42 @@ def render_overlay(img: np.ndarray, rec: dict, path: str) -> None:
         cv2.rectangle(vis, (x1, y1), (x2, y2), (255, 255, 255), 1)
     for d in rec.get("dora_boxes", []):
         x1, y1, x2, y2 = d["px_box"]
-        col = (0, 255, 255) if d.get("reliable", True) else (0, 0, 255)  # yellow = dora indicator
+        if not d.get("reliable", True):
+            col = (0, 0, 255)                        # red   = not rendered / low fill
+        elif d.get("back"):
+            col = (0, 140, 255)                      # orange = face-down back slot
+        else:
+            col = (0, 255, 255)                      # yellow = revealed indicator
         cv2.rectangle(vis, (x1, y1), (x2, y2), col, 2)
         cv2.putText(vis, d["tile"], (x1, y1 - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1, cv2.LINE_AA)
     cv2.imwrite(path, vis)
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--captures", nargs="*", default=None,
-                    help="capture jsonl files (default: all converted GT under captures/intermediate/gt/)")
-    ap.add_argument("--frames-dir", default=None,
-                    help="override the frames dir (must contain frames.jsonl); "
-                         "only valid with exactly one --captures")
-    ap.add_argument("--out", default="out/ai_session_annotations")
-    ap.add_argument("--overlay-every", type=int, default=60)
-    ap.add_argument("--qa-classifier", action="store_true",
-                    help="classify sampled face crops and report GT agreement")
-    ap.add_argument("--qa-per-game", type=int, default=400)
-    args = ap.parse_args()
-
-    captures = args.captures or paths.converted_gt_captures()
-    if args.frames_dir and len(captures) != 1:
-        ap.error("--frames-dir requires exactly one --captures")
-    os.makedirs(os.path.join(args.out, "overlays"), exist_ok=True)
-    hom = P.build_homographies(1920, 1080)
+def _process_capture(cap, cfg):
+    """Annotate one capture end-to-end -> (name, summary_entry | None). Standalone
+    so it can run in a worker process (see --workers); keeps cv2/torch single-
+    threaded so N workers use N cores without oversubscription."""
+    cv2.setNumThreads(1)
+    try:
+        import torch
+        torch.set_num_threads(1)
+    except Exception:
+        pass
+    name = os.path.splitext(os.path.basename(cap))[0]
+    try:
+        seq_state = build_seq_state(cap)
+        frames = load_frames(cfg["frames_dir"] or paths.frames_dir_for(cap))
+    except Exception as e:
+        print(f"{name}: SKIP ({e})", flush=True)
+        return name, None
 
     clf = None
-    if args.qa_classifier:
+    if cfg["qa_classifier"]:
         from majsoul_eye.recognize.classifier import TileClassifier
         clf = TileClassifier("majsoul_eye/recognize/tile_classifier.pt")
+    hom = P.build_homographies(1920, 1080)
 
-    # merge into an existing summary so multiple runs into the same --out (e.g.
-    # session6 then session5, which needs its own --frames-dir) accumulate rather
-    # than clobber. A clean regen starts from a freshly-deleted out/ dir anyway.
-    summary_path = os.path.join(args.out, "summary.json")
-    summary = {}
-    if os.path.exists(summary_path):
-        try:
-            summary = json.load(open(summary_path, encoding="utf-8"))
-        except Exception:
-            summary = {}
-    for cap in captures:
-        name = os.path.splitext(os.path.basename(cap))[0]
-        try:
-            seq_state = build_seq_state(cap)
-            frames = load_frames(args.frames_dir or paths.frames_dir_for(cap))
-        except Exception as e:
-            print(f"{name}: SKIP ({e})")
-            continue
+    try:
         seqs = [s for s in sorted(seq_state) if s in frames]
         # first 2 board-changing seqs of each kyoku = deal animation window
         suspect_seqs = set()
@@ -130,7 +117,7 @@ def main() -> None:
         stats = defaultdict(float)
         qa = defaultdict(lambda: [0, 0])         # zone -> [n, correct]
         qa_bad = []
-        out_path = os.path.join(args.out, f"{name}.jsonl")
+        out_path = os.path.join(cfg["out"], f"{name}.jsonl")
         with open(out_path, "w", encoding="utf-8") as f:
             for k, seq in enumerate(seqs):
                 img = cv2.imread(frames[seq])
@@ -156,10 +143,10 @@ def main() -> None:
                 stats["dora_boxes"] += len(rec["dora_boxes"])
                 stats["dora_ok"] += sum(1 for d in rec["dora_boxes"] if d.get("reliable", True))
 
-                if args.overlay_every and k % args.overlay_every == 0:
-                    render_overlay(img, rec, os.path.join(args.out, "overlays", f"{name}_seq{seq}.png"))
+                if cfg["overlay_every"] and k % cfg["overlay_every"] == 0:
+                    render_overlay(img, rec, os.path.join(cfg["out"], "overlays", f"{name}_seq{seq}.png"))
 
-                if clf is not None and k % 3 == 0 and qa["river"][0] + qa["meld"][0] < args.qa_per_game:
+                if clf is not None and k % 3 == 0 and qa["river"][0] + qa["meld"][0] < cfg["qa_per_game"]:
                     # sideways cells are 90°-rotated vs the training crops: classify
                     # both rotations and accept either (QA-only leniency).
                     crops, keys = [], []
@@ -198,22 +185,76 @@ def main() -> None:
                             qa[zone][1] += int(gtl in cand)
                             if gtl not in cand and len(qa_bad) < 60:
                                 qa_bad.append(f"seq{seq} {zone} gt={gtl} pred={'/'.join(cand)}")
+    except Exception as e:                       # isolate a bad game from the pool
+        print(f"{name}: FAILED ({type(e).__name__}: {e})", flush=True)
+        return name, None
 
-        s = {k: int(v) for k, v in stats.items()}
-        if clf is not None:
-            s["qa"] = {z: {"n": n, "agree": round(c / n, 4) if n else None}
-                       for z, (n, c) in qa.items()}
-            s["qa_mismatch_examples"] = qa_bad[:20]
-        summary[name] = s
-        riv_pct = 100 * s.get("river_ok", 0) / max(1, s.get("river_boxes", 1))
-        meld_pct = 100 * s.get("meld_ok", 0) / max(1, s.get("meld_boxes", 1))
-        qa_str = ""
-        if clf is not None:
-            qa_str = "  QA " + " ".join(f"{z}:{v['agree']}" for z, v in s["qa"].items() if v["n"])
-        dora_pct = 100 * s.get("dora_ok", 0) / max(1, s.get("dora_boxes", 1))
-        print(f"{name}: {s['frames']} frames  river {s.get('river_boxes',0)} boxes ({riv_pct:.1f}% ok, "
-              f"{s.get('river_unrendered',0)} unrendered)  meld {s.get('meld_boxes',0)} ({meld_pct:.1f}% ok)"
-              f"  hand {s.get('hand_boxes',0)}  dora {s.get('dora_boxes',0)} ({dora_pct:.1f}% ok){qa_str}", flush=True)
+    s = {k: int(v) for k, v in stats.items()}
+    if clf is not None:
+        s["qa"] = {z: {"n": n, "agree": round(c / n, 4) if n else None}
+                   for z, (n, c) in qa.items()}
+        s["qa_mismatch_examples"] = qa_bad[:20]
+    riv_pct = 100 * s.get("river_ok", 0) / max(1, s.get("river_boxes", 1))
+    meld_pct = 100 * s.get("meld_ok", 0) / max(1, s.get("meld_boxes", 1))
+    qa_str = ""
+    if clf is not None:
+        qa_str = "  QA " + " ".join(f"{z}:{v['agree']}" for z, v in s["qa"].items() if v["n"])
+    dora_pct = 100 * s.get("dora_ok", 0) / max(1, s.get("dora_boxes", 1))
+    print(f"{name}: {s['frames']} frames  river {s.get('river_boxes',0)} boxes ({riv_pct:.1f}% ok, "
+          f"{s.get('river_unrendered',0)} unrendered)  meld {s.get('meld_boxes',0)} ({meld_pct:.1f}% ok)"
+          f"  hand {s.get('hand_boxes',0)}  dora {s.get('dora_boxes',0)} ({dora_pct:.1f}% ok){qa_str}", flush=True)
+    return name, s
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--captures", nargs="*", default=None,
+                    help="capture jsonl files (default: all converted GT under captures/intermediate/gt/)")
+    ap.add_argument("--frames-dir", default=None,
+                    help="override the frames dir (must contain frames.jsonl); "
+                         "only valid with exactly one --captures")
+    ap.add_argument("--out", default="out/ai_session_annotations")
+    ap.add_argument("--overlay-every", type=int, default=60)
+    ap.add_argument("--qa-classifier", action="store_true",
+                    help="classify sampled face crops and report GT agreement")
+    ap.add_argument("--qa-per-game", type=int, default=400)
+    ap.add_argument("--workers", type=int, default=max(1, min(16, (os.cpu_count() or 4) - 2)),
+                    help="parallel worker processes, one game each "
+                         "(default ~cpu_count-2; pass 1 for sequential)")
+    args = ap.parse_args()
+
+    captures = args.captures or paths.converted_gt_captures()
+    if args.frames_dir and len(captures) != 1:
+        ap.error("--frames-dir requires exactly one --captures")
+    os.makedirs(os.path.join(args.out, "overlays"), exist_ok=True)
+
+    cfg = {"out": args.out, "frames_dir": args.frames_dir,
+           "overlay_every": args.overlay_every,
+           "qa_classifier": args.qa_classifier, "qa_per_game": args.qa_per_game}
+
+    # merge into an existing summary so multiple runs into the same --out (e.g.
+    # session6 then session5, which needs its own --frames-dir) accumulate rather
+    # than clobber. A clean regen starts from a freshly-deleted out/ dir anyway.
+    summary_path = os.path.join(args.out, "summary.json")
+    summary = {}
+    if os.path.exists(summary_path):
+        try:
+            summary = json.load(open(summary_path, encoding="utf-8"))
+        except Exception:
+            summary = {}
+
+    workers = min(max(1, args.workers), len(captures))
+    if workers > 1:
+        import functools
+        from concurrent.futures import ProcessPoolExecutor
+        worker = functools.partial(_process_capture, cfg=cfg)
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(worker, captures))
+    else:
+        results = [_process_capture(cap, cfg) for cap in captures]
+    for name, entry in results:
+        if entry is not None:
+            summary[name] = entry
 
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=1)

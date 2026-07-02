@@ -23,6 +23,7 @@ import numpy as np
 
 from majsoul_eye.annotate import pipeline as P
 from majsoul_eye.annotate.seatgt import seat_gt
+from majsoul_eye.coords import MAX_DORA, dora_slot
 from majsoul_eye.label.autolabel import label_frame
 from majsoul_eye.normalize import locate_fullscreen
 
@@ -111,24 +112,33 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
     except Exception as e:                       # hand layout is best-effort
         rec["flags"].append(f"hand:error:{e}")
 
-    # dora indicators: top-left 2D-HUD strip. GT = state.dora_markers (only the
-    # REVEALED face-up indicators; kan-dora reveal left→right). Fixed calibrated
-    # slots (coords.DORA_STRIP) — resolution-stable at 16:9. `fill` = white-face
-    # coverage, so a real revealed indicator reads high; empty/back slots aren't
-    # emitted because we iterate state.dora_markers, not all MAX_DORA slots.
+    # dora indicators: top-left 2D-HUD strip, MAX_DORA (=5) fixed calibrated slots
+    # (coords.DORA_STRIP) — resolution-stable at 16:9. The first len(dora_markers)
+    # slots are REVEALED (face-up, GT tile class); the rest are face-DOWN backs
+    # (tile="back", flagged `back`). Kan-dora reveal left→right, so a revealed slot
+    # turns from back to face as the game progresses. `fill` = white-face coverage
+    # for revealed / orange-back coverage for backs; a rendered slot reads high, a
+    # not-yet-rendered one (GT leads the client) is flagged not-reliable.
     try:
         region = locate_fullscreen(img)
+        n_rev = len(state.dora_markers)
         db = []
-        for s in label_frame(img, state, region, zones=frozenset({"dora"})):
-            x1, y1, x2, y2 = s.px_box
+        for i in range(MAX_DORA):
+            is_back = i >= n_rev
+            tile = "back" if is_back else state.dora_markers[i]
+            x1, y1, x2, y2 = region.norm_to_px(dora_slot(i))
             f = 0.0
             if x2 > x1 and y2 > y1:
                 hsv = cv2.cvtColor(img[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
-                f = float(((hsv[..., 1] < 70) & (hsv[..., 2] > 165)).mean())
-            d = {"tile": s.label, "px_box": list(s.px_box), "fill": round(f, 3)}
+                if is_back:                          # orange tile-back
+                    f = float(((hsv[..., 0] >= 8) & (hsv[..., 0] <= 28) &
+                               (hsv[..., 1] > 80) & (hsv[..., 2] > 110)).mean())
+                else:                                # white tile-face
+                    f = float(((hsv[..., 1] < 70) & (hsv[..., 2] > 165)).mean())
+            d = {"tile": tile, "px_box": [x1, y1, x2, y2], "fill": round(f, 3), "back": is_back}
             if f < FILL_OK:
-                d["reliable"] = False               # indicator not rendered yet (GT leads)
-                rec["flags"].append(f"dora[{s.label}]:low_fill={f:.2f}")
+                d["reliable"] = False               # slot not rendered yet (GT leads) / occluded
+                rec["flags"].append(f"dora[{i}:{tile}]:low_fill={f:.2f}")
             db.append(d)
         rec["dora_boxes"] = db
     except Exception as e:                       # dora strip is best-effort
