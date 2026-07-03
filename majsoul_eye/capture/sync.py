@@ -33,6 +33,8 @@ from typing import Callable, Optional
 
 import numpy as np
 
+from .roi_diff import roi_diff
+
 # MJAI events that change the visible board → reset the quiet timer.
 RELEVANT_EVENTS = frozenset({
     "start_kyoku", "tsumo", "dahai", "chi", "pon",
@@ -179,11 +181,19 @@ class FrameSyncer:
             self._record(key, None, "no_capture")
             return True
 
-        # Confirm the picture has stopped moving (discard animation finished). Compare
-        # to the previous tick's grab for this same key; if it still differs, wait.
-        # Skipped when `capped` so a long burst still yields a (best-effort) frame.
-        if self.confirm_stable and not capped:
-            if self._ref_key == key and self._ref is not None and frame_diff(frame, self._ref) <= self.diff_thresh:
+        # Confirm the picture has stopped moving (discard animation finished), using
+        # the table-ROI diff so the animated cloth border/2D HUD can't defeat it.
+        # Runs on the `capped` path too (one confirmation) so a long burst still
+        # waits out the sweep instead of grabbing mid-animation. On the capped path
+        # the pending key is *itself* a moving target (that's why it never went
+        # quiet), so the comparison there ignores key identity — it just needs two
+        # consecutive capped-path grabs to agree, then captures with whatever key is
+        # current. Off the capped path (a real quiet-triggered capture) we still
+        # gate on the ref belonging to this same key, so a fresh key after an
+        # interruption starts a fresh prime instead of comparing across events.
+        if self.confirm_stable:
+            same_target = capped or self._ref_key == key
+            if same_target and self._ref is not None and roi_diff(frame, self._ref) <= self.diff_thresh:
                 pass  # stable
             else:
                 self._ref, self._ref_key = frame, key

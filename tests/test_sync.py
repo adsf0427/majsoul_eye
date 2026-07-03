@@ -3,6 +3,7 @@
 import os
 import tempfile
 
+import cv2
 import numpy as np
 
 from majsoul_eye.capture.sync import FrameSyncer, frame_diff
@@ -143,6 +144,49 @@ def test_waits_for_picture_to_stabilize():
     clock.advance(0.31)                     # event-quiet, but picture still moving
     assert _pump(s, clock, n=10) is True
     assert s.counts["ok"] == 1 and s._fulfilled == 5
+
+
+def test_capped_still_confirms_once():
+    """On a capped burst, FrameSyncer no longer saves a mid-animation frame outright:
+    it requires one ROI-stable confirmation before finalizing, even past settle_cap.
+
+    Timing is picked so the very first capped-triggering tick actually grabs the
+    `moving` frame (not an already-`settled` one) — with the brief's original
+    settle_cap=0.10 the first capped grab lands past the moving frames in the
+    schedule, so the confirm block is a no-op either way and the test can't tell
+    old (bypass) from new (confirm) behavior. settle_cap=0.05 makes the first
+    capped tick observe `moving`, so the old code (which captures immediately on
+    `capped`, unconfirmed) saves the wrong frame, while the new code primes on it
+    and only saves once two consecutive capped-path grabs agree (`settled`).
+    """
+    moving = np.zeros((100, 100, 3), np.uint8)
+    moving[40:60, 40:60] = 255
+    settled = np.zeros((100, 100, 3), np.uint8)
+    grabs = [moving, moving, settled, settled, settled, settled]
+    clock = {"t": 0.0}
+
+    def grab():
+        return grabs[min(len(grabs) - 1, int(clock["t"] / 0.05))]
+
+    saved = []
+    d = tempfile.mkdtemp()
+    fs = FrameSyncer(grab, out_dir=d, quiet=0.30, settle_cap=0.05,
+                      now=lambda: clock["t"], sleep=lambda s: None,
+                      on_pair=lambda k, p, s: saved.append((k, p, s)))
+    os.makedirs(fs.frames_dir, exist_ok=True)
+    fs.on_event(1)
+    for _ in range(8):
+        fs._maybe_capture()
+        clock["t"] += 0.05
+
+    oks = [(k, p) for k, p, s in saved if s == "ok"]
+    assert oks, "expected an eventual capture on the capped path (must not loop forever)"
+    _, path = oks[0]
+    saved_frame = cv2.imread(path)
+    assert saved_frame is not None and np.array_equal(saved_frame, settled), (
+        "capped confirm must wait for ROI-stability before saving, not grab mid-animation"
+    )
+    print("test_capped_still_confirms_once OK")
 
 
 def test_frame_diff():
