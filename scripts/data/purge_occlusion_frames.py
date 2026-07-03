@@ -3,7 +3,9 @@
 For each datasets/precise_*/ : crop every GT box from yolo/images/<seq>.png, run the
 production classifier, and apply the consistency smart-drop (annotate.consistency):
 - keep       -> untouched
-- drop_boxes -> rewrite the label without the bad lines; delete those boxes' crops
+- drop_boxes -> rewrite the label without the bad lines; glob-delete a class's crops
+  only when EVERY box of that class in the frame is bad (a partially-bad class's
+  crops can't be safely mapped label-line -> crop-file, so they're left in place)
 - drop_frame -> delete image + label + all crops for the seq
 Then rewrite datasets/detector*/{train,val}.txt dropping now-missing image lines.
 
@@ -53,6 +55,38 @@ def _crops_for(ds, gt, seq):
     return glob.glob(os.path.join(ds, "crops", gt, f"{seq}_*.png"))
 
 
+def _drop_boxes_plan(gts, bad):
+    """Partition the bad boxes' classes into ones safe to glob-delete crops for (EVERY
+    box of that class in the frame is bad) vs ones to leave alone (mixed good/bad — a
+    class's crops are named `<seq>_NNN.png` by build_dataset's per-frame global crop
+    counter, which does not line up with per-class label-line order, so there is no
+    cheap way to know which specific crop file is the bad one). Returns (full, partial)
+    sorted class-name lists."""
+    full, partial = [], []
+    for gt in sorted(set(gts[i] for i in bad)):
+        if gts.count(gt) == [gts[i] for i in bad].count(gt):
+            full.append(gt)
+        else:
+            partial.append(gt)
+    return full, partial
+
+
+def apply_drop_boxes(ds, seq, label_path, raw, gts, bad, apply=True):
+    """Rewrite the label file dropping `bad` line indices, and glob-delete a class's
+    crops only when EVERY box of that class in this frame is bad (see _drop_boxes_plan).
+    With apply=False, computes the plan without touching disk. Returns
+    (kept_lines, full_classes, partial_classes)."""
+    kept = [ln for i, ln in enumerate(raw) if i not in set(bad)]
+    full, partial = _drop_boxes_plan(gts, bad)
+    if apply:
+        with open(label_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(kept) + ("\n" if kept else ""))
+        for gt in full:
+            for c in _crops_for(ds, gt, seq):
+                os.remove(c)
+    return kept, full, partial
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--datasets-dir", default="datasets")
@@ -85,15 +119,14 @@ def main():
                             os.remove(v)
             else:  # drop_boxes
                 tot_boxes += len(bad)
-                kept = [ln for i, ln in enumerate(raw) if i not in set(bad)]
                 badtiles = [gts[i] for i in bad]
-                print(f"{os.path.basename(ds)}/{seq}: drop {len(bad)} box(es) {badtiles} ({len(gts)}->{len(kept)})")
-                if args.apply:
-                    with open(label_path, "w", encoding="utf-8") as f:
-                        f.write("\n".join(kept) + ("\n" if kept else ""))
-                    for gt in set(badtiles):
-                        for c in _crops_for(ds, gt, seq):
-                            os.remove(c)
+                kept, full, partial = apply_drop_boxes(ds, seq, label_path, raw, gts, bad, apply=args.apply)
+                msg = f"{os.path.basename(ds)}/{seq}: drop {len(bad)} box(es) {badtiles} ({len(gts)}->{len(kept)})"
+                if full:
+                    msg += f"; crops deleted for {full}"
+                if partial:
+                    msg += f"; crops LEFT for mixed-class {partial} (can't map box->file safely)"
+                print(msg)
 
     # Fix assembled detector splits: drop lines whose image no longer exists.
     for lst in glob.glob(os.path.join(args.datasets_dir, "detector*", "*.txt")):

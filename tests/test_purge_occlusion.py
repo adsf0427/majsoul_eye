@@ -60,6 +60,50 @@ def test_plan_frame_routing(tmpdir="scratch_purge_test"):
     print("test_plan_frame_routing OK")
 
 
+def test_drop_boxes_partial_class_keeps_good_crop(tmpdir="scratch_purge_test2"):
+    """Regression for the over-deletion bug: a frame with TWO 8s boxes where only
+    ONE is bad must NOT glob-delete both crops/8s/<seq>_*.png files — only the whole
+    class is safe to glob-delete when EVERY box of that class in the frame is bad.
+    Here only box index 1 is bad, so both crop files (good 000 + bad 001) must be
+    left untouched, and only the bad box's YOLO label line must be dropped."""
+    import shutil, sys
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    ds = f"{tmpdir}/precise_fake"
+    seq = "000003"
+    # two 8s boxes: box0 good (classifier sees 8s), box1 bad (classifier sees 3p)
+    _write(ds, seq, [(NAME_TO_ID["8s"], NAME_TO_ID["8s"]), (NAME_TO_ID["8s"], NAME_TO_ID["3p"])])
+
+    # synthetic crops/ dir mimicking build_dataset's per-frame global counter naming
+    os.makedirs(f"{ds}/crops/8s", exist_ok=True)
+    good_crop = f"{ds}/crops/8s/{seq}_000.png"
+    bad_crop = f"{ds}/crops/8s/{seq}_001.png"
+    cv2.imwrite(good_crop, np.full((10, 10, 3), 200, np.uint8))
+    cv2.imwrite(bad_crop, np.full((10, 10, 3), 50, np.uint8))
+
+    stub = StubClf({NAME_TO_ID["8s"]: "8s", NAME_TO_ID["3p"]: "3p"})
+    orig_clf_cls = poc.TileClassifier
+    orig_argv = sys.argv
+    poc.TileClassifier = lambda: stub
+    sys.argv = ["purge_occlusion_frames.py", "--datasets-dir", tmpdir, "--apply",
+                "--tau", "0.5", "--max-bad", "2"]
+    try:
+        poc.main()
+    finally:
+        poc.TileClassifier = orig_clf_cls
+        sys.argv = orig_argv
+
+    assert os.path.exists(good_crop), "good 8s crop must survive when only 1 of 2 boxes is bad"
+    label_path = f"{ds}/yolo/labels/{seq}.txt"
+    kept_lines = [ln for ln in open(label_path, encoding="utf-8").read().splitlines() if ln.strip()]
+    assert len(kept_lines) == 1, kept_lines
+    # the surviving line is box0's (cx=0.100); box1's (cx=0.200) must be gone
+    assert kept_lines[0].split()[1] == "0.100", kept_lines
+
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    print("test_drop_boxes_partial_class_keeps_good_crop OK")
+
+
 if __name__ == "__main__":
     test_plan_frame_routing()
+    test_drop_boxes_partial_class_keeps_good_crop()
     print("ALL test_purge_occlusion OK")
