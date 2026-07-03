@@ -43,7 +43,27 @@ import argparse
 import os
 
 
+def gate_frame(frame, boxes, crops, clf, tau, max_bad):
+    """Return the set of box indices to SKIP for occlusion/mislabel. `boxes` and
+    `crops` are aligned; a whole-frame drop returns every index."""
+    from majsoul_eye.annotate.consistency import score_frame, frame_decision
+
+    if clf is None or not boxes:
+        return set()
+    gts = [b.tile for b in boxes]
+    decision, bad = frame_decision(score_frame(crops, gts, clf, tau=tau), max_bad=max_bad)
+    if decision == "keep":
+        return set()
+    if decision == "drop_frame":
+        return set(range(len(boxes)))
+    return set(bad)
+
+
 def main() -> None:
+    # Lightweight (numpy-only) import, needed early for the --occ-tau/--occ-max-bad
+    # argparse defaults; the heavier cv2/torch imports stay deferred past parse_args().
+    from majsoul_eye.annotate.consistency import TAU as OCC_TAU, MAX_BAD as OCC_MAX_BAD
+
     ap = argparse.ArgumentParser()
     ap.add_argument("capture")
     ap.add_argument("frames_dir")
@@ -58,6 +78,13 @@ def main() -> None:
     ap.add_argument("--from-annotations", metavar="DIR", default=None,
                     help="Reuse annotate_ai_session records from DIR/<capture-stem>.jsonl "
                          "instead of re-running annotate_frame (no warp/mask recompute).")
+    ap.add_argument("--no-occlusion-gate", dest="occlusion_gate", action="store_false",
+                    help="Disable the GT-consistency occlusion gate (on by default).")
+    ap.set_defaults(occlusion_gate=True)
+    ap.add_argument("--occ-tau", type=float, default=OCC_TAU,
+                    help="Min P(gt_cls) for a top1-mismatch box to still pass the gate.")
+    ap.add_argument("--occ-max-bad", type=int, default=OCC_MAX_BAD,
+                    help="Per-frame bad-box budget before dropping the whole frame.")
     args = ap.parse_args()
 
     import cv2  # auto env
@@ -101,6 +128,12 @@ def main() -> None:
         os.makedirs(d, exist_ok=True)
 
     n_frames = n_crops = n_yolo = n_skip = n_letterbox = n_deal = 0
+    n_occ_box = n_occ_frame = 0
+    occ_clf = None
+    if args.occlusion_gate:
+        from majsoul_eye.recognize.classifier import TileClassifier
+        occ_clf = TileClassifier()
+
     for seq in seqs:
         if seq not in frames:
             continue
@@ -129,10 +162,22 @@ def main() -> None:
             h, w = 1080, 1920
 
         rec = recs[seq] if args.from_annotations else annotate_frame(frame, seq_state[seq], hom)
+
+        reliable = [b for b in iter_tile_boxes(rec) if b.reliable]
+        skip = set()
+        if occ_clf is not None and reliable:
+            gate_crops = [crop_box(frame, b, size=args.crop_size) for b in reliable]
+            skip = gate_frame(frame, reliable, gate_crops, occ_clf,
+                              args.occ_tau, args.occ_max_bad)
+            if skip == set(range(len(reliable))):
+                n_occ_frame += 1
+            else:
+                n_occ_box += len(skip)
+
         yolo_lines = []
         ci = 0
-        for box in iter_tile_boxes(rec):
-            if not box.reliable:
+        for bi, box in enumerate(reliable):
+            if bi in skip:
                 continue
             cls = NAME_TO_ID.get(box.tile)
             if cls is None:
@@ -165,7 +210,8 @@ def main() -> None:
         n_frames += 1
 
     print(f"frames labeled: {n_frames}  crops: {n_crops}  yolo-imgs: {n_yolo}  "
-          f"skipped: {n_skip}  deal-skipped: {n_deal}  letterbox-skipped: {n_letterbox}")
+          f"skipped: {n_skip}  deal-skipped: {n_deal}  letterbox-skipped: {n_letterbox}  "
+          f"occ-box-skipped: {n_occ_box}  occ-frame-dropped: {n_occ_frame}")
     print(f"dataset -> {args.out}")
 
 
