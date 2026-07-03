@@ -9,7 +9,9 @@ from majsoul_eye.tiles import NAME_TO_ID
 
 
 class _Box:
-    def __init__(self, tile): self.tile = tile
+    def __init__(self, tile, sideways=False):
+        self.tile = tile
+        self.sideways = sideways
 
 
 class StubClf:
@@ -32,6 +34,19 @@ def test_gate_frame_skips_bad_boxes():
     print("test_gate_frame_skips_bad_boxes OK")
 
 
+def test_gate_frame_never_skips_sideways_box():
+    # middle box is sideways (riichi discard / called meld tile) AND the classifier
+    # (upright-trained) reads it as a mismatch -> must still be KEPT, not skipped.
+    frame = np.full((100, 100, 3), 240, np.uint8)
+    boxes = [_Box("8s"), _Box("3p", sideways=True), _Box("S")]
+    crops = [np.full((32, 32, 3), 240, np.uint8) for _ in range(3)]
+    clf = StubClf(["8s", "9m", "S"])  # box#1 (sideways) looks like a mismatch to clf
+    skip = bd.gate_frame(frame, boxes, crops, clf, tau=0.5, max_bad=2)
+    assert 1 not in skip, skip
+    print("test_gate_frame_never_skips_sideways_box OK")
+
+
 if __name__ == "__main__":
     test_gate_frame_skips_bad_boxes()
+    test_gate_frame_never_skips_sideways_box()
     print("ALL test_build_gate OK")

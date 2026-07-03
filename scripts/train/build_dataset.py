@@ -45,18 +45,32 @@ import os
 
 def gate_frame(frame, boxes, crops, clf, tau, max_bad):
     """Return the set of box indices to SKIP for occlusion/mislabel. `boxes` and
-    `crops` are aligned; a whole-frame drop returns every index."""
+    `crops` are aligned; a whole-frame drop returns the indices of every
+    NON-sideways box.
+
+    `box.sideways` boxes (riichi discards, called-meld tiles — rendered rotated
+    90 degrees) are NEVER judged: the classifier is upright-trained and can't
+    read them, so a mismatch there is an orientation artifact, not evidence of
+    occlusion/mislabel. They are always kept and never count against the
+    per-frame `max_bad` budget.
+    """
     from majsoul_eye.annotate.consistency import score_frame, frame_decision
 
     if clf is None or not boxes:
         return set()
-    gts = [b.tile for b in boxes]
-    decision, bad = frame_decision(score_frame(crops, gts, clf, tau=tau), max_bad=max_bad)
+    upright_idx = [i for i, b in enumerate(boxes) if not b.sideways]
+    if not upright_idx:
+        return set()
+    upright_crops = [crops[i] for i in upright_idx]
+    upright_gts = [boxes[i].tile for i in upright_idx]
+    decision, bad = frame_decision(
+        score_frame(upright_crops, upright_gts, clf, tau=tau), max_bad=max_bad
+    )
     if decision == "keep":
         return set()
     if decision == "drop_frame":
-        return set(range(len(boxes)))
-    return set(bad)
+        return {upright_idx[i] for i in range(len(upright_idx))}
+    return {upright_idx[i] for i in bad}
 
 
 def main() -> None:
@@ -169,7 +183,10 @@ def main() -> None:
             gate_crops = [crop_box(frame, b, size=args.crop_size) for b in reliable]
             skip = gate_frame(frame, reliable, gate_crops, occ_clf,
                               args.occ_tau, args.occ_max_bad)
-            if skip == set(range(len(reliable))):
+            # gate_frame never judges sideways boxes, so a whole-frame drop shows up
+            # as "every non-sideways reliable box is skipped", not the full range.
+            upright_reliable = {i for i, b in enumerate(reliable) if not b.sideways}
+            if upright_reliable and skip == upright_reliable:
                 n_occ_frame += 1
             else:
                 n_occ_box += len(skip)
