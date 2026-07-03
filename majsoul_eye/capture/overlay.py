@@ -12,6 +12,8 @@ full viewport, so detector boxes (already in screenshot px) draw verbatim.
 from __future__ import annotations
 
 import json
+import threading
+import time
 
 OVERLAY_CANVAS_ID = "majsoul_eye_overlay"
 
@@ -75,7 +77,8 @@ def inject_js(canvas_id: str, shot_w: int, shot_h: int) -> str:
         "  c.style.zIndex = '9999999'; c.style.pointerEvents = 'none';"
         "  document.body.appendChild(c);"
         "}"
-        f"c.width={int(shot_w)}; c.height={int(shot_h)};"
+        f"const W={int(shot_w)}, H={int(shot_h)};"
+        "if (c.width !== W) c.width = W; if (c.height !== H) c.height = H;"
         "})()"
     )
 
@@ -90,10 +93,6 @@ def show_canvas_js(canvas_id: str) -> str:
     """Restore the overlay canvas after a clean shot."""
     cid = json.dumps(canvas_id)
     return f"(() => {{const c = document.getElementById({cid}); if (c) c.style.visibility = 'visible';}})()"
-
-
-import threading
-import time
 
 
 class DetectionOverlay:
@@ -115,7 +114,6 @@ class DetectionOverlay:
         self._device = device
         self._conf = conf
         self._detector = detector          # injectable for tests; else built lazily
-        self._injected = False
         self._stop = False
         self._thread = None
 
@@ -134,10 +132,8 @@ class DetectionOverlay:
         bgr = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
         if bgr is None:
             return
-        if not self._injected:
-            h, w = bgr.shape[:2]
-            self.eval_js(inject_js(self.canvas_id, w, h))
-            self._injected = True
+        h, w = bgr.shape[:2]
+        self.eval_js(inject_js(self.canvas_id, w, h))   # idempotent + non-destructive; re-creates the canvas after a page reload
         dets = self._ensure_detector().predict(bgr)
         self.eval_js(render_js(detections_to_ops(dets), self.canvas_id))
 
@@ -154,7 +150,9 @@ class DetectionOverlay:
                 time.sleep(period - dt)
 
     def start(self):
-        self._ensure_detector()                       # load weights once, up front
+        det = self._ensure_detector()                  # load weights once, up front
+        import numpy as np
+        det.predict(np.zeros((64, 64, 3), np.uint8))   # warm-up: trip device errors here (caught by caller) instead of 12x/s per tick
         self._stop = False
         self._thread = threading.Thread(target=self._run, name="det-overlay", daemon=True)
         self._thread.start()

@@ -2,7 +2,6 @@
 (no browser, no ultralytics). Mirrors the plain-script style of the other suites."""
 import json
 import os
-import sys
 
 from types import SimpleNamespace
 
@@ -62,7 +61,8 @@ def test_inject_js_sets_backing_store_to_shot_dims():
     assert json.dumps("cid") in js
     assert "createElement" in js and "appendChild" in js
     assert "pointerEvents" in js and "9999999" in js
-    assert "c.width=1280" in js and "c.height=720" in js
+    assert "W=1280" in js and "H=720" in js
+    assert "c.width !== W" in js          # guarded resize: no clear when already correctly sized
 
 
 def test_hide_show_js():
@@ -92,19 +92,20 @@ class _FakeDetector:
         return self.dets
 
 
-def test_overlay_tick_injects_once_then_renders():
+def test_overlay_tick_reinjects_each_tick_then_renders():
     js_log = []
     det = _FakeDetector([_hbb([1, 2, 3, 4], "5m", 4, 0.9)])
     o = ov.DetectionOverlay(capture_png=_png_bytes, eval_js=js_log.append,
                             weights="unused", canvas_id="cid", detector=det)
     o._tick()
-    # first tick: inject (sized to the 128x72 png) THEN render
+    # each tick: inject (idempotent, sized to the 128x72 png) THEN render
     assert len(js_log) == 2
-    assert "createElement" in js_log[0] and "c.width=128" in js_log[0] and "c.height=72" in js_log[0]
+    assert "createElement" in js_log[0] and "W=128" in js_log[0] and "H=72" in js_log[0]
     assert "clearRect" in js_log[1]
     o._tick()
-    # second tick: render only (no re-inject)
-    assert len(js_log) == 3 and "createElement" not in js_log[2]
+    # second tick RE-emits inject (self-heals a canvas lost to a page reload) + render
+    assert len(js_log) == 4
+    assert "createElement" in js_log[2] and "clearRect" in js_log[3]
     assert det.calls == 2
 
 

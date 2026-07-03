@@ -128,16 +128,20 @@ pixels, while still letting the user see continuous boxes.
 - **Clean capture:** a single browser-thread action performs, in order,
   `canvas.style.visibility='hidden'` → CDP `captureScreenshot` →
   `canvas.style.visibility='visible'`. `visibility:hidden` **retains** the drawn
-  pixels (unlike `clearRect`), so the boxes snap back instantly after each shot;
-  they persist between detection ticks and only blink during the ~20–40 ms capture
-  window. Both the overlay loop and the once-per-turn dataset capture route
+  pixels (unlike `clearRect`), so the boxes snap back after each shot. Because
+  every overlay tick takes its own clean capture to feed the detector, the canvas
+  is hidden for the ~20–40 ms capture window on **every** tick — at the default
+  12 fps this is a continuous ~30–40%-duty strobe, not an occasional blink.
+  Lowering `--overlay-fps` reduces the strobe duty at the cost of update
+  smoothness. Both the overlay loop and the once-per-turn dataset capture route
   through this.
 - Because everything (inject, draw, hide/capture/show) is serialized on the
   browser action queue, there is no torn state between a draw and a capture.
 
-**Known tradeoff:** a brief per-capture flicker of the boxes. Acceptable for a dev
-tool. If it proves objectionable, the fallback (not in scope) is a separate
-transparent OS overlay window, which never touches the captured surface.
+**Known tradeoff:** the boxes strobe continuously (hidden during each tick's
+capture), tunable via `--overlay-fps`. Acceptable for a dev tool. If it proves
+objectionable, the fallback (not in scope) is a separate transparent OS overlay
+window, which never touches the captured surface.
 
 ## 6. Coordinate mapping
 
