@@ -41,3 +41,37 @@ def verdict_from_probs(prob_row: np.ndarray, gt: str, tau: float = TAU) -> BoxVe
 def is_empty_felt(crop: np.ndarray, min_face_frac: float = 0.12) -> bool:
     """True when the crop is (almost) all table felt — no tile face present."""
     return not is_tile_present(crop, min_face_frac=min_face_frac)
+
+
+def score_frame(crops: list, gts: list, clf, *, tau: float = TAU, min_face_frac: float = 0.12) -> list[BoxVerdict]:
+    """Verdict per (crop, gt). Empty-felt crops are bad up-front; the rest go through
+    the classifier in one batch."""
+    assert len(crops) == len(gts), (len(crops), len(gts))
+    verdicts: list[BoxVerdict] = [None] * len(crops)  # type: ignore
+    live_idx, live_crops = [], []
+    for i, (crop, gt) in enumerate(zip(crops, gts)):
+        if is_empty_felt(crop, min_face_frac=min_face_frac):
+            verdicts[i] = BoxVerdict(False, gt, "", 0.0, "empty_felt")
+        else:
+            live_idx.append(i)
+            live_crops.append(crop)
+    if live_crops:
+        probs = clf.predict_proba(live_crops)
+        for k, i in enumerate(live_idx):
+            verdicts[i] = verdict_from_probs(probs[k], gts[i], tau=tau)
+    return verdicts
+
+
+def frame_decision(verdicts: list[BoxVerdict], max_bad: int = MAX_BAD) -> tuple[str, list[int]]:
+    """Decide whether to keep, drop boxes, or drop the whole frame.
+
+    Returns ("keep", []) if no bad boxes.
+    Returns ("drop_boxes", bad_indices) if 1 <= n_bad <= max_bad.
+    Returns ("drop_frame", bad_indices) if n_bad > max_bad.
+    """
+    bad = [i for i, v in enumerate(verdicts) if not v.ok]
+    if not bad:
+        return "keep", []
+    if len(bad) <= max_bad:
+        return "drop_boxes", bad
+    return "drop_frame", bad
