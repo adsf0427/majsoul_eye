@@ -156,6 +156,13 @@ def test_autoplay_ai_exposes_overlay_flags():
     for flag in ("--overlay", "--detector-weights", "--overlay-fps", "--overlay-conf", "--overlay-device"):
         assert flag in flat, f"missing flag {flag}"
 
+    defaults = {opts[0]: act.default for opts, act in seen.items()}
+    assert defaults["--overlay"] is False
+    assert defaults["--detector-weights"] == "majsoul_eye/recognize/tile_detector.pt"
+    assert defaults["--overlay-fps"] == 12.0
+    assert defaults["--overlay-conf"] == 0.25
+    assert defaults["--overlay-device"] == "cuda"
+
 
 if __name__ == "__main__":
     for name, fn in list(globals().items()):

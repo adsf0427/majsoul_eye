@@ -106,6 +106,9 @@ def main() -> None:
     from majsoul_eye.capture import overlay as overlay_mod   # light: no ultralytics until detector built
     overlay_canvas_id = overlay_mod.OVERLAY_CANVAS_ID if args.overlay else None
 
+    if args.overlay and not os.path.isabs(args.detector_weights):
+        args.detector_weights = os.path.join(_ORIG_CWD, args.detector_weights)   # survive the chdir into MJC (like --out)
+
     # --- env setup: chdir into MahjongCopilot so its data files (liqi.json, models) resolve,
     #     and drop CWD from sys.path so its bundled cp311 libriichi can't shadow site-packages cp312.
     mjc = os.path.abspath(args.mjc)
@@ -389,15 +392,19 @@ def main() -> None:
     overlay = None
     if args.overlay:
         eval_js = lambda js: browser._action_queue.put(lambda: browser.page.evaluate(js))
-        overlay = overlay_mod.DetectionOverlay(
-            capture_png=screenshot_png, eval_js=eval_js,
-            weights=args.detector_weights, device=args.overlay_device,
-            fps=args.overlay_fps, conf=args.overlay_conf,
-            canvas_id=overlay_canvas_id,
-        )
-        print(f"[overlay] loading detector {args.detector_weights} on {args.overlay_device} …", flush=True)
-        overlay.start()
-        print(f"[overlay] live @ {args.overlay_fps:g} fps", flush=True)
+        try:
+            overlay = overlay_mod.DetectionOverlay(
+                capture_png=screenshot_png, eval_js=eval_js,
+                weights=args.detector_weights, device=args.overlay_device,
+                fps=args.overlay_fps, conf=args.overlay_conf,
+                canvas_id=overlay_canvas_id,
+            )
+            print(f"[overlay] loading detector {args.detector_weights} on {args.overlay_device} …", flush=True)
+            overlay.start()
+            print(f"[overlay] live @ {args.overlay_fps:g} fps", flush=True)
+        except Exception as e:
+            print(f"[overlay] disabled (init failed): {type(e).__name__}: {e}", flush=True)
+            overlay = None
 
     print("Watching. Ctrl-C to stop.\n", flush=True)
     try:
