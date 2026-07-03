@@ -50,6 +50,8 @@ import sys
 import time
 from collections import deque
 
+from majsoul_eye.capture.roi_diff import roi_diff
+
 MJC = r"D:/code/phoenix/MahjongCopilot"
 
 SERVERS = {                                              # Majsoul web entry points by server
@@ -57,6 +59,15 @@ SERVERS = {                                              # Majsoul web entry poi
     "cn": "https://game.maj-soul.com/1/",
     "en": "https://mahjongsoul.game.yo-star.com/",
 }
+
+
+def stable_capture_step(state, frame, thresh):
+    """Return ("save"|"wait", state). "save" once the current grab matches the previous
+    one inside the table ROI (discard animation finished); else store ref and wait."""
+    ref = state.get("ref")
+    if ref is not None and roi_diff(frame, ref) <= thresh:
+        return "save", {"ref": None}
+    return "wait", {"ref": frame}
 
 
 def main() -> None:
@@ -78,6 +89,8 @@ def main() -> None:
     ap.add_argument("--auto-next-timeout", type=float, default=90.0,
                     help="Seconds to wait for the guarded auto-next UI flow before falling back to --autojoin, if enabled.")
     ap.add_argument("--quiet", type=float, default=0.40, help="Screenshot once the board is event-quiet this long.")
+    ap.add_argument("--stable-thresh", type=float, default=3.0,
+                    help="Table-ROI frame-diff below this == settled (discard animation done).")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--mjc", default=MJC, help="Path to the MahjongCopilot repo.")
@@ -334,6 +347,7 @@ def main() -> None:
     pending_seq = None          # latest board-changing seq awaiting a screenshot
     fulfilled_seq = None
     last_event_t = 0.0
+    _stab = {"ref": None}       # pixel-stability ref for the currently-armed pending_seq
 
     def maybe_screenshot():
         nonlocal pending_seq, fulfilled_seq
@@ -342,9 +356,17 @@ def main() -> None:
         if (time.time() - last_event_t) < args.quiet:
             return
         png = screenshot_png()                          # CDP capture (no viewport flicker)
-        if png:
-            with open(os.path.join(game_frames_dir, f"{pending_seq:06d}.png"), "wb") as fh:
-                fh.write(png)
+        if not png:
+            return
+        import numpy as np
+        import cv2
+        arr = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
+        action, new_stab = stable_capture_step(_stab, arr, args.stable_thresh)
+        _stab["ref"] = new_stab["ref"]                   # mutate in place (no nonlocal rebind needed)
+        if action == "wait":
+            return                                       # picture still moving; retry next tick
+        with open(os.path.join(game_frames_dir, f"{pending_seq:06d}.png"), "wb") as fh:
+            fh.write(png)
         fulfilled_seq = pending_seq
 
     print("Watching. Ctrl-C to stop.\n", flush=True)
