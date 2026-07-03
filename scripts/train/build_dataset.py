@@ -133,9 +133,12 @@ def main() -> None:
     ap.add_argument("--from-annotations", metavar="DIR", default=None,
                     help="Reuse annotate_ai_session records from DIR/<capture-stem>.jsonl "
                          "instead of re-running annotate_frame (no warp/mask recompute).")
-    ap.add_argument("--no-occlusion-gate", dest="occlusion_gate", action="store_false",
-                    help="Disable the GT-consistency occlusion gate (on by default).")
-    ap.set_defaults(occlusion_gate=True)
+    ap.add_argument("--occlusion-gate", dest="occlusion_gate", action="store_true",
+                    help="Opt-in GT-consistency occlusion/mislabel gate (DEFAULT OFF). Runs a "
+                         "classifier over every box and DELETES mismatches. Prefer capture-time "
+                         "ROI-stability (see capture/roi_diff.py) to avoid occlusion at the source; "
+                         "measured residual is ~0.4%, so this heavier delete-on-build gate is opt-in.")
+    ap.set_defaults(occlusion_gate=False)
     ap.add_argument("--occ-tau", type=float, default=OCC_TAU,
                     help="Min P(gt_cls) for a top1-mismatch box to still pass the gate.")
     ap.add_argument("--occ-max-bad", type=int, default=OCC_MAX_BAD,
