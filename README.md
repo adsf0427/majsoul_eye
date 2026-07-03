@@ -59,6 +59,7 @@ scripts/
   calibrate_annotation_model.py          # measure / refit the fullwarp constants
   spike_topdown.py                       # ARCHIVED H_table viz spike (self-contained; superseded by annotate/)
   inspect_capture.py / overlay_labels.py / visualize_failures.py / mycv_baseline.py  # QA & debug
+  fiftyone_view.py / cvat_export.py / cvat_import.py  # dataset review/clean (FiftyOne GUI) + box-fix round-trip (CVAT)
   migrate_captures_layout.py             # one-shot captures/ layout migrator (dry-run default)
 tests/              # 10 suites: tiles replay sync label classifier mycv_baseline quality coords annotate_pipeline annotate_frame
 docs/DESIGN.md      # design & rationale       docs/STATUS.md  # living status + roadmap (中文)
@@ -239,6 +240,17 @@ MahjongCopilot 的 `LiqiProto`/`GameState`（stub bot）→ MJAI → `captures/i
 # captures/ 布局再迁移（dry-run 默认；写 MIGRATION_MANIFEST.json，幂等可续跑）
 & $PY scripts/data/migrate_captures_layout.py            # 预览
 & $PY scripts/data/migrate_captures_layout.py --apply --strict
+```
+
+**数据集可视化 / 清理**（YOLO 检测集，完整说明见 [`docs/dataset_review.md`](docs/dataset_review.md)）：
+
+```powershell
+& $PY -m pip install fiftyone                               # 一次性（会把 protobuf 升到 7.x）
+& $PY scripts/inspect/fiftyone_view.py                      # FiftyOne GUI：按 game/split/类别筛选 → 给坏帧打 tag reject
+& $PY scripts/inspect/fiftyone_view.py --export-clean datasets/detector_clean   # 导出剔除 reject 的干净 train/val
+# CVAT 修框往返：export 打包 → CVAT 改框 → import 无损写回 datasets/<game>/yolo/labels/
+& $PY scripts/inspect/cvat_export.py --game precise_ai_run_1 --out cvat_pkg --zip
+& $PY scripts/inspect/cvat_import.py 你从CVAT导出的.zip --dry-run
 ```
 
 ### 测试（10 套，普通脚本、兼容 pytest）
