@@ -49,8 +49,10 @@ mlruns/
 *.tflite
 
 # Large model weights — kept locally, too big for GitHub's 50MB limit.
-# (small classifier weights majsoul_eye/recognize/tile_classifier*.pt stay tracked)
+# Only the production classifier majsoul_eye/recognize/tile_classifier.pt stays tracked;
+# all backup variants (tile_classifier_*.pt) and every detector weight are local-only.
 majsoul_eye/recognize/tile_detector*.pt
+majsoul_eye/recognize/tile_classifier_*.pt
 /yolo*.pt
 
 out/
