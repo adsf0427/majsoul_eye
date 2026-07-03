@@ -65,7 +65,7 @@ def main() -> None:
 
     from majsoul_eye import paths
     from majsoul_eye.tiles import NAME_TO_ID
-    from majsoul_eye.state.replay import check_invariants
+    from majsoul_eye.state.replay import check_invariants, is_deal_window
     from majsoul_eye.capture.gtframes import build_seq_state, load_frames
     from majsoul_eye.annotate import build_homographies, annotate_frame, iter_tile_boxes, crop_box
 
@@ -83,8 +83,9 @@ def main() -> None:
                 if line:
                     r = json.loads(line)
                     recs[r["seq"]] = r
-        # invariant filter still available (cheap replay; only annotate_frame is skipped)
-        seq_state = build_seq_state(args.capture) if args.drop_violations else {}
+        # cheap replay (only annotate_frame is skipped): feeds the deal-window drop
+        # and, under --drop-violations, the invariant filter.
+        seq_state = build_seq_state(args.capture)
         hom = None
         seqs = sorted(recs)
         print(f"reuse: {len(recs)} records <- {ann_path}")
@@ -99,12 +100,17 @@ def main() -> None:
     for d in (crops_dir, img_dir, lbl_dir):
         os.makedirs(d, exist_ok=True)
 
-    n_frames = n_crops = n_yolo = n_skip = n_letterbox = 0
+    n_frames = n_crops = n_yolo = n_skip = n_letterbox = n_deal = 0
     for seq in seqs:
         if seq not in frames:
             continue
+        state = seq_state.get(seq)
+        # Deal-in animation frame (hand still dealing/sorting, GT boxes don't match
+        # the pixels) — drop from crops AND YOLO. See state.replay.is_deal_window.
+        if is_deal_window(state):
+            n_deal += 1
+            continue
         if args.drop_violations:
-            state = seq_state.get(seq)
             if state is None or check_invariants(state):
                 n_skip += 1
                 continue
@@ -159,7 +165,7 @@ def main() -> None:
         n_frames += 1
 
     print(f"frames labeled: {n_frames}  crops: {n_crops}  yolo-imgs: {n_yolo}  "
-          f"skipped: {n_skip}  letterbox-skipped: {n_letterbox}")
+          f"skipped: {n_skip}  deal-skipped: {n_deal}  letterbox-skipped: {n_letterbox}")
     print(f"dataset -> {args.out}")
 
 

@@ -113,6 +113,26 @@ def test_note_relevance_gate():
     assert s._pending_key == 7
 
 
+def test_note_skips_deal_window_until_first_discard():
+    # The deal-in animation (~2-3s) shows an unsorted/incomplete hand that won't
+    # match GT, so no frame in [start_kyoku .. first dahai) should be armed. The
+    # bridge bundles [start_kyoku, tsumo] into one deal record.
+    clock = FakeClock()
+    s = _mk(lambda: _img(1), clock)
+    s.note([{"type": "start_kyoku"}, {"type": "tsumo", "actor": 0, "pai": "?"}], 10)
+    assert s._pending_key is None                     # deal frame not armed
+    s.note([{"type": "tsumo", "actor": 1, "pai": "?"}], 11)
+    assert s._pending_key is None                     # pre-first-discard draw also skipped
+    s.note([{"type": "dahai", "actor": 0, "pai": "1m"}], 12)
+    assert s._pending_key == 12                       # first discard ends the window -> armed
+    s.note([{"type": "tsumo", "actor": 1, "pai": "?"}], 13)
+    assert s._pending_key == 13                       # normal capture resumes
+    # next kyoku's deal is suppressed again
+    s._fulfilled = 13
+    s.note([{"type": "start_kyoku"}, {"type": "tsumo", "actor": 0, "pai": "?"}], 20)
+    assert s._pending_key == 13                       # unchanged: new deal frame not armed
+
+
 def test_waits_for_picture_to_stabilize():
     # discard animation: frames change, then settle. Capture only once still.
     clock = FakeClock()

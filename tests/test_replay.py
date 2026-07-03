@@ -113,6 +113,30 @@ def test_called_tile_not_double_counted():
     assert check_invariants(s) == []                   # 3 + 1 == 4; old checker saw 5
 
 
+def test_is_deal_window_true_until_first_discard():
+    # The deal-in animation (~2-3s) plays from start_kyoku until the first dahai;
+    # a frame there shows an unsorted/incomplete hero hand that won't match GT.
+    # is_deal_window keys off "no discard yet" (rivers all empty), which is robust
+    # to the bridge bundling [start_kyoku, tsumo] into one record (last_event=='tsumo').
+    from majsoul_eye.state.replay import Replayer, is_deal_window
+    rp = Replayer()
+    rp.apply({"type": "start_game", "id": 0})
+    assert is_deal_window(rp.state) is False          # no kyoku started yet
+    rp.apply(_events()[1])                             # start_kyoku
+    assert is_deal_window(rp.state) is True            # dealt, no discard
+    rp.apply({"type": "tsumo", "actor": 1, "pai": "?"})
+    assert rp.state.last_event == "tsumo"
+    assert is_deal_window(rp.state) is True            # still no discard (last_event!=start_kyoku)
+    rp.apply({"type": "dahai", "actor": 1, "pai": "E", "tsumogiri": True})
+    assert is_deal_window(rp.state) is False           # first discard ended the deal window
+
+
+def test_is_deal_window_false_after_round_ends():
+    from majsoul_eye.state.replay import is_deal_window
+    s = _run()                                         # full kyoku incl. discards then end_kyoku
+    assert is_deal_window(s) is False
+
+
 def test_leftTileCount_extracted_from_camelcase():
     # Regression (real capture): Majsoul sends 'leftTileCount', not 'left_tile_count'.
     class _Rec:

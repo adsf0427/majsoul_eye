@@ -158,6 +158,11 @@ def main() -> None:
         liqi.LiqiMethod.checkNetworkDelay, liqi.LiqiMethod.heartbeat, liqi.LiqiMethod.loginBeat,
         liqi.LiqiMethod.fetchAccountActivityData, liqi.LiqiMethod.fetchServerTime,
     }
+    # ActionPrototype names whose frame is the deal-in animation (~2-3s): the hero
+    # hand is still dealing/sorting and undealt slots are empty, so a screenshot here
+    # won't match GT. Don't arm a shot for them (the annotator also drops this window
+    # via state.replay.is_deal_window). ActionMJStart is the pre-deal VS splash.
+    DEAL_ACTION_NAMES = {"ActionMJStart", "ActionNewRound"}
 
     def on_ws(ws):
         if "game" not in ws.url:                        # only the game-gateway socket carries ActionPrototype
@@ -395,8 +400,9 @@ def main() -> None:
                 game_state.kyoku_just_ended = False
 
                 if method == liqi.LiqiMethod.ActionPrototype:   # board changed -> arm a screenshot
-                    pending_seq = seq
-                    last_event_t = time.time()
+                    if (msg.get("data") or {}).get("name") not in DEAL_ACTION_NAMES:
+                        pending_seq = seq                        # skip the deal-in animation frame
+                        last_event_t = time.time()
 
                 if reaction:
                     rtype = reaction.get("type")

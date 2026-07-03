@@ -265,6 +265,23 @@ class Replayer:
         self.state.ended = True
 
 
+# --- frame-quality predicates -----------------------------------------------
+
+def is_deal_window(s: BoardState) -> bool:
+    """True during the deal-in animation window: a kyoku has started but no discard
+    has happened yet (``rivers`` all empty).
+
+    Such frames show the hero hand still dealing/sorting (unsorted tiles, some slots
+    still empty), so GT hand boxes are placed at sorted positions that don't match
+    the pixels — DROP them from training crops / detector labels (and don't bother
+    capturing them). ``rivers``-empty is mode-agnostic (3P/4P, no wall-size magic
+    number) and robust to the bridge bundling ``start_kyoku`` + the dealer's first
+    ``tsumo`` into ONE record (which makes ``last_event == 'start_kyoku'`` miss the
+    deal frame entirely). It flips to False on the very first ``dahai`` of the kyoku.
+    """
+    return s is not None and s.in_round and sum(len(r) for r in s.rivers) == 0
+
+
 # --- invariants -------------------------------------------------------------
 
 def check_invariants(s: BoardState) -> list[str]:

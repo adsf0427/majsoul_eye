@@ -47,6 +47,7 @@ from majsoul_eye.annotate import pipeline as P
 from majsoul_eye import paths
 from majsoul_eye.annotate.frame import annotate_frame, crop_quad
 from majsoul_eye.capture.gtframes import build_seq_state, load_frames
+from majsoul_eye.state.replay import is_deal_window
 
 
 def render_overlay(img: np.ndarray, rec: dict, path: str) -> None:
@@ -102,19 +103,16 @@ def _process_capture(cap, cfg):
     hom = P.build_homographies(1920, 1080)
 
     try:
-        seqs = [s for s in sorted(seq_state) if s in frames]
-        # first 2 board-changing seqs of each kyoku = deal animation window
-        suspect_seqs = set()
-        last_kyoku, fresh = None, 0
-        for s in sorted(seq_state):
-            st = seq_state[s]
-            kyo = f"{st.bakaze}{st.kyoku}.{getattr(st, 'honba', 0)}"
-            if kyo != last_kyoku:
-                last_kyoku, fresh = kyo, 2
-            if fresh > 0:
-                suspect_seqs.add(s)
-                fresh -= 1
+        # Drop the deal-in animation frames (start_kyoku .. first discard): the hero
+        # hand is still dealing/sorting, so GT boxes don't match the pixels. rivers-
+        # empty (state.replay.is_deal_window) is the robust GT signal — it supersedes
+        # the old ordinal "first 2 seqs" heuristic, which tainted the good first-
+        # discard frame AND missed the deal frame (start_kyoku+tsumo bundle into one
+        # record, so last_event reads 'tsumo').
+        all_board = [s for s in sorted(seq_state) if s in frames]
+        seqs = [s for s in all_board if not is_deal_window(seq_state[s])]
         stats = defaultdict(float)
+        stats["deal_dropped"] = len(all_board) - len(seqs)
         qa = defaultdict(lambda: [0, 0])         # zone -> [n, correct]
         qa_bad = []
         out_path = os.path.join(cfg["out"], f"{name}.jsonl")
@@ -125,8 +123,7 @@ def _process_capture(cap, cfg):
                     continue
                 if img.shape[1] != 1920:
                     img = cv2.resize(img, (1920, 1080), interpolation=cv2.INTER_AREA)
-                rec = annotate_frame(img, seq_state[seq], hom,
-                                     hand_suspect=(seq in suspect_seqs))
+                rec = annotate_frame(img, seq_state[seq], hom)
                 rec["capture"] = name
                 rec["seq"] = seq
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -200,7 +197,8 @@ def _process_capture(cap, cfg):
     if clf is not None:
         qa_str = "  QA " + " ".join(f"{z}:{v['agree']}" for z, v in s["qa"].items() if v["n"])
     dora_pct = 100 * s.get("dora_ok", 0) / max(1, s.get("dora_boxes", 1))
-    print(f"{name}: {s['frames']} frames  river {s.get('river_boxes',0)} boxes ({riv_pct:.1f}% ok, "
+    print(f"{name}: {s['frames']} frames (deal-dropped {s.get('deal_dropped',0)})  "
+          f"river {s.get('river_boxes',0)} boxes ({riv_pct:.1f}% ok, "
           f"{s.get('river_unrendered',0)} unrendered)  meld {s.get('meld_boxes',0)} ({meld_pct:.1f}% ok)"
           f"  hand {s.get('hand_boxes',0)}  dora {s.get('dora_boxes',0)} ({dora_pct:.1f}% ok){qa_str}", flush=True)
     return name, s

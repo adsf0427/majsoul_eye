@@ -76,6 +76,7 @@ class FrameSyncer:
 
         self._lock = threading.Lock()
         self._pending_key: Optional[int] = None    # latest board-changing seq not yet captured
+        self._in_deal_window = False                # start_kyoku..first-dahai: skip captures
         self._last_event_t: float = 0.0
         self._pending_since: float = 0.0
         self._fulfilled: Optional[int] = None
@@ -105,7 +106,19 @@ class FrameSyncer:
         the message carried a board-changing event. `key` is the record seq."""
         if key is None or not mjai_list:
             return
-        if any(ev.get("type") in RELEVANT_EVENTS for ev in mjai_list):
+        types = [ev.get("type") for ev in mjai_list]
+        # The deal-in animation (~2-3s) plays from `start_kyoku` until the first
+        # `dahai`; a frame in that window shows an unsorted/incomplete hero hand
+        # that won't match GT, so never capture it. (The annotator drops the same
+        # window again via state.is_deal_window — this just avoids wasting a grab.)
+        if "start_kyoku" in types:
+            self._in_deal_window = True
+        if self._in_deal_window:
+            if "dahai" in types:
+                self._in_deal_window = False       # first discard settled the board
+            else:
+                return                             # inside the deal window → skip
+        if any(t in RELEVANT_EVENTS for t in types):
             self.on_event(key)
 
     # --- worker -------------------------------------------------------------
