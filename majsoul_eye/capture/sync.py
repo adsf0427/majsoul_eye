@@ -6,8 +6,9 @@ MITM thread, so capture is asynchronous.
 Strategy: **debounce-to-quiet**. Each board-changing event updates a single
 "pending key" and resets a quiet timer. A worker captures ONE frame once no new
 event has arrived for `quiet` seconds (the board action has paused — typically
-hero's turn), tagging it with the latest key. A `settle_cap` forces a capture if
-a burst runs long.
+hero's turn), tagging it with the latest key. On a long burst, `settle_cap`
+promotes the capture to a best-effort one — it still requires ONE ROI-stable
+frame (so it waits out the discard animation), rather than grabbing immediately.
 
 The key is the recorder's **global monotonic record `seq`** — NOT Majsoul's
 `last_op_step`, which RESETS every kyoku (so `<step>.png` filenames collide and
