@@ -73,6 +73,44 @@ def gate_frame(frame, boxes, crops, clf, tau, max_bad):
     return {upright_idx[i] for i in bad}
 
 
+def box_quad(box):
+    """The box's 4 corner points ``[TL, TR, BR, BL]`` in ORIGINAL px.
+
+    River/meld boxes carry an ordered perspective quad (``poly_original``, already
+    in getPerspectiveTransform corner order — see annotate.frame.crop_quad); hand/
+    dora carry an axis-aligned ``px_box`` we expand to a rectangle (angle 0). This
+    is the single source of geometry for both the OBB and HBB label formats.
+    """
+    if box.poly_original is not None:
+        return [[float(x), float(y)] for x, y in box.poly_original]
+    x0, y0, x1, y1 = (float(v) for v in box.px_box)
+    return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+
+
+def _clip01(v):
+    return 0.0 if v < 0.0 else (1.0 if v > 1.0 else v)
+
+
+def obb_label_line(cls, quad, w, h):
+    """Ultralytics OBB label: ``cls x1 y1 x2 y2 x3 y3 x4 y4`` (normalized, clipped
+    to [0,1]), preserving the quad's corner order — keeps the tile's real rotation
+    (riichi-sideways discards, called melds, far seats)."""
+    coords = " ".join(f"{_clip01(x / w):.6f} {_clip01(y / h):.6f}" for x, y in quad)
+    return f"{cls} {coords}"
+
+
+def hbb_label_line(cls, quad, w, h):
+    """Ultralytics HBB label: ``cls cx cy bw bh`` (normalized), the axis-aligned
+    bbox of the quad (the historical detector format)."""
+    xs = [p[0] for p in quad]
+    ys = [p[1] for p in quad]
+    x0, x1 = min(xs), max(xs)
+    y0, y1 = min(ys), max(ys)
+    cx, cy = (x0 + x1) / 2 / w, (y0 + y1) / 2 / h
+    bw, bh = (x1 - x0) / w, (y1 - y0) / h
+    return f"{cls} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}"
+
+
 def main() -> None:
     # Lightweight (numpy-only) import, needed early for the --occ-tau/--occ-max-bad
     # argparse defaults; the heavier cv2/torch imports stay deferred past parse_args().
@@ -89,6 +127,9 @@ def main() -> None:
                          "train/inference; a larger saved crop gives augmentation headroom.")
     ap.add_argument("--no-crops", action="store_true", help="Skip classifier crops.")
     ap.add_argument("--no-yolo", action="store_true", help="Skip YOLO detector labels.")
+    ap.add_argument("--obb", action="store_true",
+                    help="Emit ORIENTED 8-point labels (cls x1 y1..x4 y4) from the perspective "
+                         "quads instead of axis-aligned HBB (cls cx cy w h). Train a *-obb model.")
     ap.add_argument("--from-annotations", metavar="DIR", default=None,
                     help="Reuse annotate_ai_session records from DIR/<capture-stem>.jsonl "
                          "instead of re-running annotate_frame (no warp/mask recompute).")
@@ -102,7 +143,6 @@ def main() -> None:
     args = ap.parse_args()
 
     import cv2  # auto env
-    import numpy as np
 
     from majsoul_eye import paths
     from majsoul_eye.tiles import NAME_TO_ID
@@ -199,17 +239,13 @@ def main() -> None:
             cls = NAME_TO_ID.get(box.tile)
             if cls is None:
                 continue
-            # axis-aligned bbox (px) for YOLO, from the quad (river/meld) or px_box (hand/dora)
-            if box.poly_original is not None:
-                p = np.asarray(box.poly_original, dtype=np.float32)
-                x0, y0 = float(p[:, 0].min()), float(p[:, 1].min())
-                x1, y1 = float(p[:, 0].max()), float(p[:, 1].max())
-            else:
-                x0, y0, x1, y1 = (float(v) for v in box.px_box)
             if not args.no_yolo:
-                cx, cy = (x0 + x1) / 2 / w, (y0 + y1) / 2 / h
-                bw, bh = (x1 - x0) / w, (y1 - y0) / h
-                yolo_lines.append(f"{cls} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
+                # OBB keeps the perspective quad's rotation; HBB collapses it to an
+                # axis-aligned bbox (both from the same box_quad — river/meld quad or
+                # hand/dora rectangle).
+                quad = box_quad(box)
+                yolo_lines.append(obb_label_line(cls, quad, w, h) if args.obb
+                                  else hbb_label_line(cls, quad, w, h))
             # classifier crop: skip sideways (upright orientation not geometry-recoverable)
             if not args.no_crops and not box.sideways:
                 crop = crop_box(frame, box, size=args.crop_size)
