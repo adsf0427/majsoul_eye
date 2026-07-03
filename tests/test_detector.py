@@ -9,6 +9,8 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "train"))
 import build_detector_dataset as bdd  # noqa: E402
+import train_detector as td  # noqa: E402
+import build_dataset as bd  # noqa: E402
 
 from majsoul_eye.tiles import TILE_NAMES, NUM_CLASSES  # noqa: E402
 
@@ -94,6 +96,96 @@ def test_parse_data_arg():
     assert name == "g1"
     assert ydir == "datasets/precise_ai_run_3_game1/yolo"
     assert cap == "cap.jsonl"
+
+
+def test_resolve_device():
+    # '' = historical auto: GPU 0 when CUDA present, else CPU
+    assert td.resolve_device("", True) == 0
+    assert td.resolve_device("", False) == "cpu"
+    # explicit cpu (case-insensitive)
+    assert td.resolve_device("cpu", True) == "cpu"
+    assert td.resolve_device("CPU", True) == "cpu"
+    # single GPU -> int (keeps the single-device semantics of the old default)
+    assert td.resolve_device("0", True) == 0
+    assert td.resolve_device("3", True) == 3
+    # multi-GPU -> comma string for ultralytics DDP; whitespace tolerated
+    assert td.resolve_device("0,1,2,3", True) == "0,1,2,3"
+    assert td.resolve_device(" 0, 1 ", True) == "0,1"
+
+
+def test_box_quad_and_label_lines():
+    from types import SimpleNamespace
+    # river/meld: ordered perspective quad [TL,TR,BR,BL] passes through verbatim
+    qbox = SimpleNamespace(poly_original=[[10, 10], [30, 12], [28, 40], [8, 38]], px_box=None)
+    q = bd.box_quad(qbox)
+    assert q == [[10.0, 10.0], [30.0, 12.0], [28.0, 40.0], [8.0, 38.0]]
+    # OBB = 8 normalized corner coords, same point order
+    assert bd.obb_label_line(5, q, 100, 100) == \
+        "5 0.100000 0.100000 0.300000 0.120000 0.280000 0.400000 0.080000 0.380000"
+    # HBB = axis-aligned bbox of the quad (x:8..30, y:10..40) -> cx cy w h
+    assert bd.hbb_label_line(5, q, 100, 100) == "5 0.190000 0.250000 0.220000 0.300000"
+
+    # hand/dora: axis-aligned px_box expands to a rectangle quad (angle 0)
+    rbox = SimpleNamespace(poly_original=None, px_box=[10, 20, 50, 60])
+    assert bd.box_quad(rbox) == [[10.0, 20.0], [50.0, 20.0], [50.0, 60.0], [10.0, 60.0]]
+
+    # out-of-frame coords clamp to [0,1]
+    assert bd.obb_label_line(1, [[-5, 0], [110, 0], [110, 50], [-5, 50]], 100, 100) == \
+        "1 0.000000 0.000000 1.000000 0.000000 1.000000 0.500000 0.000000 0.500000"
+
+
+def test_parse_result_hbb_and_obb():
+    import numpy as np
+    from types import SimpleNamespace
+    from majsoul_eye.recognize.detector import _parse_result
+
+    # HBB model: detections live in res.boxes; no obb attr -> poly stays None
+    b = SimpleNamespace(cls=np.array([5.]), xyxy=np.array([[1., 2., 3., 4.]]), conf=np.array([0.9]))
+    dets = _parse_result(SimpleNamespace(boxes=[b]))
+    assert len(dets) == 1
+    d = dets[0]
+    assert d.cls == 5 and d.tile == TILE_NAMES[5] and d.xyxy == (1., 2., 3., 4.)
+    assert d.score == 0.9 and d.poly is None
+
+    # OBB model: detections live in res.obb; xyxy = enclosing bbox, poly = 4 corners
+    o = SimpleNamespace(cls=np.array([7.]), conf=np.array([0.8]),
+                        xyxy=np.array([[8., 10., 30., 40.]]),
+                        xyxyxyxy=np.array([[[10., 10.], [30., 12.], [28., 40.], [8., 38.]]]))
+    dets = _parse_result(SimpleNamespace(obb=[o], boxes=None))
+    assert len(dets) == 1
+    d = dets[0]
+    assert d.cls == 7 and d.tile == TILE_NAMES[7] and d.xyxy == (8., 10., 30., 40.)
+    assert d.poly == ((10., 10.), (30., 12.), (28., 40.), (8., 38.))
+
+    # OBB model with zero detections must NOT fall through to boxes=None (would crash)
+    assert _parse_result(SimpleNamespace(obb=[], boxes=None)) == []
+
+
+def test_detector_obb_wrapper_smoke():
+    """End-to-end OBB path; skipped unless ultralytics + the OBB weight exist."""
+    import glob
+    weights = "weights/detector/tile_detector_obb.pt"
+    try:
+        import ultralytics  # noqa: F401
+    except ImportError:
+        print("  (skip obb smoke: ultralytics not installed)")
+        return
+    if not os.path.exists(weights):
+        print(f"  (skip obb smoke: {weights} not trained yet)")
+        return
+    import cv2
+    from majsoul_eye.recognize.detector import TileDetector
+    det = TileDetector(weights)
+    imgs = glob.glob("datasets/obb_precise_ai_run_8_game1/yolo/images/*.png")
+    if not imgs:
+        print("  (skip obb smoke: no OBB frames on disk)")
+        return
+    dets = det.predict(cv2.imread(sorted(imgs)[300]))
+    assert isinstance(dets, list) and dets, "OBB model returned no detections"
+    for d in dets:
+        assert d.tile in TILE_NAMES and 0.0 <= d.score <= 1.0
+        assert d.poly is not None and len(d.poly) == 4        # oriented 4-corner box
+    print(f"  (obb smoke: {len(dets)} oriented detections)")
 
 
 def test_detector_wrapper_smoke():

@@ -33,6 +33,9 @@ captures/
 datasets/
 *.jsonl
 *.jsonl.log
+# Deal-frame purge manifest — regenerable via purge_deal_frames.py --write-manifest;
+# describes a local (gitignored) datasets/ snapshot, so it's a transfer artifact, not source.
+deal_manifest*.json
 
 # Browser/runtime data
 .spike_browser_data/
@@ -54,6 +57,15 @@ mlruns/
 majsoul_eye/recognize/tile_detector*.pt
 majsoul_eye/recognize/tile_classifier_*.pt
 /yolo*.pt
+
+# weights/ — pretrained base seeds (weights/pretrained/) + optional detector
+# variants (weights/detector/, e.g. AABB vs OBB). Blobs are local-only; the folder
+# structure + README.md + .gitkeep stay tracked so the convention is versioned.
+weights/**/*.pt
+weights/**/*.onnx
+weights/**/*.engine
+weights/**/*.tflite
+weights/**/*.pth
 
 out/
 scratchpad/
