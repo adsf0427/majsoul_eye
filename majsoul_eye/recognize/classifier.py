@@ -49,7 +49,7 @@ def preprocess(bgr: np.ndarray) -> torch.Tensor:
 class TileClassifier:
     """Inference wrapper: list of BGR crops → list of tile names."""
 
-    def __init__(self, weights: str, device: str = "cpu"):
+    def __init__(self, weights: str = "majsoul_eye/recognize/tile_classifier.pt", device: str = "cpu"):
         self.device = device
         self.model = TileNet().to(device)
         self.model.load_state_dict(torch.load(weights, map_location=device))
@@ -62,3 +62,13 @@ class TileClassifier:
         batch = torch.stack([preprocess(c) for c in crops]).to(self.device)
         idx = self.model(batch).argmax(1).cpu().numpy()
         return [TILE_NAMES[i] for i in idx]
+
+    @torch.no_grad()
+    def predict_proba(self, crops: list[np.ndarray]) -> np.ndarray:
+        """Softmax class distributions, shape (len(crops), 38). Column j == TILE_NAMES[j]."""
+        if not crops:
+            return np.zeros((0, len(TILE_NAMES)), dtype=np.float32)
+        batch = torch.stack([preprocess(c) for c in crops]).to(self.device)
+        logits = self.model(batch)
+        probs = torch.softmax(logits, dim=1)
+        return probs.cpu().numpy().astype(np.float32)

@@ -25,6 +25,22 @@ def test_preprocess_shape_and_norm():
     assert abs(float(t.mean())) < 0.2   # 128/255 normalized ~ 0
 
 
+def test_predict_proba_shape_and_normalization():
+    from majsoul_eye.recognize.classifier import TileClassifier
+    clf = TileClassifier()  # loads production weights
+    crops = [np.full((64, 64, 3), 200, np.uint8), np.zeros((64, 64, 3), np.uint8)]
+    probs = clf.predict_proba(crops)
+    assert probs.shape == (2, 38), probs.shape
+    row_sums = probs.sum(axis=1)
+    assert np.allclose(row_sums, 1.0, atol=1e-4), row_sums
+    # predict() must agree with argmax of predict_proba()
+    names = clf.predict(crops)
+    from majsoul_eye.tiles import TILE_NAMES
+    assert names == [TILE_NAMES[i] for i in probs.argmax(1)]
+    assert clf.predict_proba([]).shape == (0, 38)
+    print("test_predict_proba_shape_and_normalization OK")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
