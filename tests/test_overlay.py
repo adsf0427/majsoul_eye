@@ -130,6 +130,33 @@ def test_overlay_start_stop_runs_ticks():
     assert not o._thread.is_alive()           # stop() joined the daemon
 
 
+def test_autoplay_ai_exposes_overlay_flags():
+    import argparse
+    import importlib.util
+    path = os.path.join(os.path.dirname(__file__), "..", "scripts", "capture", "autoplay_ai.py")
+    spec = importlib.util.spec_from_file_location("autoplay_ai_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    # rebuild the parser the way main() does, up to parse — assert our flags are present
+    seen = {}
+    real_parse = argparse.ArgumentParser.parse_args
+    def capture_parse(self, *a, **k):
+        for act in self._actions:
+            seen[tuple(act.option_strings)] = act
+        raise SystemExit(0)                       # stop before it touches the network
+    argparse.ArgumentParser.parse_args = capture_parse
+    try:
+        try:
+            mod.main()
+        except SystemExit:
+            pass
+    finally:
+        argparse.ArgumentParser.parse_args = real_parse
+    flat = {opt for opts in seen for opt in opts}
+    for flag in ("--overlay", "--detector-weights", "--overlay-fps", "--overlay-conf", "--overlay-device"):
+        assert flag in flat, f"missing flag {flag}"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

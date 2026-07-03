@@ -93,9 +93,18 @@ def main() -> None:
                     help="Table-ROI frame-diff below this == settled (discard animation done).")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
+    ap.add_argument("--overlay", action="store_true",
+                    help="Draw the tile detector's boxes live onto the browser (visualizer; off by default).")
+    ap.add_argument("--detector-weights", default="majsoul_eye/recognize/tile_detector.pt",
+                    help="Detector weights for --overlay (pass weights/detector/tile_detector_obb.pt for rotated OBB polys).")
+    ap.add_argument("--overlay-fps", type=float, default=12.0, help="Overlay redraw rate (Hz).")
+    ap.add_argument("--overlay-conf", type=float, default=0.25, help="Detector confidence threshold for the overlay.")
+    ap.add_argument("--overlay-device", default="cuda", help="Torch device for the overlay detector (cuda/cpu).")
     ap.add_argument("--mjc", default=MJC, help="Path to the MahjongCopilot repo.")
     args = ap.parse_args()
     url = args.url or SERVERS[args.server]
+    from majsoul_eye.capture import overlay as overlay_mod   # light: no ultralytics until detector built
+    overlay_canvas_id = overlay_mod.OVERLAY_CANVAS_ID if args.overlay else None
 
     # --- env setup: chdir into MahjongCopilot so its data files (liqi.json, models) resolve,
     #     and drop CWD from sys.path so its bundled cp311 libriichi can't shadow site-packages cp312.
@@ -211,10 +220,18 @@ def main() -> None:
         if cdp is None:
             return None
         rq: queue.Queue = queue.Queue()
+        cid = overlay_canvas_id
         def _do():
             try:
-                res = cdp.send("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False})
-                rq.put(base64.b64decode(res["data"]))
+                if cid:
+                    browser.page.evaluate(overlay_mod.hide_canvas_js(cid))
+                try:
+                    res = cdp.send("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False})
+                    data = base64.b64decode(res["data"])
+                finally:
+                    if cid:
+                        browser.page.evaluate(overlay_mod.show_canvas_js(cid))
+                rq.put(data)
             except Exception:
                 rq.put(None)
         browser._action_queue.put(_do)
@@ -369,6 +386,19 @@ def main() -> None:
             fh.write(png)
         fulfilled_seq = pending_seq
 
+    overlay = None
+    if args.overlay:
+        eval_js = lambda js: browser._action_queue.put(lambda: browser.page.evaluate(js))
+        overlay = overlay_mod.DetectionOverlay(
+            capture_png=screenshot_png, eval_js=eval_js,
+            weights=args.detector_weights, device=args.overlay_device,
+            fps=args.overlay_fps, conf=args.overlay_conf,
+            canvas_id=overlay_canvas_id,
+        )
+        print(f"[overlay] loading detector {args.detector_weights} on {args.overlay_device} …", flush=True)
+        overlay.start()
+        print(f"[overlay] live @ {args.overlay_fps:g} fps", flush=True)
+
     print("Watching. Ctrl-C to stop.\n", flush=True)
     try:
         while True:
@@ -465,6 +495,8 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nstopping …", flush=True)
     finally:
+        if overlay is not None:
+            overlay.stop()
         if game_raw_fh is not None:
             game_raw_fh.close()
         try:
