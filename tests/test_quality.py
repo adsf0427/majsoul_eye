@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from majsoul_eye.label.quality import tile_face_fraction, is_tile_present
+from majsoul_eye.label.quality import tile_face_fraction, tile_back_fraction, is_tile_present
 
 
 def _felt(h=80, w=64):
@@ -57,6 +57,29 @@ def test_threshold_boundary():
     img[:16, :] = 200   # 16/80 = 0.20
     assert not is_tile_present(img)
     assert is_tile_present(img, min_face_frac=0.15)
+
+
+def _back(h=80, w=64):
+    # face-down tile back: warm orange/tan (BGR), R appreciably > B (measured ~(52,138,209))
+    img = np.zeros((h, w, 3), np.uint8)
+    img[:, :, 0] = 52    # B
+    img[:, :, 1] = 138   # G
+    img[:, :, 2] = 209   # R
+    return img
+
+
+def test_tile_back_scores_high_on_back_fraction_not_face_fraction():
+    # a face-down tile is neither felt nor a white face -- must still count as "present"
+    b = _back()
+    assert tile_face_fraction(b) < 0.05          # not white/cream
+    assert tile_back_fraction(b) > 0.9            # but is warm/orange
+    assert is_tile_present(b)                     # so is_tile_present recognizes it
+
+
+def test_felt_scores_near_zero_on_back_fraction_too():
+    # felt (B > R) must not be mistaken for a tile back (R > B)
+    assert tile_back_fraction(_felt()) < 0.05
+    assert not is_tile_present(_felt())
 
 
 if __name__ == "__main__":

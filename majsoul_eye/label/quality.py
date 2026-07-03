@@ -12,6 +12,13 @@ A mean-brightness gate does NOT catch this: the blue table felt has mean brightn
 while the felt is blue (B high, R/G low). Empirically (session6, 6k cells): real
 tiles have face-fraction ~0.58-0.79; empty/partial felt ~0.0-0.11. A 0.35 cut
 keeps ~99.7% of real tiles and drops ~75% of empty cells.
+
+A face-down tile (GT class `back`: opponents' concealed hand, unrevealed dora
+indicators) has neither a face nor felt in the crop — it is a distinct warm
+orange/tan sprite (measured: mean BGR ~(52,138,209), i.e. R appreciably > B),
+the exact color-channel inversion of the blue felt (measured: mean BGR
+~(152,90,60), B > R). The **tile-back fraction** below catches this so a
+correctly-rendered face-down tile isn't misjudged as empty felt.
 """
 
 from __future__ import annotations
@@ -20,6 +27,7 @@ import numpy as np
 
 WHITE_THRESH = 140       # a pixel is "tile-face" if min(B,G,R) >= this (white/cream)
 MIN_FACE_FRAC = 0.35     # cell is "empty/in-flight" below this fraction of tile-face pixels
+BACK_WARM_MARGIN = 60    # a pixel is "tile-back" if R-B >= this (warm orange vs blue felt)
 
 
 def tile_face_fraction(crop_bgr: np.ndarray, white_thresh: int = WHITE_THRESH) -> float:
@@ -35,7 +43,23 @@ def tile_face_fraction(crop_bgr: np.ndarray, white_thresh: int = WHITE_THRESH) -
     return float((a.min(axis=2) >= white_thresh).mean())
 
 
+def tile_back_fraction(crop_bgr: np.ndarray, warm_margin: int = BACK_WARM_MARGIN) -> float:
+    """Fraction of pixels that look like a face-down tile back (warm orange/tan).
+
+    Felt is blue-dominant (B > R); the tile-back sprite is orange-dominant (R > B)
+    by a wide, reliably-separated margin. Returns 0.0 for a grayscale/empty crop
+    (hue can't be judged without color channels)."""
+    a = np.asarray(crop_bgr)
+    if a.size == 0 or a.ndim != 3:
+        return 0.0
+    b = a[:, :, 0].astype(np.int16)
+    r = a[:, :, 2].astype(np.int16)
+    return float((r - b >= warm_margin).mean())
+
+
 def is_tile_present(crop_bgr: np.ndarray, min_face_frac: float = MIN_FACE_FRAC,
                     white_thresh: int = WHITE_THRESH) -> bool:
-    """True if a tile is actually rendered in this cell (vs empty felt / in-flight)."""
-    return tile_face_fraction(crop_bgr, white_thresh) >= min_face_frac
+    """True if a tile is actually rendered in this cell (face-up or face-down),
+    vs empty felt / in-flight."""
+    return (tile_face_fraction(crop_bgr, white_thresh) >= min_face_frac
+            or tile_back_fraction(crop_bgr) >= min_face_frac)
