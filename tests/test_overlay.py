@@ -74,6 +74,62 @@ def test_canvas_id_constant():
     assert ov.OVERLAY_CANVAS_ID == "majsoul_eye_overlay"
 
 
+def _png_bytes(w=128, h=72):
+    import cv2
+    import numpy as np
+    ok, buf = cv2.imencode(".png", np.zeros((h, w, 3), np.uint8))
+    assert ok
+    return buf.tobytes()
+
+
+class _FakeDetector:
+    def __init__(self, dets):
+        self.dets = dets
+        self.calls = 0
+
+    def predict(self, bgr):
+        self.calls += 1
+        return self.dets
+
+
+def test_overlay_tick_injects_once_then_renders():
+    js_log = []
+    det = _FakeDetector([_hbb([1, 2, 3, 4], "5m", 4, 0.9)])
+    o = ov.DetectionOverlay(capture_png=_png_bytes, eval_js=js_log.append,
+                            weights="unused", canvas_id="cid", detector=det)
+    o._tick()
+    # first tick: inject (sized to the 128x72 png) THEN render
+    assert len(js_log) == 2
+    assert "createElement" in js_log[0] and "c.width=128" in js_log[0] and "c.height=72" in js_log[0]
+    assert "clearRect" in js_log[1]
+    o._tick()
+    # second tick: render only (no re-inject)
+    assert len(js_log) == 3 and "createElement" not in js_log[2]
+    assert det.calls == 2
+
+
+def test_overlay_tick_skips_when_no_png():
+    js_log = []
+    det = _FakeDetector([])
+    o = ov.DetectionOverlay(capture_png=lambda: None, eval_js=js_log.append,
+                            weights="unused", canvas_id="cid", detector=det)
+    o._tick()
+    assert js_log == [] and det.calls == 0
+
+
+def test_overlay_start_stop_runs_ticks():
+    import time
+    js_log = []
+    det = _FakeDetector([])
+    o = ov.DetectionOverlay(capture_png=_png_bytes, eval_js=js_log.append,
+                            weights="unused", fps=50, canvas_id="cid", detector=det)
+    o.start()
+    time.sleep(0.2)
+    o.stop()
+    assert det.calls >= 1                     # the loop ran at least once
+    assert not o._thread.is_alive()           # stop() joined the daemon
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

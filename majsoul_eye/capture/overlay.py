@@ -90,3 +90,76 @@ def show_canvas_js(canvas_id: str) -> str:
     """Restore the overlay canvas after a clean shot."""
     cid = json.dumps(canvas_id)
     return f"(() => {{const c = document.getElementById({cid}); if (c) c.style.visibility = 'visible';}})()"
+
+
+import threading
+import time
+
+
+class DetectionOverlay:
+    """Runs a throttled detect+draw loop on a daemon thread, drawing detector boxes
+    onto the injected canvas. Decoupled from the game/WS loop: it only calls the two
+    injected callables (both must be thread-safe w.r.t. the page).
+
+    ``capture_png`` MUST return a screenshot with the overlay canvas hidden (see
+    ``hide_canvas_js``) so detection runs on clean pixels and dataset frames stay clean.
+    """
+
+    def __init__(self, capture_png, eval_js, weights, device="cuda", fps=12,
+                 conf=0.25, canvas_id=OVERLAY_CANVAS_ID, detector=None):
+        self.capture_png = capture_png
+        self.eval_js = eval_js
+        self.canvas_id = canvas_id
+        self.fps = fps
+        self._weights = weights
+        self._device = device
+        self._conf = conf
+        self._detector = detector          # injectable for tests; else built lazily
+        self._injected = False
+        self._stop = False
+        self._thread = None
+
+    def _ensure_detector(self):
+        if self._detector is None:
+            from ..recognize import TileDetector      # lazy: pulls ultralytics/torch
+            self._detector = TileDetector(self._weights, device=self._device, conf=self._conf)
+        return self._detector
+
+    def _tick(self):
+        png = self.capture_png()
+        if not png:
+            return
+        import cv2
+        import numpy as np
+        bgr = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
+        if bgr is None:
+            return
+        if not self._injected:
+            h, w = bgr.shape[:2]
+            self.eval_js(inject_js(self.canvas_id, w, h))
+            self._injected = True
+        dets = self._ensure_detector().predict(bgr)
+        self.eval_js(render_js(detections_to_ops(dets), self.canvas_id))
+
+    def _run(self):
+        period = 1.0 / max(1e-3, self.fps)
+        while not self._stop:
+            t0 = time.time()
+            try:
+                self._tick()
+            except Exception as e:                    # never let the loop die
+                print(f"  [overlay] tick error: {type(e).__name__}: {e}", flush=True)
+            dt = time.time() - t0
+            if dt < period:
+                time.sleep(period - dt)
+
+    def start(self):
+        self._ensure_detector()                       # load weights once, up front
+        self._stop = False
+        self._thread = threading.Thread(target=self._run, name="det-overlay", daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop = True
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
