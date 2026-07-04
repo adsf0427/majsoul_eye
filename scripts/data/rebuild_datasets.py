@@ -16,22 +16,31 @@ until re-annotated. This driver re-runs the canonical linear pipeline
 It orchestrates the EXISTING scripts as subprocesses (each call is exactly the
 vetted invocation), so there is no reimplemented logic to drift.
 
-SCOPE — the AI (MahjongCopilot) games under ``captures/intermediate/gt`` (the
-games with a playing hero, seat 0). Two of them (``ai_run_5_game2/3``) were
-captured letterboxed and use de-letterboxed frames from
-``captures/intermediate/derived/*_fixed`` — that per-game override is encoded in
-``FRAMES_OVERRIDE`` below. The manual ``session5/6`` games and un-converted runs
-(``run_13/14``) are NOT auto-run — their steps are PRINTED at the end (session5
-needs ``crop_game.py`` first; runs 13/14 need ``ingest_run.py`` to convert).
+SCOPE — the AI (MahjongCopilot) games under ``captures/intermediate/gt`` PLUS the
+manual ``session5/6`` human-play games under ``captures/raw/manual``. All have a
+playing hero (seat 0), so all feed BOTH the classifier crops and the YOLO detector.
+The manual GT is already MJAI (no convert / no intermediate step), so those build
+DIRECT from raw. Two AI games (``ai_run_5_game2/3``) were captured letterboxed and
+use de-letterboxed frames from ``captures/intermediate/derived/*_fixed`` (see
+``FRAMES_OVERRIDE``). The un-converted new runs (``run_13/14``) are NOT auto-run —
+they need ``ingest_run.py`` to convert first; that step is PRINTED at the end.
 
 This driver DOES NOT train — model weights need a GPU and are a deliberate step.
 The classifier + detector train commands are printed at the end.
+
+Both heavy stages parallelize per game: stage 1 (annotate) via ``--workers``
+(forwarded to annotate_ai_session's process pool) and stage 2 (build_dataset) via
+``--jobs`` (this driver fans the per-game builds out itself). Both are RAM-bound —
+each worker/job holds full-frame + homography (+ crop) buffers — so scale them to
+the box: big defaults freeze a laptop but a server can go much higher.
 
 Run (conda ``auto`` env, repo root):
     # dry run — print every command that WOULD execute, touch nothing:
     PYTHONPATH=. $PY scripts/data/rebuild_datasets.py
     # actually rebuild (cleans the derived target dirs first, then regenerates):
     PYTHONPATH=. $PY scripts/data/rebuild_datasets.py --yes
+    # on a big-RAM server, crank both stages' per-game parallelism:
+    PYTHONPATH=. $PY scripts/data/rebuild_datasets.py --yes --workers 16 --jobs 12
     # limit to one stage:
     PYTHONPATH=. $PY scripts/data/rebuild_datasets.py --yes --stage annotate
 """
@@ -55,8 +64,24 @@ FRAMES_OVERRIDE = {
     "ai_run_5_game3": os.path.join(paths.DERIVED, "ai_run_5_game3_fixed"),
 }
 
+# Manual "human-play" sessions (record_gt): the GT jsonl is ALREADY MJAI (Akagi tees
+# raw+mjai live), so there is NO convert step and NO intermediate/gt — build_dataset
+# reads captures/raw/manual/<name>.jsonl + its frames dir directly. They also have a
+# playing hero (seat 0), so the hero-tsumo fix applies — include them in BOTH the
+# classifier crops and the YOLO detector split. (session5/6 are 3840x2160 16:9, so no
+# de-letterboxing is needed; build_dataset resizes to the canonical 1920x1080.)
+MANUAL_SESSIONS = ["session5", "session6"]
+
 # Held-out validation game (whole game out — the cross-game val; STATUS.md §1.14).
 VAL_GAME = "ai_run_8_game1"
+
+
+def manual_cap(name: str) -> str:
+    return os.path.join(paths.RAW_MANUAL, f"{name}.jsonl")
+
+
+def manual_frames_dir(name: str) -> str:
+    return os.path.join(paths.RAW_MANUAL, name)
 
 ANN_OUT = os.path.join("out", "ai_session_annotations")
 DATASETS = "datasets"
@@ -92,6 +117,36 @@ class Runner:
         if r.returncode != 0:
             raise SystemExit(f"command failed ({r.returncode}): {' '.join(cmd)}")
 
+    def run_parallel(self, cmds: list[list[str]], jobs: int) -> None:
+        """Run independent commands concurrently, ``jobs`` at a time (per-game fan-out).
+        Each build_dataset is a single-threaded process, so this is a process pool;
+        it is RAM-bound (each holds a frame + homography + crop buffers), so keep
+        ``jobs`` within the machine's memory. Output is captured and printed per
+        command on completion (not interleaved). Raises if any command fails."""
+        for cmd in cmds:
+            print("  $", " ".join(cmd))
+        if not self.execute or not cmds:
+            return
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        print(f"  ... running {len(cmds)} build(s), {jobs} at a time")
+
+        def _one(cmd):
+            return cmd, subprocess.run(cmd, env=self.env, capture_output=True, text=True)
+
+        failed = []
+        with ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
+            for fut in as_completed([ex.submit(_one, c) for c in cmds]):
+                cmd, res = fut.result()
+                tag = os.path.basename(cmd[2]) if len(cmd) > 2 else " ".join(cmd)
+                last = (res.stdout or "").strip().splitlines()
+                print(f"  [rc={res.returncode}] {tag}  {last[-1] if last else ''}")
+                if res.returncode != 0:
+                    print((res.stderr or "")[-800:])
+                    failed.append(cmd)
+        if failed:
+            raise SystemExit(f"{len(failed)} of {len(cmds)} build(s) failed: "
+                             + ", ".join(os.path.basename(c[2]) for c in failed))
+
     def rm(self, path: str) -> None:
         exists = os.path.exists(path)
         print(f"  rm -rf {path}" + ("" if exists else "   (absent)"))
@@ -110,7 +165,13 @@ def main() -> None:
                     help="Do NOT delete the derived target dirs before regenerating "
                          "(default cleans them for a from-scratch rebuild).")
     ap.add_argument("--workers", type=int, default=None,
-                    help="annotate_ai_session parallel workers (default: the script's own cap).")
+                    help="stage-1 annotate_ai_session parallel workers (default: that "
+                         "script's own conservative cap of 4; raise on a big-RAM server).")
+    ap.add_argument("--jobs", type=int, default=max(1, min(8, (os.cpu_count() or 4) // 2)),
+                    help="stage-2 build_dataset processes to run in parallel (per-game "
+                         "fan-out). RAM-bound — each holds a frame + homography + crop "
+                         "buffers. Default min(8, cpu//2); on a big server pass more, "
+                         "lower it if memory-constrained.")
     ap.add_argument("--val", default=VAL_GAME, help=f"held-out game (default {VAL_GAME}).")
     args = ap.parse_args()
 
@@ -152,13 +213,27 @@ def main() -> None:
 
     # ---- stage 2: build_dataset per game (crops + YOLO) --------------------
     if do("dataset"):
-        print("[2/3] build_dataset --from-annotations  ->", dataset_dir("<game>"))
+        print(f"[2/3] build_dataset  ->  {dataset_dir('<game>')}   (jobs={args.jobs})")
+        cmds = []                                    # each game is independent -> fan out
         for c, n in zip(captures, names):
             out = dataset_dir(n)
             if not args.no_clean:
+                r.rm(out)                            # clean is fast; do it up front
+            cmds.append([py, "scripts/train/build_dataset.py", c, gt_frames_dir(n),
+                         "--out", out, "--from-annotations", ANN_OUT, "--drop-violations"])
+        # manual sessions: GT is already MJAI, so build DIRECT (annotate_frame inline,
+        # no separate annotate stage / --from-annotations).
+        for name in MANUAL_SESSIONS:
+            cap = manual_cap(name)
+            if not os.path.exists(cap):
+                print(f"  (skip {name}: {cap} absent)")
+                continue
+            out = dataset_dir(name)
+            if not args.no_clean:
                 r.rm(out)
-            r.run([py, "scripts/train/build_dataset.py", c, gt_frames_dir(n),
-                   "--out", out, "--from-annotations", ANN_OUT, "--drop-violations"])
+            cmds.append([py, "scripts/train/build_dataset.py", cap, manual_frames_dir(name),
+                         "--out", out, "--drop-violations"])
+        r.run_parallel(cmds, args.jobs)
         print()
 
     # ---- stage 3: assemble the detector split ------------------------------
@@ -169,6 +244,11 @@ def main() -> None:
         data_args = []
         for c, n in zip(captures, names):
             data_args += ["--data", f"{n}={os.path.join(dataset_dir(n), 'yolo')}:{c}"]
+        # manual sessions join the TRAIN side (val stays the held-out AI game).
+        for name in MANUAL_SESSIONS:
+            cap = manual_cap(name)
+            if os.path.exists(cap) and os.path.isdir(os.path.join(dataset_dir(name), "yolo", "images")):
+                data_args += ["--data", f"{name}={os.path.join(dataset_dir(name), 'yolo')}:{cap}"]
         r.run([py, "scripts/train/build_detector_dataset.py", *data_args,
                "--val", f"{args.val}:*", "--out", DETECTOR_OUT])
         print()
@@ -177,6 +257,10 @@ def main() -> None:
     val_cap = os.path.join(paths.GT, f"{args.val}.jsonl")
     clf_data = " ".join(
         f"--data {n}={os.path.join(dataset_dir(n), 'crops')}:{c}" for c, n in zip(captures, names))
+    for name in MANUAL_SESSIONS:                       # session5/6 crops too
+        cap = manual_cap(name)
+        if os.path.exists(cap):
+            clf_data += f" --data {name}={os.path.join(dataset_dir(name), 'crops')}:{cap}"
     print("=" * 70)
     print("NOT run here (need a GPU / manual attention):\n")
     print("# retrain the 38-class classifier on the regenerated crops:")
@@ -185,12 +269,6 @@ def main() -> None:
     print("# retrain the YOLO detector on the regenerated split "
           "(see train_detector.py --help for the OOM flags):")
     print(f"  {py} scripts/train/train_detector.py --data {os.path.join(DETECTOR_OUT, 'data.yaml')}\n")
-    print("# manual 'human-play' games (session5/6) - they also have a hero, so the "
-          "tsumo fix applies;\n#   session5 was letterboxed, de-letterbox it first:")
-    print("  # $PY scripts/data/crop_game.py captures/raw/manual/session5 "
-          "captures/intermediate/derived/session5_16x9 --size 3840x2160")
-    print("  # $PY scripts/train/build_dataset.py captures/raw/manual/session6.jsonl "
-          "captures/raw/manual/session6 --out datasets/precise_session6 --drop-violations\n")
     print("# un-converted new runs (run_13/14): convert + build first, then re-run this driver:")
     print("  # $PY scripts/data/ingest_run.py captures/raw/ai_session/run_13")
     print("  # $PY scripts/data/ingest_run.py captures/raw/ai_session/run_14")
