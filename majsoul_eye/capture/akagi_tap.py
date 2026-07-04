@@ -31,7 +31,7 @@ import atexit
 import time
 from typing import Any, Optional
 
-from .schema import GTRecord, GTWriter, SCHEMA_VERSION
+from .schema import GTRecord, GTWriter
 
 
 # --- monkeypatch state ------------------------------------------------------

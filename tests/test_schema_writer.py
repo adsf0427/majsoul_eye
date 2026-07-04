@@ -4,7 +4,6 @@ Plain-script style: PYTHONPATH=. <auto-python> tests/test_schema_writer.py
 """
 import os
 import tempfile
-import time
 
 from majsoul_eye.capture.schema import GTRecord, GTWriter, read_records
 
