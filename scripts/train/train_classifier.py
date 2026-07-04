@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import random
 from collections import Counter
@@ -71,9 +72,27 @@ class CropDS(Dataset):
         return preprocess(img), y
 
 
+def dataset_data_specs(ds_dir: str, sub: str) -> list:
+    """Expand a versioned dataset's ``games.json`` (scripts/data/build_datasets.py)
+    into ``(name, <ds_dir>/<game dir>/<sub>, capture)`` tuples (sub = 'crops'/'yolo').
+    Tuples, not ``NAME=DIR:CAPTURE`` strings — a Windows drive colon would break the
+    string form's ``:`` split."""
+    manifest = os.path.join(ds_dir, "games.json")
+    if not os.path.exists(manifest):
+        raise SystemExit(f"{manifest} not found — is {ds_dir!r} a dataset version built by "
+                         f"scripts/data/build_datasets.py?")
+    m = json.load(open(manifest, encoding="utf-8"))
+    return [(g["name"], os.path.join(ds_dir, g["dir"], sub).replace(os.sep, "/"), g["capture"])
+            for g in m["games"]]
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", action="append", required=True, help="NAME=CROPSDIR:CAPTURE (repeatable)")
+    ap.add_argument("--data", action="append", default=None, help="NAME=CROPSDIR:CAPTURE (repeatable)")
+    ap.add_argument("--dataset", action="append", default=None,
+                    help="versioned dataset dir with games.json (scripts/data/build_datasets.py); "
+                         "repeatable — expands to one --data entry per game (crops). Duplicate "
+                         "NAMEs: the later spec (and any explicit --data) wins.")
     ap.add_argument("--val", default="", help="VAL spec 'NAME:k1,k2' or 'NAME:*' (whole session)")
     ap.add_argument("--out", default="majsoul_eye/recognize/tile_classifier.pt")
     ap.add_argument("--epochs", type=int, default=20)
@@ -82,11 +101,20 @@ def main():
                     help="DataLoader workers (try 6 on GPU so cv2.imread doesn't starve it).")
     args = ap.parse_args()
 
-    # parse sources + val spec
-    sources = {}
-    for d in args.data:
+    # parse sources + val spec (--dataset manifests expand first, --data can override)
+    entries = []
+    for dsd in (args.dataset or []):
+        entries += dataset_data_specs(dsd, "crops")
+    for d in (args.data or []):
         name, rest = d.split("=", 1)
         crops, capture = rest.split(":", 1)
+        entries.append((name, crops, capture))
+    if not entries:
+        ap.error("need --data and/or --dataset")
+    sources = {}
+    for name, crops, capture in entries:
+        if name in sources:
+            print(f"note: duplicate game {name!r} — keeping the later spec ({crops})")
         sources[name] = (crops, capture)
     val_name, val_kyoku = (args.val.split(":", 1) + [""])[:2] if args.val else ("", "")
     val_set = "*" if val_kyoku == "*" else set(val_kyoku.split(",")) if val_kyoku else set()

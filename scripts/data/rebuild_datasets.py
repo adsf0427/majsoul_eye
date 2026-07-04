@@ -1,4 +1,9 @@
-"""Regenerate ALL derived datasets from ``captures/raw/`` with the CURRENT code.
+"""DEPRECATED — superseded by ``scripts/data/build_datasets.py`` (versioned
+``datasets/<name>/`` builds with a games.json manifest; runs immediately, supports
+multiple source roots and ``--resume``). Kept only until the versioned flow is
+proven; do not extend this script.
+
+Regenerate ALL derived datasets from ``captures/raw/`` with the CURRENT code.
 
 Everything except ``captures/raw/`` is gitignored (see .gitignore) — the
 annotation records (``out/ai_session_annotations``), the classifier crops + YOLO
