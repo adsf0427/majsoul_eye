@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "majsoul_eye"
+version = "0.1.0"
+description = "Image recognizer for Mahjong Soul (雀魂) game state (场况) from screenshots"
+requires-python = ">=3.10"
+# Runtime deps are managed via conda (env `auto`) + requirements.txt, not here,
+# so an editable install never touches the conda-installed numpy/torch/cv2.
+dependencies = []
+
+[tool.setuptools.packages.find]
+# Ship only the library package (and its subpackages). scripts/, tests/,
+# datasets/, captures/ etc. stay out of the install.
+include = ["majsoul_eye*"]

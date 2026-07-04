@@ -72,3 +72,9 @@ scratchpad/
 
 # Reference repo clones (own .git; never track)
 _external/
+
+# Python packaging build artifacts (from `pip install -e .`)
+*.egg-info/
+build/
+dist/
+samples/
