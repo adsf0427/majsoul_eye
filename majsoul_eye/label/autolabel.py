@@ -4,12 +4,13 @@ Produces :class:`LabelSample`s for hero hand tiles, dora indicators, the four
 score readouts, and round-meta text. Bridge tile names ('E','5mr',...) already
 match ``tiles.TILE_NAMES`` so no conversion is needed.
 
-Scope (skeleton): hand is labeled only on *settled* concealed states
-(len % 3 == 1, i.e. no separated drawn tile) — the drawn-tile (14-tile) layout
-puts the tsumo in a gapped slot and needs the unsorted draw tracked; TODO once
-session2 frames confirm the gap geometry. The hard 河/副露 zones now live in the
-precise fullwarp pipeline (``majsoul_eye.annotate``); ``annotate.frame`` calls
-this module only for the hand + dora zones.
+Hand states: settled concealed hands (len % 3 == 1) fill the slots left-to-right;
+the hero's-own-turn 14-tile state adds the freshly-drawn tile (``state.drawn_tile``,
+tracked by the replayer) in a gapped tsumo slot. Labeling that state matters — the
+detector otherwise trains on hero-turn frames with the hand UNLABELED and learns to
+suppress it on the player's own turn. The hard 河/副露 zones now live in the precise
+fullwarp pipeline (``majsoul_eye.annotate``); ``annotate.frame`` calls this module
+only for the hand + dora zones.
 """
 
 from __future__ import annotations
@@ -66,11 +67,24 @@ def label_frame(frame: np.ndarray, state, region: BoardRegion,
         if zone in zones:
             out.append(LabelSample(zone, str(label), kind, box, region.norm_to_px(box), tile_class))
 
-    # hero hand (settled concealed states only)
+    # hero hand. Settled concealed states (len % 3 == 1: 13/10/7/…) fill slots
+    # left-to-right. On the hero's own turn the freshly-drawn tile
+    # (``state.drawn_tile``) renders in a SEPARATED slot to the right of the sorted
+    # concealed run — label the concealed tiles in slots 0..n-1 and the draw in the
+    # gapped tsumo slot. A 14-tile state WITHOUT a tracked draw (rare / hand-built)
+    # is skipped, since the separated slot's identity is unknown.
     hand = state.hero_hand
-    if "hand" in zones and state.hero_seat >= 0 and hand and "?" not in hand and len(hand) % 3 == 1:
-        for i, tile in enumerate(hand):
-            add("hand", tile, "tile", HAND.slot_box(i), NAME_TO_ID.get(tile))
+    drawn = getattr(state, "drawn_tile", None)
+    if "hand" in zones and state.hero_seat >= 0 and hand and "?" not in hand:
+        if drawn is not None and drawn != "?" and drawn in hand:
+            concealed = list(hand)
+            concealed.remove(drawn)                 # sorted concealed run (drop one instance)
+            for i, tile in enumerate(concealed):
+                add("hand", tile, "tile", HAND.slot_box(i), NAME_TO_ID.get(tile))
+            add("hand", drawn, "tile", HAND.slot_box(len(concealed), is_tsumo=True), NAME_TO_ID.get(drawn))
+        elif len(hand) % 3 == 1:
+            for i, tile in enumerate(hand):
+                add("hand", tile, "tile", HAND.slot_box(i), NAME_TO_ID.get(tile))
 
     # dora indicators
     for i, d in enumerate(state.dora_markers[:MAX_DORA]):

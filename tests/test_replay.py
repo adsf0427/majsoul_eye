@@ -137,6 +137,40 @@ def test_is_deal_window_false_after_round_ends():
     assert is_deal_window(s) is False
 
 
+def test_hero_tsumo_tracks_drawn_tile():
+    # The hero's freshly-drawn tile renders in a separated slot on screen; the
+    # labeler needs to know WHICH tile it is (hero_hand is sorted, so the draw is
+    # merged and lost). drawn_tile carries it from the hero's tsumo to the next
+    # hero action; it is None on every other player's turn.
+    rp = Replayer()
+    rp.apply({"type": "start_game", "id": 0})
+    rp.apply(_events()[1])                                   # start_kyoku: hero(seat0) dealt 13
+    assert rp.state.drawn_tile is None
+    rp.apply({"type": "tsumo", "actor": 1, "pai": "?"})       # opponent draws -> unaffected
+    assert rp.state.drawn_tile is None
+    rp.apply({"type": "dahai", "actor": 1, "pai": "E", "tsumogiri": True})
+    rp.apply({"type": "tsumo", "actor": 0, "pai": "4p"})      # HERO draws
+    assert rp.state.drawn_tile == "4p"
+    assert len(rp.state.hero_hand) == 14 and rp.state.hero_hand.count("4p") == 1
+    assert rp.state.copy().drawn_tile == "4p"                 # survives snapshot (build_seq_state)
+    rp.apply({"type": "dahai", "actor": 0, "pai": "9s", "tsumogiri": False})  # hero discards
+    assert rp.state.drawn_tile is None
+    assert len(rp.state.hero_hand) == 13
+
+
+def test_drawn_tile_cleared_when_hero_calls_kan():
+    # After a hero draw, declaring an ankan (instead of discarding) ends the
+    # separated-draw display; drawn_tile must clear (the rinshan draw re-sets it).
+    rp = Replayer()
+    rp.apply({"type": "start_game", "id": 0})
+    hand = ["1m", "1m", "1m", "1m", "2p", "3p", "4p", "5p", "6p", "7p", "8p", "1s", "2s"]
+    rp.apply({**_events()[1], "tehais": [hand, ["?"] * 13, ["?"] * 13, ["?"] * 13]})
+    rp.apply({"type": "tsumo", "actor": 0, "pai": "3s"})
+    assert rp.state.drawn_tile == "3s"
+    rp.apply({"type": "ankan", "actor": 0, "consumed": ["1m", "1m", "1m", "1m"]})
+    assert rp.state.drawn_tile is None
+
+
 def test_leftTileCount_extracted_from_camelcase():
     # Regression (real capture): Majsoul sends 'leftTileCount', not 'left_tile_count'.
     class _Rec:

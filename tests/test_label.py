@@ -60,12 +60,38 @@ def test_label_frame_easy_zones():
     assert all(len(line.split()) == 5 for line in yolo)
 
 
-def test_label_skips_hand_with_pending_draw():
+def test_label_skips_hand_with_untracked_draw():
+    # 14 tiles but no tracked drawn tile (e.g. a hand-built state): geometry of the
+    # separated slot is unknown, so the hand is still skipped rather than mislabeled.
     s = _state()
-    s.hero_hand = s.hero_hand + ["5p"]      # 14 tiles -> separated draw, len%3==2
+    s.hero_hand = s.hero_hand + ["5p"]      # 14 tiles, drawn_tile stays None
     frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
     samples = label_frame(frame, s, locate_fullscreen(frame))
     assert not any(x.zone == "hand" for x in samples)
+
+
+def test_label_hand_with_tracked_tsumo():
+    # Hero's own turn: the tracked drawn tile is labeled in the separated tsumo slot
+    # (gapped, right of the 13 sorted concealed tiles). This is the fix for the
+    # detector suppressing the hero hand on the player's own turn.
+    from majsoul_eye.state.replay import _sort_hand
+    s = _state()                                     # 13-tile sorted concealed hand
+    concealed = list(s.hero_hand)
+    s.hero_hand = _sort_hand(s.hero_hand + ["5p"])   # 14 sorted (drawn 5p merged in)
+    s.drawn_tile = "5p"
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    hand = [x for x in label_frame(frame, s, locate_fullscreen(frame)) if x.zone == "hand"]
+    assert len(hand) == 14                            # 13 concealed + the drawn tile
+    # 13 concealed occupy slots 0..12 in sorted order
+    assert [x.label for x in hand[:13]] == concealed
+    for i, x in enumerate(hand[:13]):
+        assert abs(x.norm_box.x0 - HAND.slot_box(i).x0) < 1e-9
+    # the drawn tile sits in the gapped tsumo slot, to the right of a normal slot 13
+    drawn = hand[13]
+    assert drawn.label == "5p"
+    assert abs(drawn.norm_box.x0 - HAND.slot_box(13, is_tsumo=True).x0) < 1e-9
+    assert drawn.norm_box.x0 > HAND.slot_box(13).x0   # the tsumo gap pushed it right
+    assert all(x.tile_class is not None for x in hand)
 
 
 def test_letterbox_trims_black_border():

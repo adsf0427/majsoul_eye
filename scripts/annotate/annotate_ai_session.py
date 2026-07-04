@@ -216,9 +216,11 @@ def main() -> None:
     ap.add_argument("--qa-classifier", action="store_true",
                     help="classify sampled face crops and report GT agreement")
     ap.add_argument("--qa-per-game", type=int, default=400)
-    ap.add_argument("--workers", type=int, default=max(1, min(16, (os.cpu_count() or 4) - 2)),
-                    help="parallel worker processes, one game each "
-                         "(default ~cpu_count-2; pass 1 for sequential)")
+    ap.add_argument("--workers", type=int, default=max(1, min(4, (os.cpu_count() or 4) // 2)),
+                    help="parallel worker processes, one game each. Each holds full-frame "
+                         "image + homography buffers, so too many saturate CPU/RAM and can "
+                         "freeze the machine; default is a conservative cap of 4 (half the "
+                         "cores, capped). Pass a higher --workers on a big box, or 1 for sequential.")
     args = ap.parse_args()
 
     captures = args.captures or paths.converted_gt_captures()

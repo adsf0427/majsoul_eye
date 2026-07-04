@@ -76,6 +76,11 @@ class BoardState:
     concealed_counts: list[int] = field(default_factory=lambda: [13] * NUM_PLAYERS)
     # hero only (others are face-down)
     hero_hand: list[str] = field(default_factory=list)
+    # The tile the hero just drew (tsumo), shown in a SEPARATED slot on screen until
+    # the hero acts. hero_hand is kept sorted (the draw is merged), so this is the
+    # only record of which of the 14 is the gapped one — the labeler needs it to
+    # place the tsumo box. None on every other seat's turn / after the hero acts.
+    drawn_tile: Optional[str] = None
     # bookkeeping
     last_actor: int = -1
     last_event: Optional[str] = None
@@ -163,6 +168,7 @@ class Replayer:
         self.state.concealed_counts[actor] += 1
         if actor == self.state.hero_seat and pai != "?":
             self.state.hero_hand = _sort_hand(self.state.hero_hand + [pai])
+            self.state.drawn_tile = pai
         self.state.last_actor = actor
 
     def _on_dahai(self, ev: dict) -> None:
@@ -170,6 +176,7 @@ class Replayer:
         riichi_flag = self._pending_reach[actor]
         if actor == self.state.hero_seat:
             _remove_one(self.state.hero_hand, pai)
+            self.state.drawn_tile = None
         self.state.concealed_counts[actor] -= 1
         self.state.rivers[actor].append(
             RiverTile(pai=pai, tsumogiri=bool(ev.get("tsumogiri")), riichi=riichi_flag)
@@ -214,6 +221,7 @@ class Replayer:
         )
         self.state.concealed_counts[actor] -= len(consumed)
         if actor == self.state.hero_seat:
+            self.state.drawn_tile = None          # chi/pon/daiminkan claim another's discard
             for c in consumed:
                 _remove_one(self.state.hero_hand, c)
         self.state.last_actor = actor
@@ -224,6 +232,7 @@ class Replayer:
         self.state.melds[actor].append(Meld(type="ankan", from_seat=actor, tiles=_sort_hand(consumed)))
         self.state.concealed_counts[actor] -= len(consumed)
         if actor == self.state.hero_seat:
+            self.state.drawn_tile = None          # declared instead of discarding; rinshan re-sets it
             for c in consumed:
                 _remove_one(self.state.hero_hand, c)
         self.state.last_actor = actor
@@ -247,6 +256,7 @@ class Replayer:
             )
         self.state.concealed_counts[actor] -= 1
         if actor == self.state.hero_seat:
+            self.state.drawn_tile = None          # declared instead of discarding; rinshan re-sets it
             _remove_one(self.state.hero_hand, pai)
         self.state.last_actor = actor
 
@@ -255,6 +265,7 @@ class Replayer:
         self.state.nukidora[actor] += 1
         self.state.concealed_counts[actor] -= 1
         if actor == self.state.hero_seat:
+            self.state.drawn_tile = None
             _remove_one(self.state.hero_hand, "N")
         self.state.last_actor = actor
 
