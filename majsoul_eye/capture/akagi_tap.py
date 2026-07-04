@@ -28,55 +28,10 @@ MITM. Call :func:`uninstall` (or just exit) to flush and close.
 from __future__ import annotations
 
 import atexit
-import queue
-import threading
 import time
 from typing import Any, Optional
 
-from .schema import GTRecord, SCHEMA_VERSION
-
-
-class GTWriter:
-    """Background JSONL writer fed by a thread-safe queue."""
-
-    def __init__(self, path: str):
-        self.path = path
-        self._q: "queue.Queue[Optional[GTRecord]]" = queue.Queue()
-        self._seq = 0
-        self._lock = threading.Lock()
-        self._fh = open(path, "w", encoding="utf-8")
-        self._fh.write('{"_schema": %d}\n' % SCHEMA_VERSION)
-        self._fh.flush()
-        self._thread = threading.Thread(target=self._run, name="gt-writer", daemon=True)
-        self._thread.start()
-
-    def next_seq(self) -> int:
-        with self._lock:
-            s = self._seq
-            self._seq += 1
-            return s
-
-    def put(self, record: GTRecord) -> None:
-        self._q.put(record)
-
-    def _run(self) -> None:
-        while True:
-            rec = self._q.get()
-            if rec is None:
-                break
-            try:
-                self._fh.write(rec.to_json_line() + "\n")
-                self._fh.flush()
-            except Exception:
-                pass
-
-    def close(self) -> None:
-        self._q.put(None)
-        self._thread.join(timeout=5)
-        try:
-            self._fh.close()
-        except Exception:
-            pass
+from .schema import GTRecord, GTWriter, SCHEMA_VERSION
 
 
 # --- monkeypatch state ------------------------------------------------------
