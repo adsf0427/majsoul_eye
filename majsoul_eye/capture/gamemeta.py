@@ -24,17 +24,20 @@ import re
 # (Traditional on the cn/global client is a display setting → needs the probe or --lang).
 SERVER_LANG = {"jp": "ja", "en": "en", "cn": "zh-Hans"}
 
-# Aliases MajSoul / browsers use → canonical BCP-47-ish code. Keys are lower-cased, '_'→'-'.
+# Aliases MajSoul / browsers use → canonical BCP-47-ish code. Keys are lower-cased with
+# '_'→'-' (so MajSoul's "chs_t" is matched as "chs-t"). MajSoul's own localStorage
+# `prefer_language`/`language` codes: chs=简体, chs_t=繁體, jp=日本語, en=English, kr=한국어.
 _LANG_ALIASES = {
     "chs": "zh-Hans", "zh-hans": "zh-Hans", "zh-cn": "zh-Hans", "zhs": "zh-Hans",
     "zh": "zh-Hans", "zh-chs": "zh-Hans", "hans": "zh-Hans",
-    "cht": "zh-Hant", "zh-hant": "zh-Hant", "zh-tw": "zh-Hant", "zh-hk": "zh-Hant",
-    "zht": "zh-Hant", "zh-cht": "zh-Hant", "hant": "zh-Hant",
+    "chs-t": "zh-Hant", "cht": "zh-Hant", "zh-hant": "zh-Hant", "zh-tw": "zh-Hant",
+    "zh-hk": "zh-Hant", "zht": "zh-Hant", "zh-cht": "zh-Hant", "hant": "zh-Hant",
     "jp": "ja", "ja": "ja", "ja-jp": "ja", "jpn": "ja",
     "en": "en", "en-us": "en", "en-gb": "en", "eng": "en",
+    "kr": "ko", "ko": "ko", "ko-kr": "ko", "kor": "ko",
 }
 
-_KNOWN = ("zh-Hans", "zh-Hant", "ja", "en")
+_KNOWN = ("zh-Hans", "zh-Hant", "ja", "en", "ko")
 
 
 def normalize_lang(raw):

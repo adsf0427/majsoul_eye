@@ -42,6 +42,21 @@ def test_normalize_lang():
     assert gm.normalize_lang(None) is None
 
 
+def test_majsoul_real_codes():
+    # MajSoul's own localStorage codes (chs=简体, chs_t=繁體); '_' is normalized to '-'.
+    assert gm.normalize_lang("chs") == "zh-Hans"
+    assert gm.normalize_lang("chs_t") == "zh-Hant"
+    assert gm.normalize_lang("kr") == "ko"
+    # the REAL probe dump observed on game.maj-soul.com (client set to 繁體)
+    real = json.dumps({"localStorage": {"prefer_language": "chs_t", "language": "chs_t"},
+                       "navigatorLanguage": "en-US", "cookie": "G_ENABLED_IDPS=google"})
+    assert gm.parse_probe_dump(real) == "zh-Hant"
+    assert gm.resolve_language("cn", probe=gm.parse_probe_dump(real)) == "zh-Hant"
+    # same client set to 简体 would store "chs"
+    simp = json.dumps({"localStorage": {"prefer_language": "chs", "language": "chs"}})
+    assert gm.parse_probe_dump(simp) == "zh-Hans"
+
+
 def test_parse_probe_dump_conservative():
     # Trust a lang/locale KEY whose value is a recognizable code.
     dump = json.dumps({"localStorage": {"config.language": "chs"},

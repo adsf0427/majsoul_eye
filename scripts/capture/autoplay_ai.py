@@ -231,9 +231,9 @@ def main() -> None:
         _lang_dump = _rq_lang.get(True, 5)
     except Exception as e:
         print(f"  lang probe failed: {e}", flush=True)
-    if _lang_dump:
-        print(f"  [lang probe] {_lang_dump}", flush=True)     # first-run diagnostic: where MajSoul stores language
     _probe_lang = gamemeta.parse_probe_dump(_lang_dump)
+    if _lang_dump and _probe_lang is None:                    # couldn't decode: dump candidates for debugging
+        print(f"  [lang probe] {_lang_dump}", flush=True)
     game_language = gamemeta.resolve_language(args.server, probe=_probe_lang, override=args.lang)
     print(f"  captured language = {game_language} "
           f"(server={args.server} probe={_probe_lang} override={args.lang})", flush=True)
