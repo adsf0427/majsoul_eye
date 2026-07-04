@@ -1,13 +1,12 @@
 """Regenerate ALL derived datasets from ``captures/raw/`` with the CURRENT code.
 
-Everything except ``captures/raw/`` is gitignored (see .gitignore) — the GT
-conversions (``captures/intermediate/gt``), the annotation records
-(``out/ai_session_annotations``), the classifier crops + YOLO labels
-(``datasets/precise_*``) and the assembled detector split (``datasets/detector``)
-are all DERIVED. When the labeling code changes (e.g. the hero-tsumo fix that
-made ``autolabel`` place the hero's drawn tile), the on-disk datasets are stale
-until re-annotated. This driver re-runs the canonical linear pipeline
-(STATUS.md §1.14/§1.15):
+Everything except ``captures/raw/`` is gitignored (see .gitignore) — the
+annotation records (``out/ai_session_annotations``), the classifier crops + YOLO
+labels (``datasets/precise_*``) and the assembled detector split
+(``datasets/detector``) are all DERIVED. When the labeling code changes (e.g. the
+hero-tsumo fix that made ``autolabel`` place the hero's drawn tile), the on-disk
+datasets are stale until re-annotated. This driver re-runs the canonical linear
+pipeline (STATUS.md §1.14/§1.15):
 
     annotate_ai_session (parallel)  ->  out/ai_session_annotations/*.jsonl
       -> build_dataset --from-annotations  ->  datasets/precise_<game>/{crops,yolo}
@@ -16,14 +15,17 @@ until re-annotated. This driver re-runs the canonical linear pipeline
 It orchestrates the EXISTING scripts as subprocesses (each call is exactly the
 vetted invocation), so there is no reimplemented logic to drift.
 
-SCOPE — the AI (MahjongCopilot) games under ``captures/intermediate/gt`` PLUS the
-manual ``session5/6`` human-play games under ``captures/raw/manual``. All have a
-playing hero (seat 0), so all feed BOTH the classifier crops and the YOLO detector.
-The manual GT is already MJAI (no convert / no intermediate step), so those build
+SCOPE — every AI (MahjongCopilot) game under ``captures/raw/ai_session`` (via
+``paths.ai_captures()``) PLUS the manual ``session5/6`` human-play games under
+``captures/raw/manual``. All have a playing hero (seat 0), so all feed BOTH the
+classifier crops and the YOLO detector. Both AI and manual GT are already our
+`GTRecord`/MJAI format (no convert / no intermediate step) — everything builds
 DIRECT from raw. Two AI games (``ai_run_5_game2/3``) were captured letterboxed and
 use de-letterboxed frames from ``captures/intermediate/derived/*_fixed`` (see
-``FRAMES_OVERRIDE``). The un-converted new runs (``run_13/14``) are NOT auto-run —
-they need ``ingest_run.py`` to convert first; that step is PRINTED at the end.
+``FRAMES_OVERRIDE``). ``run_13``/``run_14`` (originally captured as legacy
+b64-wire, since migrated in place to `GTRecord` by
+``migrate_ai_to_gtrecord.py``) are included automatically like any other AI game
+— no separate convert/ingest step is needed for them anymore.
 
 This driver DOES NOT train — model weights need a GPU and are a deliberate step.
 The classifier + detector train commands are printed at the end.
@@ -272,9 +274,9 @@ def main() -> None:
     print("# retrain the YOLO detector on the regenerated split "
           "(see train_detector.py --help for the OOM flags):")
     print(f"  {py} scripts/train/train_detector.py --data {os.path.join(DETECTOR_OUT, 'data.yaml')}\n")
-    print("# un-converted new runs (run_13/14): convert + build first, then re-run this driver:")
-    print("  # $PY scripts/data/ingest_run.py captures/raw/ai_session/run_13")
-    print("  # $PY scripts/data/ingest_run.py captures/raw/ai_session/run_14")
+    print("# new AI runs are discovered automatically via paths.ai_captures() (raw/ai_session),")
+    print("# just re-run this driver. Legacy b64-wire runs need one migration first:")
+    print("  # $PY scripts/data/migrate_ai_to_gtrecord.py --apply")
 
     if not args.yes:
         print("\n(dry run - nothing was executed; pass --yes to rebuild)")

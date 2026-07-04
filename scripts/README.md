@@ -26,11 +26,12 @@ Legend: 🔴 dev-only / coupled to a sibling repo (`recognize/` never imports th
 
 | script | role | out |
 |---|---|---|
-| `convert_mjcopilot.py` 🔴🔁 | MahjongCopilot raw liqi wire + PNGs → our `GTRecord` JSONL (its own `LiqiProto`→`GameState`; deep-copies events). | `captures/intermediate/gt/ai_run_*.jsonl` |
-| `ingest_run.py` 🔁 | one-shot orchestrator: discover games → `convert_mjcopilot` → `build_dataset` → optional retrain (**subprocess-calls `data/convert_mjcopilot`, `train/build_dataset`, `train/train_classifier`**). | datasets + model |
+| `convert_mjcopilot.py` 🔴 | shared MahjongCopilot raw-liqi-wire → `GTRecord` conversion lib (its own `LiqiProto`→`GameState`; deep-copies events). New captures (`autoplay_ai.py`) write `GTRecord` inline and never call this; it now lives on as (a) the one-time legacy migration path used by `migrate_ai_to_gtrecord.py` and (b) a still-runnable CLI for any old raw-wire capture. | `captures/raw/ai_session/run_N/gameM.jsonl` (via the migration script) |
+| `ingest_run.py` 🔁 | one-shot orchestrator for a MahjongCopilot run: discover games → `build_dataset` → optional retrain (**subprocess-calls `train/build_dataset`, `train/train_classifier`**). Captures are already `GTRecord`, so there is no convert step. | datasets + model |
 | `crop_game.py` ⚙️🔁 | crop the 16:9 canvas out of non-fullscreen captures (browser chrome / pillarbox). | `captures/intermediate/derived/<name>_16x9/` |
 | `deletterbox_frames.py` ⚙️🔁 | remove black bars from non-16:9 windows, resize back to 1920×1080 (fixes the **data**, not the pipeline). | `captures/intermediate/derived/<name>_fixed/` |
 | `migrate_captures_layout.py` ⚙️ (once) | migrate `captures/` into the role-based layout + rewrite `frames.jsonl` to relative paths (same-volume rename, idempotent). | reorganized `captures/` |
+| `migrate_ai_to_gtrecord.py` ⚙️ (once) | one-time migration of the legacy b64-wire AI captures to the unified `GTRecord` layout (reuses `convert_mjcopilot.convert_game`; dry-run default, idempotent, crash-safe/resumable). | `captures/raw/ai_session/run_N/gameM.jsonl` + `gameM/{liqi.jsonl,frames.jsonl,frames/}` |
 
 ## `annotate/` — GT + geometry → labeled boxes (+ calibration)
 
@@ -66,6 +67,8 @@ The import/exec graph is intentionally shallow:
 - **Python import:** NONE between scripts — every script imports only the **`majsoul_eye` package**.
   (The former `build_case_annotations.py` → `spike_topdown.py` edge was removed: the shared hub
   `CASES`/`load_pair`/`_screen_to_seat`/`SEAT_POS` moved into `annotate.cases`/`capture.gtframes`/`annotate.seatgt`.)
-- **Subprocess (by path):** `data/ingest_run.py` shells out to `data/convert_mjcopilot.py`,
-  `train/build_dataset.py`, `train/train_classifier.py` — move those and update the paths in `ingest_run.py`.
+- **Subprocess (by path):** `data/ingest_run.py` shells out to `train/build_dataset.py`,
+  `train/train_classifier.py` — move those and update the paths in `ingest_run.py`.
+  `data/migrate_ai_to_gtrecord.py` imports `data/convert_mjcopilot.convert_game` directly
+  (Python import, not subprocess).
 - Shared annotation logic lives in `majsoul_eye/annotate/` + `majsoul_eye/capture/gtframes.py`, not in these scripts.

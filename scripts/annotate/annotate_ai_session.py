@@ -21,15 +21,15 @@ Optional --qa-classifier runs the 97.6% tile classifier over sampled face crops
 and reports agreement with the GT labels per zone (end-to-end precision proxy).
 
 Run (conda `auto` env, repo root):
-  PYTHONPATH=. $PY scripts/annotate/annotate_ai_session.py                    # all captures/intermediate/gt/*
+  PYTHONPATH=. $PY scripts/annotate/annotate_ai_session.py                    # all paths.ai_captures() (captures/raw/ai_session/**/*.jsonl)
   PYTHONPATH=. $PY scripts/annotate/annotate_ai_session.py \
-      --captures captures/intermediate/gt/ai_run_3_game1.jsonl --overlay-every 40 --qa-classifier
+      --captures captures/raw/ai_session/run_3/game1.jsonl --overlay-every 40 --qa-classifier
 
 By default the frames dir is derived from the capture name (X.jsonl -> X/, via
 majsoul_eye.paths.frames_dir_for). Pass --frames-dir to point one capture at a
 different frames folder (e.g. de-letterboxed frames from deletterbox_frames.py)
 while keeping the GT + output name of the original capture:
-  PYTHONPATH=. $PY scripts/annotate/annotate_ai_session.py --captures captures/intermediate/gt/ai_run_5_game2.jsonl \
+  PYTHONPATH=. $PY scripts/annotate/annotate_ai_session.py --captures captures/raw/ai_session/run_5/game2.jsonl \
       --frames-dir captures/intermediate/derived/ai_run_5_game2_fixed --qa-classifier
 """
 from __future__ import annotations
@@ -207,7 +207,8 @@ def _process_capture(cap, cfg):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--captures", nargs="*", default=None,
-                    help="capture jsonl files (default: all converted GT under captures/intermediate/gt/)")
+                    help="capture jsonl files (default: all paths.ai_captures(), i.e. every "
+                         "GTRecord under captures/raw/ai_session/)")
     ap.add_argument("--frames-dir", default=None,
                     help="override the frames dir (must contain frames.jsonl); "
                          "only valid with exactly one --captures")

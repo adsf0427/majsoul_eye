@@ -44,9 +44,13 @@ PYTHONPATH=. $PY tests/test_classifier.py
 ### Data pipeline (capture → dataset → model)
 
 `captures/` uses a role-based layout (single source of truth: `majsoul_eye/paths.py`):
-`raw/ai_session/` (MahjongCopilot) + `raw/manual/` (record_gt) → `intermediate/gt/` (converted
-GT) + `intermediate/derived/` (cropped / de-letterboxed) → `legacy/` (archived dupes). Frame
-indexes (`frames.jsonl`) store RELATIVE paths; always resolve via `paths.resolve_frame_path`.
+`raw/ai_session/` (MahjongCopilot autoplay) + `raw/manual/` (record_gt) both write our
+`GTRecord` format directly — `autoplay_ai.py` writes the GTRecord + screenshot index inline
+under `raw/ai_session` (same as manual); there is no separate convert step or
+`intermediate/gt` anymore (retired; legacy b64 runs were migrated in place by
+`scripts/data/migrate_ai_to_gtrecord.py`). `intermediate/derived/` (cropped / de-letterboxed)
++ `legacy/` (archived dupes) are unchanged. Frame indexes (`frames.jsonl`) store RELATIVE
+paths; always resolve via `paths.resolve_frame_path`.
 
 ```bash
 # 1. Record GT + time-synced screenshots (runs Akagi; akagi env; autoplay OFF, passive only).
@@ -62,9 +66,10 @@ PYTHONPATH=. $PY scripts/train/build_dataset.py captures/raw/manual/sessionN.jso
 # 5. Train the 38-class tile classifier (KYOKU-level split — never split by frame):
 PYTHONPATH=. $PY scripts/train/train_classifier.py \
        --data sN=datasets/sessionN/crops:captures/raw/manual/sessionN.jsonl --val sN:E3.0,S2.0 --epochs 20
-# AI (MahjongCopilot) path: scripts/data/ingest_run.py captures/raw/ai_session/run_N discovers games →
-#   convert_mjcopilot (→ captures/intermediate/gt/ai_run_*.jsonl) → build_dataset. Then annotate:
-#   scripts/annotate/annotate_ai_session.py (defaults to all captures/intermediate/gt/*.jsonl).
+# AI (MahjongCopilot) path: scripts/capture/autoplay_ai.py writes the GTRecord + screenshot
+#   index directly under captures/raw/ai_session/run_N/ (same format as manual; no convert
+#   step). Then annotate + build: scripts/annotate/annotate_ai_session.py (defaults to all
+#   paths.ai_captures(), i.e. captures/raw/ai_session/**/*.jsonl) -> scripts/train/build_dataset.py.
 # overlay_labels.py draws auto-labels onto a frame for visual coordinate calibration.
 ```
 
@@ -127,11 +132,13 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
 - **Sync/dataset key is the global record `seq`, NOT `last_op_step`** — `last_op_step` resets
   every kyoku, so frame filenames would collide and later rounds overwrite earlier ones.
 - **`captures/` layout is defined once in `majsoul_eye/paths.py`** — `raw/{ai_session,manual}`,
-  `intermediate/{gt,derived}`, `legacy/`. Don't hardcode `captures/...` paths or re-derive the
-  frames-dir stem rule; use `paths.frames_dir_for` / `paths.converted_gt_captures()` and resolve
-  every `frames.jsonl` `file` (RELATIVE now) through `paths.resolve_frame_path` (accepts legacy
-  absolute too). To reorganize again, `scripts/data/migrate_captures_layout.py` moves dirs + rewrites
-  indexes idempotently (dry-run default).
+  `intermediate/derived`, `legacy/` (`intermediate/gt` is retired — AI GTRecords now live under
+  `raw/ai_session`). Don't hardcode `captures/...` paths or re-derive the frames-dir stem rule;
+  use `paths.frames_dir_for` / `paths.ai_captures()` (`converted_gt_captures()` is kept as a thin
+  alias for old callers) and resolve every `frames.jsonl` `file` (RELATIVE now) through
+  `paths.resolve_frame_path` (accepts legacy absolute too). To reorganize again,
+  `scripts/data/migrate_captures_layout.py` moves dirs + rewrites indexes idempotently
+  (dry-run default).
 - **Train/val split by kyoku, never by frame** — the same physical discard appears in many frames
   of one kyoku; a frame split leaks it and inflates accuracy.
 - **Recording must never break the bridge or the TUI.** `parse_liqi` runs under Akagi's lock on

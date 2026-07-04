@@ -1,17 +1,20 @@
-"""One-shot ingest of a MahjongCopilot capture run: discover games -> convert
-(liqi wire -> our GT) -> build_dataset (P1 gate + P2 erode) -> optionally retrain.
+"""One-shot ingest of a MahjongCopilot capture run: discover games -> build_dataset
+(P1 gate + P2 erode) -> optionally retrain. Captures are already our `GTRecord`
+format (autoplay_ai.py writes it inline under captures/raw/ai_session/), so there
+is no convert step here anymore — legacy b64-wire runs are migrated in place
+once by scripts/data/migrate_ai_to_gtrecord.py, not by this script.
 
 A "run" dir is either a single game (has frames.jsonl directly, like run_1) or a
 parent of game*/ subdirs (each with frames.jsonl, like run_3). Both are handled.
 
 Examples (PowerShell):
   $PY = "C:/Users/zsx/miniforge3/envs/auto/python.exe"; $env:PYTHONPATH = "."
-  # convert + build every game in a run, naming them ai_<run>_<game>:
+  # build every game in a run, naming them ai_<run>_<game>:
   & $PY scripts/data/ingest_run.py captures/raw/ai_session/run_4
   # then retrain on ALL ingested games, holding out one as val:
   & $PY scripts/data/ingest_run.py captures/raw/ai_session/run_4 --train --val ai_run4_game1:*
 
-Dev-only (convert step reaches into ../MahjongCopilot). Run in the `auto` env.
+Run in the `auto` env.
 """
 
 from __future__ import annotations
@@ -27,7 +30,8 @@ from majsoul_eye import paths
 
 def discover_games(run_dir: str) -> list[tuple[str, str]]:
     """Return [(rel_dir_under_session, name), ...] for each game in run_dir.
-    `rel` is relative to the run_dir's parent (so convert_mjcopilot --session=parent works)."""
+    `rel` is relative to the run_dir's parent (matches the GTRecord jsonl's own
+    layout: "run_13/game1" <-> sibling "run_13/game1.jsonl")."""
     run_dir = os.path.normpath(run_dir)
     parent = os.path.dirname(run_dir)
     run = os.path.basename(run_dir)
@@ -68,9 +72,9 @@ def main():
         raise SystemExit(f"no games (frames.jsonl) found under {args.run_dir}")
     print(f"discovered {len(games)} game(s): {[n for _, n in games]}")
 
-    # 1) build_dataset per game — AI captures are already GTRecord (no convert).
-    #    discover_games returns rel dirs like "run_13/game1"; the GTRecord jsonl is
-    #    the sibling "run_13/game1.jsonl" and its frames dir is "run_13/game1/".
+    # 1) build_dataset per game — AI captures are already GTRecord (no convert
+    #    step: discover_games returns rel dirs like "run_13/game1"; the GTRecord
+    #    jsonl is the sibling "run_13/game1.jsonl" and its frames dir is "run_13/game1/").
     for rel, name in games:
         cap = os.path.join(parent, rel) + ".jsonl"
         frames_dir = os.path.join(parent, rel)
@@ -86,7 +90,7 @@ def main():
         n = len(glob.glob(os.path.join(args.datasets, name, "crops", "*", "*.png")))
         print(f"  {name}: {n} crops")
 
-    # 3) optional retrain on EVERY dataset that has a matching capture jsonl
+    # 2) optional retrain on EVERY dataset that has a matching capture jsonl
     if args.train:
         data_args = []
         for rel, nm in games:
