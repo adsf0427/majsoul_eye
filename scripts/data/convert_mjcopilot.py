@@ -34,7 +34,6 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
-import copy
 import glob
 import io
 import json
@@ -44,6 +43,7 @@ import types
 
 from majsoul_eye import paths
 from majsoul_eye.capture.schema import GTRecord, write_records
+from majsoul_eye.capture.mjcopilot_gt import make_capturing_game_state, gt_fields
 
 
 def _import_mjcopilot(mc_dir: str):
@@ -67,23 +67,12 @@ def _import_mjcopilot(mc_dir: str):
     return liqimod, GameState, Bot, GameMode
 
 
-def convert_game(game_dir: str, liqimod, GameState, Bot, GameMode) -> tuple[list[GTRecord], list[dict]]:
-    """Return (gt_records, frame_index) for one MahjongCopilot game dir."""
-    captured: list[tuple[int, dict]] = []
-    cur = {"seq": None}
+def convert_game(game_dir: str, liqimod, GameState, Bot, GameMode,
+                 wire_name: str = "frames.jsonl") -> tuple[list[GTRecord], list[dict]]:
+    """Return (gt_records, frame_index) for one MahjongCopilot game dir.
 
-    class CapList(list):  # records (seq, deep-copied event) for every append
-        def append(self, x):
-            captured.append((cur["seq"], copy.deepcopy(x)))
-            super().append(x)
-
-        def extend(self, xs):
-            for x in xs:
-                self.append(x)
-
-    class TracedGameState(GameState):
-        def __setattr__(self, k, v):
-            object.__setattr__(self, k, CapList() if k == "mjai_pending_input_msgs" else v)
+    ``wire_name`` is the b64 liqi-wire JSONL inside ``game_dir`` (legacy captures
+    name it ``frames.jsonl``; migrated captures name it ``liqi.jsonl``)."""
 
     class StubBot(Bot):
         def __init__(self):
@@ -106,18 +95,16 @@ def convert_game(game_dir: str, liqimod, GameState, Bot, GameMode) -> tuple[list
         def react_batch(self, l):
             return None
 
-    gs = TracedGameState(StubBot())
+    gs, drain_mjai = make_capturing_game_state(GameState, StubBot())
     lp = liqimod.LiqiProto()
 
-    log = os.path.join(game_dir, "frames.jsonl")
+    log = os.path.join(game_dir, wire_name)
     seq_records: dict[int, dict] = {}   # seq -> {ts, method, action_name, raw, mjai[]}
     for line in open(log, encoding="utf-8"):
         line = line.strip()
         if not line:
             continue
         d = json.loads(line)
-        cur["seq"] = d["seq"]
-        before = len(captured)
         try:
             res = lp.parse(base64.b64decode(d["b64"]))
         except Exception:
@@ -129,12 +116,13 @@ def convert_game(game_dir: str, liqimod, GameState, Bot, GameMode) -> tuple[list
                 gs.input(res)
             except Exception:
                 pass
-        new = [e for (_, e) in captured[before:]]
+        new = drain_mjai()
         if new:
+            method, action_name = gt_fields(res)
             rec = seq_records.setdefault(d["seq"], {
                 "ts": d.get("ts", 0.0),
-                "method": res.get("method"),
-                "action_name": res["data"].get("name") if res.get("method") == ".lq.ActionPrototype" else None,
+                "method": method,
+                "action_name": action_name,
                 "raw": res,
                 "mjai": [],
             })
