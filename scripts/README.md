@@ -20,7 +20,7 @@ Legend: 🔴 dev-only / coupled to a sibling repo (`recognize/` never imports th
 | script | role | out |
 |---|---|---|
 | `record_gt.py` 🔴🔁 | inject GT tap, launch **Akagi**; passive capture (观战/人工, autoplay OFF). Runs in the **`akagi`** env. | `captures/raw/manual/sessionN.jsonl` + frames |
-| `autoplay_ai.py` 🔴🔁 | **Mortal-AI autoplay + capture** in one Playwright Chromium (defaults `--dry-run`). A real AI melds/riichis → covers the hard zones. | `captures/raw/ai_session/run_N/` (liqi wire + PNGs) |
+| `autoplay_ai.py` 🔴🔁 | **Mortal-AI autoplay + capture** in one Playwright Chromium (defaults `--dry-run`). A real AI melds/riichis → covers the hard zones. Writes `GTRecord` inline, same format as `record_gt.py` — no separate convert step. | `captures/raw/ai_session/run_N/gameM.jsonl` + `gameM/{liqi.jsonl,frames.jsonl,frames/}` |
 
 ## `data/` — raw → our GT format, frame fixups, layout infra
 

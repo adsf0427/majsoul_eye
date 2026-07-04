@@ -7,17 +7,24 @@ of hardcoding ``"captures/..."`` paths or re-deriving the frames-dir stem rule.
 Layout::
 
     captures/
-      raw/            ai_session/ (MahjongCopilot)  +  manual/ (record_gt sessions)
-      intermediate/   gt/ (converted GT + hollow indexes)  +  derived/ (cropped / de-letterboxed)
+      raw/            ai_session/ (GTRecord, written inline by autoplay_ai.py — same
+                      format as manual)  +  manual/ (record_gt sessions)
+      intermediate/   derived/ (cropped / de-letterboxed) — ``gt/`` (converted GT +
+                      hollow indexes) is RETIRED; AI captures now write ``GTRecord``
+                      directly under ``raw/ai_session/`` instead of a separate
+                      converted tree (the ``GT`` constant below survives only for the
+                      vestigial standalone ``convert_mjcopilot`` CLI / one-time legacy
+                      migration).
       legacy/         archived byte-identical duplicates
 
 Output-role data (``datasets/``, ``out/``, ``fails/``) lives OUTSIDE ``captures/``.
 
 ``frames.jsonl`` ``file`` entries are stored RELATIVE (new layout): index-relative
-(``frames/000009.png``) for self-contained frame dirs, or captures-relative
-(``raw/ai_session/run_3/game1/frames/000009.png``) for the hollow ``gt/`` indexes
-that point back into the raw tree. ``resolve_frame_path`` also still accepts the
-legacy absolute paths, so un-migrated indexes keep loading.
+(``frames/000009.png``) for self-contained frame dirs. (Captures-relative entries
+like ``raw/ai_session/run_3/game1/frames/000009.png``, used by the old hollow
+``gt/`` indexes to point back into the raw tree, are a legacy form now that ``gt/``
+is retired.) ``resolve_frame_path`` also still accepts the legacy absolute paths,
+so un-migrated indexes keep loading.
 """
 from __future__ import annotations
 
