@@ -25,18 +25,19 @@ import json
 import os
 
 from majsoul_eye import paths
-from majsoul_eye.capture.schema import write_records
 
 
-def find_b64_game_dirs(ai_session: str) -> list:
-    """Dirs holding a legacy b64 wire (frames.jsonl with a 'b64' field)."""
-    out = []
+def find_game_dirs(ai_session: str) -> list:
+    """Game dirs holding a liqi wire — either a legacy b64 ``frames.jsonl`` OR an
+    already-renamed ``liqi.jsonl`` (so a partially-migrated dir from an interrupted
+    run is re-picked and finished on retry)."""
+    dirs = set()
     for fj in glob.glob(os.path.join(ai_session, "**", "frames.jsonl"), recursive=True):
-        gd = os.path.dirname(fj)
-        # skip a NEW-layout screenshot index (no 'b64'): peek the first non-empty line
-        if _looks_like_wire(fj):
-            out.append(gd)
-    return sorted(out)
+        if _looks_like_wire(fj):                       # legacy b64 wire (not a screenshot index)
+            dirs.add(os.path.dirname(fj))
+    for lj in glob.glob(os.path.join(ai_session, "**", "liqi.jsonl"), recursive=True):
+        dirs.add(os.path.dirname(lj))                  # wire already renamed (done or partial)
+    return sorted(dirs)
 
 
 def _looks_like_wire(frames_jsonl: str) -> bool:
@@ -73,9 +74,29 @@ def plan_targets(game_dir: str) -> dict:
 
 
 def is_migrated(game_dir: str) -> bool:
-    """True if this dir already has the new layout (liqi.jsonl + sibling GTRecord)."""
+    """True only if the new layout is COMPLETE: GTRecord + renamed wire + index all
+    present (so an interrupted run that produced only some of them is redone)."""
     t = plan_targets(game_dir)
-    return os.path.exists(t["wire_dest"]) and os.path.exists(t["gt_path"])
+    return (os.path.exists(t["gt_path"]) and os.path.exists(t["wire_dest"])
+            and os.path.exists(t["index_path"]))
+
+
+def _atomic_write(path: str, text: str) -> None:
+    """Write via a temp file + os.replace so a crash can't leave a truncated file
+    that later looks 'present' to is_migrated."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def _render_records(records) -> str:
+    """Serialize GTRecords exactly like capture.schema.write_records (schema header
+    + one record per line) so migrated files stay byte-identical to the golden."""
+    from majsoul_eye.capture.schema import SCHEMA_VERSION
+    out = [json.dumps({"_schema": SCHEMA_VERSION})]
+    out += [r.to_json_line() for r in records]
+    return "".join(l + "\n" for l in out)
 
 
 def main() -> None:
@@ -87,7 +108,7 @@ def main() -> None:
     args = ap.parse_args()
 
     ai_session = os.path.abspath(args.ai_session)
-    game_dirs = find_b64_game_dirs(ai_session)
+    game_dirs = find_game_dirs(ai_session)
     todo = [gd for gd in game_dirs if not is_migrated(gd)]
     print(f"{'APPLY' if args.apply else 'DRY RUN'} — {len(game_dirs)} b64 game(s), "
           f"{len(todo)} to migrate, {len(game_dirs) - len(todo)} already done")
@@ -102,24 +123,27 @@ def main() -> None:
 
     for gd in todo:
         t = plan_targets(gd)
-        print(f"  {t['name']}: {gd}")
+        # wire source: the renamed liqi.jsonl if a prior interrupted run already moved it,
+        # else the legacy frames.jsonl.
+        wire_name = "liqi.jsonl" if os.path.exists(t["wire_dest"]) else "frames.jsonl"
+        print(f"  {t['name']}: {gd}  (wire={wire_name})")
         print(f"    -> {t['gt_path']}")
-        print(f"    -> rename frames.jsonl -> {t['wire_dest']}")
+        if wire_name == "frames.jsonl":
+            print(f"    -> rename frames.jsonl -> {t['wire_dest']}")
         print(f"    -> write screenshot index {t['index_path']}")
         if not args.apply:
             continue
-        # 1) re-derive GT from the legacy wire (still named frames.jsonl here)
+        # 1) re-derive GT from the wire and write it to its OWN path first (atomic).
         records, frame_index = convert_game(gd, liqimod, GameState, Bot, GameMode,
-                                            wire_name="frames.jsonl")
-        # 2) rename the wire BEFORE overwriting frames.jsonl with the index
-        os.rename(os.path.join(gd, "frames.jsonl"), t["wire_dest"])
-        # 3) write GTRecord + index-relative screenshot index
-        write_records(t["gt_path"], records)
-        with open(t["index_path"], "w", encoding="utf-8") as f:
-            for fi in frame_index:
-                seq = fi["seq"]
-                f.write(json.dumps({"seq": seq, "file": f"frames/{seq:06d}.png",
-                                    "status": "ok"}) + "\n")
+                                            wire_name=wire_name)
+        _atomic_write(t["gt_path"], _render_records(records))
+        # 2) rename the wire only if it is still the legacy frames.jsonl (idempotent).
+        if wire_name == "frames.jsonl":
+            os.rename(os.path.join(gd, "frames.jsonl"), t["wire_dest"])
+        # 3) write the index-relative screenshot index last (frames.jsonl now free), atomic.
+        lines = [json.dumps({"seq": fi["seq"], "file": f"frames/{fi['seq']:06d}.png",
+                             "status": "ok"}) for fi in frame_index]
+        _atomic_write(t["index_path"], "".join(l + "\n" for l in lines))
 
     if not args.apply:
         print("\n(dry run — nothing changed; pass --apply to migrate)")
