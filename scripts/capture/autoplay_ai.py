@@ -51,6 +51,8 @@ import time
 from collections import deque
 
 from majsoul_eye.capture.roi_diff import roi_diff
+from majsoul_eye.capture.schema import GTRecord, GTWriter
+from majsoul_eye.capture.mjcopilot_gt import make_capturing_game_state, gt_fields
 
 MJC = r"D:/code/phoenix/MahjongCopilot"
 
@@ -68,6 +70,13 @@ def stable_capture_step(state, frame, thresh):
     if ref is not None and roi_diff(frame, ref) <= thresh:
         return "save", {"ref": None}
     return "wait", {"ref": frame}
+
+
+def _frame_index_line(seq: int, ts: float) -> dict:
+    """One screenshot-index record (index-relative file path), matching the
+    manual FrameSyncer's frames.jsonl shape so build_dataset consumes it the
+    same way."""
+    return {"seq": seq, "file": f"frames/{seq:06d}.png", "status": "ok", "ts": ts}
 
 
 def main() -> None:
@@ -384,14 +393,34 @@ def main() -> None:
         task.start_action_steps(auto_next_iter(), None)
 
     game_state = None
+    drain_mjai = None           # closure from make_capturing_game_state (per game)
     game_idx = 0                # which game in this run (-> out_dir/game<idx>/)
-    game_raw_fh = None          # current game's frames.jsonl handle
+    game_wire_fh = None         # current game's raw-wire liqi.jsonl handle
+    gt_writer = None            # current game's GTRecord writer (game<idx>.jsonl)
+    game_index_fh = None        # current game's screenshot-index frames.jsonl handle
     game_frames_dir = None      # current game's frames/ dir
     seq = 0                     # per-GAME frame counter
     pending_seq = None          # latest board-changing seq awaiting a screenshot
     fulfilled_seq = None
     last_event_t = 0.0
     _stab = {"ref": None}       # pixel-stability ref for the currently-armed pending_seq
+
+    def write_gt(seq, ts, msg):
+        """Derive this message's mjai and, if any, append a GTRecord. Wrapped so
+        recording can never break the capture loop (mirrors akagi_tap)."""
+        if gt_writer is None or drain_mjai is None:
+            return
+        try:
+            mjai = drain_mjai()
+            if not mjai:
+                return                                   # emit-on-new-mjai (see design §4)
+            method, action_name = gt_fields(msg)
+            gt_writer.put(GTRecord(
+                seq=seq, ts=ts, flow_id="", seat=getattr(game_state, "seat", -1),
+                last_op_step=0, syncing=False, method=method, action_name=action_name,
+                raw_liqi=msg, mjai=mjai))
+        except Exception as e:
+            print(f"  gt write err seq {seq}: {type(e).__name__}: {e}", flush=True)
 
     def maybe_screenshot():
         nonlocal pending_seq, fulfilled_seq
@@ -411,6 +440,9 @@ def main() -> None:
             return                                       # picture still moving; retry next tick
         with open(os.path.join(game_frames_dir, f"{pending_seq:06d}.png"), "wb") as fh:
             fh.write(png)
+        if game_index_fh is not None:
+            game_index_fh.write(json.dumps(_frame_index_line(pending_seq, time.time())) + "\n")
+            game_index_fh.flush()
         fulfilled_seq = pending_seq
 
     overlay = None
@@ -457,40 +489,48 @@ def main() -> None:
                 # new game: authGame REQ -> new game<M>/ dir + fresh GameState (sets seat + re-inits bot)
                 if (mtype, method) == (liqi.MsgType.REQ, liqi.LiqiMethod.authGame):
                     auto_next_state.update(active=False, started=0.0, clicked_next=False, failed=False)
-                    if game_raw_fh is not None:
-                        game_raw_fh.close()
+                    if game_wire_fh is not None:
+                        game_wire_fh.close()
+                    if game_index_fh is not None:
+                        game_index_fh.close()
+                    if gt_writer is not None:
+                        gt_writer.close()
                     game_idx += 1
                     game_dir = os.path.join(out_dir, f"game{game_idx}")
                     game_frames_dir = os.path.join(game_dir, "frames")
                     os.makedirs(game_frames_dir, exist_ok=True)
                     gamemeta.write_metadata(game_dir, game_language)   # game<N>/metadata.json = {"language": ...}
-                    game_raw_fh = open(os.path.join(game_dir, "frames.jsonl"), "w", encoding="utf-8")
+                    game_wire_fh = open(os.path.join(game_dir, "liqi.jsonl"), "w", encoding="utf-8")
+                    game_index_fh = open(os.path.join(game_dir, "frames.jsonl"), "w", encoding="utf-8")
+                    gt_writer = GTWriter(os.path.join(out_dir, f"game{game_idx}.jsonl"))
                     seq, pending_seq, fulfilled_seq = 0, None, None
-                    game_state = GameState(bot)
+                    game_state, drain_mjai = make_capturing_game_state(GameState, bot)
                     seq += 1
-                    game_raw_fh.write(json.dumps({"seq": seq, "ts": ts,
-                                                  "b64": base64.b64encode(raw).decode()}) + "\n")
-                    game_raw_fh.flush()
+                    game_wire_fh.write(json.dumps({"seq": seq, "ts": ts,
+                                                   "b64": base64.b64encode(raw).decode()}) + "\n")
+                    game_wire_fh.flush()
                     game_state.input(msg)
+                    write_gt(seq, ts, msg)
                     automation.on_enter_game()
                     print(f"  game{game_idx} start -> {game_dir}", flush=True)
                     continue
 
-                if game_state is None or game_raw_fh is None:
+                if game_state is None or game_wire_fh is None:
                     continue                            # pre-game frames on the socket (before authGame)
                 if method in METHODS_TO_IGNORE:
                     continue                            # parsed (LiqiProto state kept) but not recorded/routed
 
                 seq += 1
-                game_raw_fh.write(json.dumps({"seq": seq, "ts": ts,
-                                              "b64": base64.b64encode(raw).decode()}) + "\n")
-                game_raw_fh.flush()
+                game_wire_fh.write(json.dumps({"seq": seq, "ts": ts,
+                                               "b64": base64.b64encode(raw).decode()}) + "\n")
+                game_wire_fh.flush()
 
                 try:
                     reaction = game_state.input(msg)
                 except Exception as e:
                     print(f"  game_state.input err on {method}: {type(e).__name__}: {e}", flush=True)
                     continue
+                write_gt(seq, ts, msg)
                 kyoku_just_ended = game_state.kyoku_just_ended
                 game_state.kyoku_just_ended = False
 
@@ -523,9 +563,16 @@ def main() -> None:
                     else:
                         automation.on_end_game()
                     game_state = None
-                    if game_raw_fh is not None:
-                        game_raw_fh.close()
-                        game_raw_fh = None
+                    drain_mjai = None
+                    if game_wire_fh is not None:
+                        game_wire_fh.close()
+                        game_wire_fh = None
+                    if game_index_fh is not None:
+                        game_index_fh.close()
+                        game_index_fh = None
+                    if gt_writer is not None:
+                        gt_writer.close()
+                        gt_writer = None
 
             maybe_screenshot()
             if auto_next_state["failed"] and args.live and args.autojoin and game_state is None:
@@ -540,8 +587,12 @@ def main() -> None:
     finally:
         if overlay is not None:
             overlay.stop()
-        if game_raw_fh is not None:
-            game_raw_fh.close()
+        if game_wire_fh is not None:
+            game_wire_fh.close()
+        if game_index_fh is not None:
+            game_index_fh.close()
+        if gt_writer is not None:
+            gt_writer.close()
         try:
             browser.stop(True)
         except Exception:
