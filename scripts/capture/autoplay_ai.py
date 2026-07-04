@@ -100,10 +100,14 @@ def main() -> None:
     ap.add_argument("--overlay-fps", type=float, default=12.0, help="Overlay redraw rate (Hz).")
     ap.add_argument("--overlay-conf", type=float, default=0.25, help="Detector confidence threshold for the overlay.")
     ap.add_argument("--overlay-device", default="cuda", help="Torch device for the overlay detector (cuda/cpu).")
+    ap.add_argument("--lang", default=None,
+                    help="Force the captured display language (zh-Hans/zh-Hant/ja/en); else server-coarse + page probe. "
+                         "Written to each game<N>/metadata.json.")
     ap.add_argument("--mjc", default=MJC, help="Path to the MahjongCopilot repo.")
     args = ap.parse_args()
     url = args.url or SERVERS[args.server]
     from majsoul_eye.capture import overlay as overlay_mod   # light: no ultralytics until detector built
+    from majsoul_eye.capture import gamemeta                 # per-game metadata (display language)
     overlay_canvas_id = overlay_mod.OVERLAY_CANVAS_ID if args.overlay else None
 
     if args.overlay and not os.path.isabs(args.detector_weights):
@@ -217,6 +221,22 @@ def main() -> None:
         except Exception as e:
             print(f"  cdp session err: {e}", flush=True)
     browser._action_queue.put(_mk_cdp)
+
+    # Resolve the captured client display language ONCE: --lang override > page probe > server coarse.
+    # (Language is a client render setting, NOT in the liqi protocol — see capture/gamemeta.py.)
+    _lang_dump = None
+    try:
+        _rq_lang: queue.Queue = queue.Queue()
+        browser._action_queue.put(lambda: _rq_lang.put(browser.page.evaluate(gamemeta.probe_language_js())))
+        _lang_dump = _rq_lang.get(True, 5)
+    except Exception as e:
+        print(f"  lang probe failed: {e}", flush=True)
+    if _lang_dump:
+        print(f"  [lang probe] {_lang_dump}", flush=True)     # first-run diagnostic: where MajSoul stores language
+    _probe_lang = gamemeta.parse_probe_dump(_lang_dump)
+    game_language = gamemeta.resolve_language(args.server, probe=_probe_lang, override=args.lang)
+    print(f"  captured language = {game_language} "
+          f"(server={args.server} probe={_probe_lang} override={args.lang})", flush=True)
 
     def screenshot_png():
         cdp = cdp_holder[0]
@@ -428,6 +448,7 @@ def main() -> None:
                     game_dir = os.path.join(out_dir, f"game{game_idx}")
                     game_frames_dir = os.path.join(game_dir, "frames")
                     os.makedirs(game_frames_dir, exist_ok=True)
+                    gamemeta.write_metadata(game_dir, game_language)   # game<N>/metadata.json = {"language": ...}
                     game_raw_fh = open(os.path.join(game_dir, "frames.jsonl"), "w", encoding="utf-8")
                     seq, pending_seq, fulfilled_seq = 0, None, None
                     game_state = GameState(bot)

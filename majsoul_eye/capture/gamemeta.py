@@ -1,0 +1,112 @@
+"""Per-game metadata for AI-autoplay captures — currently just the display language.
+
+The display language (简体 / 繁體 / 日本語 / English) is NOT carried in the liqi protocol
+(game state is language-neutral: tiles are ``1m``/``1z``…, actions are enums) — it is a
+client-side render setting. We resolve it from three sources, highest priority first:
+
+  1. an explicit ``--lang`` override (the user knows their own client — 100% reliable);
+  2. a page probe (``page.evaluate`` reading the MajSoul client) — mainly to split cn 简/繁;
+  3. a coarse map from ``--server`` (jp→ja, en→en, cn→zh-Hans default).
+
+and write ``<game_dir>/metadata.json`` = ``{"language": "<code>"}`` (BCP-47-ish codes).
+
+Browser-agnostic: the probe is exposed as a JS *string* (``probe_language_js``) that the
+caller runs on its own page; ``parse_probe_dump`` interprets the returned dump. Nothing here
+imports a browser, Akagi, or ultralytics — the module is pure + unit-testable.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+
+# --server -> coarse display language. jp/en are unambiguous; cn defaults to Simplified
+# (Traditional on the cn/global client is a display setting → needs the probe or --lang).
+SERVER_LANG = {"jp": "ja", "en": "en", "cn": "zh-Hans"}
+
+# Aliases MajSoul / browsers use → canonical BCP-47-ish code. Keys are lower-cased, '_'→'-'.
+_LANG_ALIASES = {
+    "chs": "zh-Hans", "zh-hans": "zh-Hans", "zh-cn": "zh-Hans", "zhs": "zh-Hans",
+    "zh": "zh-Hans", "zh-chs": "zh-Hans", "hans": "zh-Hans",
+    "cht": "zh-Hant", "zh-hant": "zh-Hant", "zh-tw": "zh-Hant", "zh-hk": "zh-Hant",
+    "zht": "zh-Hant", "zh-cht": "zh-Hant", "hant": "zh-Hant",
+    "jp": "ja", "ja": "ja", "ja-jp": "ja", "jpn": "ja",
+    "en": "en", "en-us": "en", "en-gb": "en", "eng": "en",
+}
+
+_KNOWN = ("zh-Hans", "zh-Hant", "ja", "en")
+
+
+def normalize_lang(raw):
+    """Map a raw language string to a canonical code (e.g. ``chs``→``zh-Hans``).
+    Returns ``None`` for empty/None; passes an unknown non-empty value through trimmed."""
+    if raw is None:
+        return None
+    key = str(raw).strip().lower().replace("_", "-")
+    if not key:
+        return None
+    return _LANG_ALIASES.get(key, str(raw).strip())
+
+
+def resolve_language(server, probe=None, override=None):
+    """Resolve the captured display language. Priority: override > probe > server-coarse.
+    Unknown server with no override/probe → ``"unknown"``."""
+    for cand in (override, probe):
+        norm = normalize_lang(cand)
+        if norm:
+            return norm
+    return SERVER_LANG.get(server, "unknown")
+
+
+def probe_language_js():
+    """JS (for ``page.evaluate``) returning a JSON string of candidate language sources:
+    lang/locale-ish localStorage entries, ``navigator.language``, and cookies. On first run
+    the caller should LOG this dump to discover where MajSoul stores the display language."""
+    return (
+        "(() => {"
+        "  const hits = {};"
+        "  try {"
+        "    for (let i = 0; i < localStorage.length; i++) {"
+        "      const k = localStorage.key(i);"
+        "      const v = localStorage.getItem(k);"
+        "      if (/lang|locale|chs|cht|hans|hant/i.test(k) ||"
+        "          (v && v.length < 300 && /\\b(chs|cht|zh-?han[st]|ja|jp|en)\\b/i.test(v))) {"
+        "        hits[k] = v;"
+        "      }"
+        "    }"
+        "  } catch (e) {}"
+        "  let nav = null; try { nav = navigator.language; } catch (e) {}"
+        "  let cookie = null; try { cookie = document.cookie; } catch (e) {}"
+        "  return JSON.stringify({localStorage: hits, navigatorLanguage: nav, cookie: cookie});"
+        "})()"
+    )
+
+
+def parse_probe_dump(dump):
+    """Best-effort extract a language code from ``probe_language_js``'s dump. Conservative:
+    only trusts a localStorage entry whose KEY names a language/locale setting AND whose value
+    is a recognizable code — avoids false positives from unrelated code-looking blobs.
+    Returns a canonical code (one of _KNOWN) or ``None`` if nothing trustworthy was found."""
+    if isinstance(dump, str):
+        try:
+            dump = json.loads(dump)
+        except Exception:
+            return None
+    if not isinstance(dump, dict):
+        return None
+    ls = dump.get("localStorage") or {}
+    for k, v in ls.items():
+        if re.search(r"lang|locale", str(k), re.I):
+            norm = normalize_lang(v)
+            if norm in _KNOWN:
+                return norm
+    return None
+
+
+def write_metadata(game_dir, language):
+    """Write ``<game_dir>/metadata.json`` = ``{"language": language}``. Returns the path.
+    Kept minimal (language only) but JSON so more fields can be added later."""
+    path = os.path.join(game_dir, "metadata.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"language": language}, fh, ensure_ascii=False, indent=2)
+    return path
