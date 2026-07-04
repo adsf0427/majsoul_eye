@@ -16,6 +16,8 @@ import threading
 import time
 
 OVERLAY_CANVAS_ID = "majsoul_eye_overlay"
+TRIGGER_FLAG = "__majsoul_eye_detect"          # window flag set by the keydown listener
+TRIGGER_INSTALLED = "__majsoul_eye_trigger_installed"  # idempotent-install guard
 
 
 def detections_to_ops(dets: list) -> list:
@@ -83,6 +85,27 @@ def inject_js(canvas_id: str, shot_w: int, shot_h: int) -> str:
     )
 
 
+def poll_trigger_js(flag: str, key: str) -> str:
+    """JS for a ROUND-TRIP eval (returns a value): idempotently install a ``window``
+    keydown listener that sets ``window[flag]=true`` when ``e.code === key``, then
+    read-and-clear the flag and RETURN the boolean. The install guard lives on
+    ``window`` (wiped by a page reload), so a reload transparently re-installs the
+    listener on the next poll — same self-heal as the canvas. Capture-phase
+    (``true``) so the press fires even while Majsoul's WebGL canvas has focus."""
+    f = json.dumps(flag)
+    k = json.dumps(key)
+    g = json.dumps(TRIGGER_INSTALLED)
+    return (
+        "(() => {"
+        f"if (!window[{g}]) {{"
+        f"  window[{g}] = true;"
+        f"  window.addEventListener('keydown', (e) => {{ if (e.code === {k}) window[{f}] = true; }}, true);"
+        "}"
+        f"const v = window[{f}]; window[{f}] = false; return !!v;"
+        "})()"
+    )
+
+
 def hide_canvas_js(canvas_id: str) -> str:
     """Make the overlay canvas non-painted (retains its drawn pixels) for a clean shot."""
     cid = json.dumps(canvas_id)
@@ -96,16 +119,20 @@ def show_canvas_js(canvas_id: str) -> str:
 
 
 class DetectionOverlay:
-    """Runs a throttled detect+draw loop on a daemon thread, drawing detector boxes
-    onto the injected canvas. Decoupled from the game/WS loop: it only calls the two
-    injected callables (both must be thread-safe w.r.t. the page).
+    """Runs a detect+draw loop on a daemon thread, drawing detector boxes onto the
+    injected canvas. Decoupled from the game/WS loop: it only calls the injected
+    callables (all must be thread-safe w.r.t. the page). Two modes:
+      * default — throttled to ``fps``.
+      * ``manual`` — detect once per ``key`` press in the browser; polls a window
+        flag via ``eval_js_result`` (round-trip eval). Boxes stay frozen between presses.
 
     ``capture_png`` MUST return a screenshot with the overlay canvas hidden (see
     ``hide_canvas_js``) so detection runs on clean pixels and dataset frames stay clean.
     """
 
     def __init__(self, capture_png, eval_js, weights, device="cuda", fps=12,
-                 conf=0.25, canvas_id=OVERLAY_CANVAS_ID, detector=None):
+                 conf=0.25, canvas_id=OVERLAY_CANVAS_ID, detector=None,
+                 manual=False, key="Space", eval_js_result=None, poll_interval=0.1):
         self.capture_png = capture_png
         self.eval_js = eval_js
         self.canvas_id = canvas_id
@@ -114,6 +141,10 @@ class DetectionOverlay:
         self._device = device
         self._conf = conf
         self._detector = detector          # injectable for tests; else built lazily
+        self.manual = manual               # press-to-detect instead of the fps loop
+        self.key = key                     # KeyboardEvent.code that triggers a detect
+        self.eval_js_result = eval_js_result  # round-trip eval (returns a value); manual mode only
+        self.poll_interval = poll_interval    # seconds between browser-flag polls in manual mode
         self._stop = False
         self._thread = None
 
@@ -149,12 +180,26 @@ class DetectionOverlay:
             if dt < period:
                 time.sleep(period - dt)
 
+    def _run_manual(self):
+        """Poll the browser's keydown flag; detect once per press (see poll_trigger_js)."""
+        if self.eval_js_result is None:
+            print("  [overlay] manual mode needs eval_js_result; overlay off", flush=True)
+            return
+        while not self._stop:
+            try:
+                if self.eval_js_result(poll_trigger_js(TRIGGER_FLAG, self.key)):
+                    self._tick()
+            except Exception as e:                    # never let the loop die
+                print(f"  [overlay] poll error: {type(e).__name__}: {e}", flush=True)
+            time.sleep(self.poll_interval)
+
     def start(self):
         det = self._ensure_detector()                  # load weights once, up front
         import numpy as np
         det.predict(np.zeros((64, 64, 3), np.uint8))   # warm-up: trip device errors here (caught by caller) instead of 12x/s per tick
         self._stop = False
-        self._thread = threading.Thread(target=self._run, name="det-overlay", daemon=True)
+        target = self._run_manual if self.manual else self._run
+        self._thread = threading.Thread(target=target, name="det-overlay", daemon=True)
         self._thread.start()
 
     def stop(self):

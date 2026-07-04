@@ -97,7 +97,11 @@ def main() -> None:
                     help="Draw the tile detector's boxes live onto the browser (visualizer; off by default).")
     ap.add_argument("--detector-weights", default="majsoul_eye/recognize/tile_detector.pt",
                     help="Detector weights for --overlay (pass weights/detector/tile_detector_obb.pt for rotated OBB polys).")
-    ap.add_argument("--overlay-fps", type=float, default=12.0, help="Overlay redraw rate (Hz).")
+    ap.add_argument("--overlay-fps", type=float, default=12.0, help="Overlay redraw rate (Hz); ignored with --overlay-manual.")
+    ap.add_argument("--overlay-manual", action="store_true",
+                    help="Manual overlay: detect once per --overlay-key press in the browser (no fps loop).")
+    ap.add_argument("--overlay-key", default="Space",
+                    help="KeyboardEvent.code that triggers a manual detect (e.g. Space, KeyD, Enter).")
     ap.add_argument("--overlay-conf", type=float, default=0.25, help="Detector confidence threshold for the overlay.")
     ap.add_argument("--overlay-device", default="cuda", help="Torch device for the overlay detector (cuda/cpu).")
     ap.add_argument("--lang", default=None,
@@ -412,16 +416,27 @@ def main() -> None:
     overlay = None
     if args.overlay:
         eval_js = lambda js: browser._action_queue.put(lambda: browser.page.evaluate(js))
+        def eval_js_result(js):                     # round-trip eval (returns the JS value); manual-mode poll
+            rq: queue.Queue = queue.Queue()
+            browser._action_queue.put(lambda: rq.put(browser.page.evaluate(js)))
+            try:
+                return rq.get(True, 5)
+            except Exception:
+                return None
         try:
             overlay = overlay_mod.DetectionOverlay(
                 capture_png=screenshot_png, eval_js=eval_js,
                 weights=args.detector_weights, device=args.overlay_device,
                 fps=args.overlay_fps, conf=args.overlay_conf,
                 canvas_id=overlay_canvas_id,
+                manual=args.overlay_manual, key=args.overlay_key, eval_js_result=eval_js_result,
             )
             print(f"[overlay] loading detector {args.detector_weights} on {args.overlay_device} …", flush=True)
             overlay.start()
-            print(f"[overlay] live @ {args.overlay_fps:g} fps", flush=True)
+            if args.overlay_manual:
+                print(f"[overlay] manual: press '{args.overlay_key}' in the browser to detect once", flush=True)
+            else:
+                print(f"[overlay] live @ {args.overlay_fps:g} fps", flush=True)
         except Exception as e:
             print(f"[overlay] disabled (init failed): {type(e).__name__}: {e}", flush=True)
             overlay = None

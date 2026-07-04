@@ -131,6 +131,49 @@ def test_overlay_start_stop_runs_ticks():
     assert not o._thread.is_alive()           # stop() joined the daemon
 
 
+def test_poll_trigger_js_installs_listener_reads_and_clears():
+    js = ov.poll_trigger_js("__flag", "Space")
+    assert json.dumps("__flag") in js          # flag name embedded (escaped)
+    assert json.dumps("Space") in js           # key code embedded (escaped)
+    assert "addEventListener" in js and "keydown" in js
+    assert ", true)" in js                      # capture phase: fires before the game canvas
+    assert "return !!" in js                    # reads-and-clears then RETURNS the boolean
+    assert json.dumps(ov.TRIGGER_INSTALLED) in js   # idempotent-install guard (reload-safe)
+
+
+def test_overlay_manual_ticks_once_per_browser_trigger():
+    import time
+    js_log = []
+    det = _FakeDetector([_hbb([1, 2, 3, 4], "5m", 4, 0.9)])
+    triggers = [True]                           # exactly one "Space" press
+    def fake_eval_result(js):
+        return triggers.pop(0) if triggers else False
+    o = ov.DetectionOverlay(capture_png=_png_bytes, eval_js=js_log.append,
+                            eval_js_result=fake_eval_result, weights="unused",
+                            manual=True, poll_interval=0.01, canvas_id="cid", detector=det)
+    o.start()
+    time.sleep(0.2)
+    o.stop()
+    # the single trigger produced exactly one tick: inject + render, one detect
+    assert len(js_log) == 2
+    assert "createElement" in js_log[0] and "clearRect" in js_log[1]
+    assert det.calls == 2                       # warm-up predict + the one triggered tick
+    assert not o._thread.is_alive()
+
+
+def test_overlay_manual_no_trigger_no_tick():
+    import time
+    js_log = []
+    det = _FakeDetector([])
+    o = ov.DetectionOverlay(capture_png=_png_bytes, eval_js=js_log.append,
+                            eval_js_result=lambda js: False, weights="unused",
+                            manual=True, poll_interval=0.01, canvas_id="cid", detector=det)
+    o.start()
+    time.sleep(0.1)
+    o.stop()
+    assert js_log == []                         # nothing drawn until a press arrives
+
+
 def test_autoplay_ai_exposes_overlay_flags():
     import argparse
     import importlib.util
@@ -154,7 +197,8 @@ def test_autoplay_ai_exposes_overlay_flags():
     finally:
         argparse.ArgumentParser.parse_args = real_parse
     flat = {opt for opts in seen for opt in opts}
-    for flag in ("--overlay", "--detector-weights", "--overlay-fps", "--overlay-conf", "--overlay-device"):
+    for flag in ("--overlay", "--detector-weights", "--overlay-fps", "--overlay-conf", "--overlay-device",
+                 "--overlay-manual", "--overlay-key"):
         assert flag in flat, f"missing flag {flag}"
 
     defaults = {opts[0]: act.default for opts, act in seen.items()}
@@ -163,6 +207,8 @@ def test_autoplay_ai_exposes_overlay_flags():
     assert defaults["--overlay-fps"] == 12.0
     assert defaults["--overlay-conf"] == 0.25
     assert defaults["--overlay-device"] == "cuda"
+    assert defaults["--overlay-manual"] is False
+    assert defaults["--overlay-key"] == "Space"
 
 
 if __name__ == "__main__":
