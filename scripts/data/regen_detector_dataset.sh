@@ -111,6 +111,7 @@ build_one() {                                 # tag pfx extra game
   if PYTHONPATH=. "$PY" scripts/train/build_dataset.py "$gt" "$fr" \
        --out "$out" --from-annotations "$ANN" --drop-violations --no-crops $extra "${reuse[@]}" > "$log" 2>&1; then
     echo "  [ok   $tag $g${reuse:+ (reuse-hbb)}] $(tail -1 "$log")"
+    rm -f "$log"                              # success: no stray log left in datasets/ (kept only on FAIL below)
   else
     echo "  [FAIL $tag $g] see $log" >&2
     echo "$tag $g" >> "$FAILS"                # short append; atomic under PIPE_BUF
