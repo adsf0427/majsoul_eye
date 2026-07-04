@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import glob as _glob
 import os
+import re
 
 # Repo root = parent of the majsoul_eye package dir. All tooling runs from here.
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -114,9 +115,39 @@ def resolve_frame_path(file_field: str, index_dir=None) -> str:
     return file_field                                        # 6. fail loud with the real path
 
 
+def ai_game_name(capture_path: str) -> str:
+    """Stable flattened dataset name for an AI GTRecord capture.
+
+    ``.../run_N/gameM.jsonl`` -> ``ai_run_N_gameM``;
+    ``.../run_1.jsonl``       -> ``ai_run_1`` (single-game legacy run);
+    anything else             -> the basename stem (manual sessions pass through).
+    """
+    p = os.path.abspath(capture_path).replace("\\", "/")
+    parts = p.split("/")
+    stem = os.path.splitext(parts[-1])[0]                 # gameM  or  run_N
+    parent = parts[-2] if len(parts) >= 2 else ""
+    if re.fullmatch(r"run_\d+", parent) and re.fullmatch(r"game\d+", stem):
+        return f"ai_{parent}_{stem}"
+    if re.fullmatch(r"run_\d+", stem):
+        return f"ai_{stem}"
+    return stem
+
+
+def _ai_captures_in(ai_session_dir: str) -> list:
+    """AI GTRecord jsonls under a given ai_session root (test seam for ai_captures)."""
+    multi = _glob.glob(os.path.join(ai_session_dir, "run_*", "game*.jsonl"))
+    single = _glob.glob(os.path.join(ai_session_dir, "run_*.jsonl"))
+    return sorted(multi + single)
+
+
+def ai_captures() -> list:
+    """Sorted AI GTRecord capture jsonls under raw/ai_session/ (both shapes)."""
+    return _ai_captures_in(RAW_AI_SESSION)
+
+
 def converted_gt_captures() -> list:
-    """Sorted converted-GT capture jsonl files under intermediate/gt/."""
-    return sorted(_glob.glob(os.path.join(GT, "*.jsonl")))
+    """Back-compat alias: AI GT captures now live in raw/ai_session/ (no convert)."""
+    return ai_captures()
 
 
 def manual_captures() -> list:
