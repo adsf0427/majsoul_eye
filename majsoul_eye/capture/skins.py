@@ -1,0 +1,266 @@
+"""Skin-swap MITM proxy for the AI-autoplay capture path (DEV-ONLY).
+
+Runs MajsoulMax (``_external/MajsoulMax``) as an isolated ``mitmdump`` subprocess so the
+capture browser can be routed through it and have its character / skin / 牌背 / 桌布
+rewritten *client-side* — purely to diversify training data (never against real humans).
+
+Why a subprocess in its own conda env: MajsoulMax's generated ``proto/*_pb2.py`` require
+``protobuf==3.20.1`` and it needs ``mitmproxy>=10``; our capture env (``auto``) has
+``protobuf>=7`` and no mitmproxy, so the two cannot share an interpreter. Isolation is the
+point — the skin engine stays a black box behind a local HTTP proxy.
+
+Browser-agnostic: carries NO Playwright / MahjongCopilot / Akagi import. The one thing it
+cannot do alone — trust the mitmproxy CA in the OS root store — is delegated to an injected
+``ensure_cert(cert_path) -> bool`` callable supplied by the caller (see
+``scripts/capture/autoplay_ai.py --skins``, which wraps MahjongCopilot's ``common.utils``
+cert helpers). The pure helpers below (env resolution, config text, argv, port wait) are
+unit-testable without a proxy.
+
+Correctness note: MajsoulMax only rewrites lobby/account/``authGame`` messages (character,
+skin, avatar, views). It does NOT touch ``.lq.ActionPrototype`` game actions, so the tile /
+discard ground truth our GTRecord is built from is unaffected — skins change pixels, not labels.
+"""
+from __future__ import annotations
+
+import os
+import pathlib
+import socket
+import subprocess
+import sys
+import time
+
+DEFAULT_ENV = "majsoulmax"
+DEFAULT_PORT = 23410
+CERT_NAME = "mitmproxy-ca-cert.cer"
+
+
+# --- env / path resolution (pure) -------------------------------------------------------
+
+def env_dir(env: str) -> pathlib.Path:
+    """Resolve a sibling conda env dir from the running interpreter, without hardcoding the
+    conda root. Works whether we're launched from ``.../envs/<cur>/python.exe`` or a base
+    ``.../python.exe`` install."""
+    exe = pathlib.Path(sys.executable).resolve()
+    for parent in exe.parents:
+        if parent.name == "envs":
+            return parent / env
+    return exe.parent / "envs" / env
+
+
+def mitmdump_exe(env: str = DEFAULT_ENV) -> str:
+    """Path to the env's ``mitmdump`` launcher (``Scripts\\mitmdump.exe`` on Windows)."""
+    d = env_dir(env)
+    win = d / "Scripts" / "mitmdump.exe"
+    return str(win if os.name == "nt" else d / "bin" / "mitmdump")
+
+
+def env_python(env: str = DEFAULT_ENV) -> str:
+    """Path to the env's ``python`` (for running the catalog config builder in-env)."""
+    d = env_dir(env)
+    return str(d / "python.exe" if os.name == "nt" else d / "bin" / "python")
+
+
+def builder_script() -> str:
+    """Path to ``scripts/capture/build_skin_config.py`` (repo root is two levels above this pkg)."""
+    root = pathlib.Path(__file__).resolve().parents[2]
+    return str(root / "scripts" / "capture" / "build_skin_config.py")
+
+
+def build_cmd(mitmdump: str, port: int, confdir: str, script: str = "addons.py") -> list[str]:
+    """The ``mitmdump`` argv. ``confdir`` holds the CA (point it at a shared folder so the
+    browser trusts the same cert); ``ssl_insecure`` lets mitm->server skip verification."""
+    return [
+        mitmdump, "-p", str(port), "-s", script,
+        "--set", f"confdir={confdir}",
+        "--set", "ssl_insecure=true",
+        "--set", "termlog_verbosity=warn",
+    ]
+
+
+# --- config text (pure) -----------------------------------------------------------------
+
+def settings_yaml_text(*, mod: bool = True, offline: bool = True) -> str:
+    """``config/settings.yaml`` for addons.py. ``addons.py`` does ``SETTINGS.update(...)`` so
+    top-level keys are replaced wholesale — provide the full structure. ``offline`` pins liqi
+    auto-update off (the repo ships ``proto/liqi_pb2.py`` + ``liqi.json``)."""
+    au = "false" if offline else "true"
+    return (
+        "plugin_enable:\n"
+        f"  mod: {'true' if mod else 'false'}\n"
+        "  helper: false\n"
+        "  replace: false\n"
+        "liqi:\n"
+        f"  auto_update: {au}\n"
+        "  github_token: ''\n"
+        "  liqi_version: 'v0.11.219.w'\n"
+        "  liqi_hash: 'e6a718c1e50b41471453b16c75b2992cbb05c2c84297b6d55edd1499a089530e'\n"
+    )
+
+
+def mod_seed_yaml_text(*, offline: bool = True) -> str:
+    """Minimal ``config/settings.mod.yaml`` seed. mod.py merges this key-by-key over its
+    internal defaults, so a partial doc is fine — we only need ``resource.auto_update`` off
+    for offline robustness (the repo ships ``proto/lqc.lqbin``). Written ONLY when the file is
+    absent, so in-lobby skin choices / Step-2 randomization config persist across runs."""
+    au = "false" if offline else "true"
+    return (
+        "resource:\n"
+        f"  auto_update: {au}\n"
+        "  lqc_lqbin_version: 'v0.11.219.w'\n"
+    )
+
+
+def seed_config(majsoul_dir: str, *, offline: bool = True) -> None:
+    """Ensure ``<majsoul_dir>/config/{settings.yaml,settings.mod.yaml}`` exist and enable the
+    mod plugin offline. settings.yaml is (re)written idempotently; settings.mod.yaml is created
+    only if missing (mod.py owns it thereafter — don't clobber persisted skin state)."""
+    cfg = pathlib.Path(majsoul_dir) / "config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    (cfg / "settings.yaml").write_text(settings_yaml_text(mod=True, offline=offline), encoding="utf-8")
+    mod_path = cfg / "settings.mod.yaml"
+    if not mod_path.exists():
+        mod_path.write_text(mod_seed_yaml_text(offline=offline), encoding="utf-8")
+
+
+# --- readiness (pure-ish) ---------------------------------------------------------------
+
+def wait_port(port: int, timeout: float, *, host: str = "127.0.0.1",
+              proc: "subprocess.Popen | None" = None) -> bool:
+    """Poll a TCP connect to ``host:port`` until it accepts or ``timeout`` elapses. If ``proc``
+    is given and exits early, stop and return False (proxy died on startup)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if proc is not None and proc.poll() is not None:
+            return False
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                return True
+        except OSError:
+            time.sleep(0.25)
+    return False
+
+
+# --- the proxy --------------------------------------------------------------------------
+
+class SkinProxy:
+    """Context manager that runs MajsoulMax's mitmdump and exposes ``.proxy_str`` for
+    ``GameBrowser.start(url, proxy_str, ...)``. Tears the subprocess down on exit.
+
+    ``ensure_cert(cert_path) -> bool`` (optional) is called once the CA file appears; supply a
+    closure over the OS cert-store helpers (autoplay_ai wraps MahjongCopilot's). ``confdir``
+    is where mitmproxy keeps its CA — point it at a folder the browser already trusts (e.g.
+    MahjongCopilot's ``mitm_config``) to skip re-installing.
+    """
+
+    def __init__(self, majsoul_dir: str, *, port: int = DEFAULT_PORT, env: str = DEFAULT_ENV,
+                 confdir: "str | None" = None, ensure_cert=None, offline: bool = True,
+                 randomize: "dict | None" = None, ready_timeout: float = 45.0,
+                 cert_timeout: float = 15.0, log_path: "str | None" = None):
+        self.majsoul_dir = os.path.abspath(majsoul_dir)
+        self.port = port
+        self.env = env
+        self.confdir = os.path.abspath(confdir) if confdir else os.path.join(self.majsoul_dir, "mitm_config")
+        self.ensure_cert = ensure_cert
+        self.offline = offline
+        # None -> manual mode (unlock-all; set skins in-lobby). dict -> per-game randomization,
+        # e.g. {"slots": "13,7,6,8", "all_seats": True}; the in-env catalog builder writes the config.
+        self.randomize = randomize
+        self.ready_timeout = ready_timeout
+        self.cert_timeout = cert_timeout
+        self.log_path = log_path or os.path.join(self.majsoul_dir, "skin_proxy.log")
+        self.proc: "subprocess.Popen | None" = None
+        self._log_fh = None
+
+    @property
+    def proxy_str(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    @property
+    def cert_path(self) -> str:
+        return os.path.join(self.confdir, CERT_NAME)
+
+    def __enter__(self) -> "SkinProxy":
+        if not os.path.isdir(self.majsoul_dir):
+            raise FileNotFoundError(f"MajsoulMax dir not found: {self.majsoul_dir}")
+        exe = mitmdump_exe(self.env)
+        if not os.path.exists(exe):
+            raise FileNotFoundError(
+                f"mitmdump not found in env '{self.env}': {exe}\n"
+                f"  create it: conda create -n {self.env} python=3.11 -y && "
+                f"conda run -n {self.env} pip install \"mitmproxy>=10,<11\" \"protobuf==3.20.1\" "
+                f"requests ruamel.yaml loguru")
+        os.makedirs(self.confdir, exist_ok=True)
+        seed_config(self.majsoul_dir, offline=self.offline)
+        if self.randomize is not None:
+            self._run_builder()
+
+        cmd = build_cmd(exe, self.port, self.confdir)
+        self._log_fh = open(self.log_path, "w", encoding="utf-8")
+        # Own process group so we can terminate cleanly; run from MajsoulMax dir (./config, ./proto).
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        self.proc = subprocess.Popen(
+            cmd, cwd=self.majsoul_dir, stdout=self._log_fh, stderr=subprocess.STDOUT,
+            creationflags=creationflags)
+
+        if not wait_port(self.port, self.ready_timeout, proc=self.proc):
+            tail = self._log_tail()
+            self.__exit__(None, None, None)
+            raise RuntimeError(
+                f"skin proxy did not open port {self.port} within {self.ready_timeout}s "
+                f"(or exited). mitmdump log tail:\n{tail}")
+
+        # Trust the CA once it exists (mitmproxy writes it on first start).
+        if self.ensure_cert is not None:
+            for _ in range(int(self.cert_timeout / 0.5)):
+                if os.path.exists(self.cert_path):
+                    break
+                time.sleep(0.5)
+            try:
+                ok = self.ensure_cert(self.cert_path)
+                if not ok:
+                    print(f"[skins] WARNING: CA not trusted ({self.cert_path}); "
+                          f"the browser may reject Majsoul TLS. Install it manually.", flush=True)
+            except Exception as e:  # cert install must never crash capture
+                print(f"[skins] WARNING: ensure_cert raised: {e}", flush=True)
+
+        print(f"[skins] proxy up on {self.proxy_str}  (MajsoulMax mod; log -> {self.log_path})", flush=True)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        proc, self.proc = self.proc, None
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        if self._log_fh is not None:
+            try:
+                self._log_fh.close()
+            finally:
+                self._log_fh = None
+
+    def _run_builder(self) -> None:
+        """Run the catalog config builder in the majsoulmax env to (re)write per-game
+        randomization into settings.mod.yaml before mitmdump starts."""
+        slots = self.randomize.get("slots") or "13,7,6,8"
+        seats = "all" if self.randomize.get("all_seats") else "hero"
+        cmd = [env_python(self.env), builder_script(), self.majsoul_dir,
+               "--slots", str(slots), "--seats", seats]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"build_skin_config failed (rc={r.returncode}):\n{r.stdout}\n{r.stderr}")
+        for line in (r.stdout or "").strip().splitlines():
+            print(f"[skins] {line}", flush=True)
+
+    def _log_tail(self, n: int = 25) -> str:
+        try:
+            if self._log_fh is not None:
+                self._log_fh.flush()
+            with open(self.log_path, "r", encoding="utf-8", errors="replace") as f:
+                return "".join(f.readlines()[-n:])
+        except Exception:
+            return "(no log)"

@@ -85,7 +85,7 @@ def main() -> None:
                     help="Majsoul server: jp=game.mahjongsoul.com, cn=game.maj-soul.com/1/, en=yo-star.")
     ap.add_argument("--url", default=None, help="Override the server URL directly (else derived from --server).")
     ap.add_argument("--out", default=None,
-                    help="Session PARENT dir; each run writes a fresh run_<N>/ subdir. Default: captures/ai_session.")
+                    help="Session PARENT dir; each run writes a fresh run_<N>/ subdir. Default: captures/raw/ai_session.")
     ap.add_argument("--model", default="v4_js_09260526.pth",
                     help="Model file under MahjongCopilot/models/ (v4_js… is ~6x faster than the ensemble).")
     ap.add_argument("--live", action="store_true", help="Actually click. Default = dry-run (log only).")
@@ -117,8 +117,25 @@ def main() -> None:
                     help="Force the captured display language (zh-Hans/zh-Hant/ja/en); else server-coarse + page probe. "
                          "Written to each game<N>/metadata.json.")
     ap.add_argument("--mjc", default=MJC, help="Path to the MahjongCopilot repo.")
+    ap.add_argument("--skins", action="store_true",
+                    help="Route the browser through MajsoulMax (mitmproxy) to swap character/skin/牌背/桌布 "
+                         "client-side for training-data diversity. Needs the 'majsoulmax' conda env + a "
+                         "one-time CA trust (reuses MahjongCopilot's mitm_config cert). Bot games only.")
+    ap.add_argument("--skins-port", type=int, default=23410, help="Local port for the skin MITM proxy.")
+    ap.add_argument("--skins-env", default="majsoulmax", help="Conda env holding MajsoulMax's mitmdump.")
+    ap.add_argument("--skins-dir", default=os.path.join("_external", "MajsoulMax"),
+                    help="Path to the MajsoulMax repo (mitmproxy addon).")
+    ap.add_argument("--skins-randomize", action="store_true",
+                    help="With --skins: randomize skin/牌背/桌布/牌面 per game (else unlock-all; set skins in-lobby).")
+    ap.add_argument("--skins-slots", default="13,7,6,8",
+                    help="Decoration slots to randomize (13=牌面 7=牌背 6=桌布 8=场景 3=手 0=立直棒 …; slot 5 unsupported).")
+    ap.add_argument("--skins-all-seats", action="store_true",
+                    help="Randomize EVERY seat's 立绘 (incl. AI opponents), not just the hero. "
+                         "Confirm opponents render injected skins first (see docs).")
     args = ap.parse_args()
     url = args.url or SERVERS[args.server]
+    if args.skins and not os.path.isabs(args.skins_dir):
+        args.skins_dir = os.path.join(_ORIG_CWD, args.skins_dir)   # survive the chdir into MJC (like --out)
     from majsoul_eye.capture import overlay as overlay_mod   # light: no ultralytics until detector built
     from majsoul_eye.capture import gamemeta                 # per-game metadata (display language)
     overlay_canvas_id = overlay_mod.OVERLAY_CANVAS_ID if args.overlay else None
@@ -217,8 +234,32 @@ def main() -> None:
         ws.on("framesent", on_frame)       # client->server: authGame REQ, inputOperation, ... (needed for LiqiProto REQ/RES pairing)
     # register the tap on the browser thread (page is owned there)
 
+    # Optional skin-swap MITM: route the browser through MajsoulMax so character/skin/牌背/桌布
+    # are rewritten client-side (data diversity). GT is unaffected — mod only rewrites lobby/
+    # authGame, never ActionPrototype game actions. Torn down in the finally below.
+    skin_proxy = None
+    browser_proxy = None
+    if args.skins:
+        from majsoul_eye.capture import skins as skins_mod
+        from common import utils as mjc_utils              # MJC on sys.path after the chdir above
+        confdir = str(mjc_utils.sub_folder(mjc_utils.Folder.MITM_CONF))   # <mjc>/mitm_config: share MJC's CA
+        def _ensure_cert(cert_path):
+            installed, _ = mjc_utils.is_certificate_installed(cert_path)
+            if installed:
+                return True
+            ok, _ = mjc_utils.install_root_cert(cert_path)   # certutil -addstore Root (may prompt UAC once)
+            return ok
+        randomize = ({"slots": args.skins_slots, "all_seats": args.skins_all_seats}
+                     if args.skins_randomize else None)
+        skin_proxy = skins_mod.SkinProxy(
+            args.skins_dir, port=args.skins_port, env=args.skins_env,
+            confdir=confdir, ensure_cert=_ensure_cert, randomize=randomize,
+            log_path=os.path.join(out_dir, "skin_proxy.log"))
+        skin_proxy.__enter__()
+        browser_proxy = skin_proxy.proxy_str
+
     print(f"Opening {url} ({args.server}) … log in and ENTER A GAME (burner account).", flush=True)
-    browser.start(st.ms_url, None, st.browser_width, st.browser_height, False)
+    browser.start(st.ms_url, browser_proxy, st.browser_width, st.browser_height, False)
     for _ in range(150):                                # wait up to 30s for the page
         if browser.is_page_normal():
             break
@@ -597,6 +638,8 @@ def main() -> None:
             browser.stop(True)
         except Exception:
             pass
+        if skin_proxy is not None:
+            skin_proxy.__exit__(None, None, None)          # stop the mitmdump subprocess (no orphan)
         print(f"frames + screenshots -> {out_dir}", flush=True)
 
 
