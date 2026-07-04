@@ -99,6 +99,26 @@ def _render_records(records) -> str:
     return "".join(l + "\n" for l in out)
 
 
+def migrate_one(game_dir: str, records, frame_index) -> dict:
+    """Write one game's new-layout outputs in crash-safe order and return its
+    plan_targets. Resumable: renames the wire ONLY if it is still the legacy
+    frames.jsonl (a resumed run reads from the already-renamed liqi.jsonl, so the
+    rename is skipped). Atomic writes so an interrupted write can't leave a
+    truncated file that later looks 'done'."""
+    t = plan_targets(game_dir)
+    wire_is_legacy = not os.path.exists(t["wire_dest"])   # liqi.jsonl absent => still legacy
+    # 1) GTRecord to its own path first (atomic).
+    _atomic_write(t["gt_path"], _render_records(records))
+    # 2) rename wire only if still legacy (frames.jsonl -> liqi.jsonl).
+    if wire_is_legacy:
+        os.rename(os.path.join(game_dir, "frames.jsonl"), t["wire_dest"])
+    # 3) index-relative screenshot index last (frames.jsonl now free), atomic.
+    lines = [json.dumps({"seq": fi["seq"], "file": f"frames/{fi['seq']:06d}.png",
+                         "status": "ok"}) for fi in frame_index]
+    _atomic_write(t["index_path"], "".join(l + "\n" for l in lines))
+    return t
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -110,7 +130,7 @@ def main() -> None:
     ai_session = os.path.abspath(args.ai_session)
     game_dirs = find_game_dirs(ai_session)
     todo = [gd for gd in game_dirs if not is_migrated(gd)]
-    print(f"{'APPLY' if args.apply else 'DRY RUN'} — {len(game_dirs)} b64 game(s), "
+    print(f"{'APPLY' if args.apply else 'DRY RUN'} — {len(game_dirs)} game(s), "
           f"{len(todo)} to migrate, {len(game_dirs) - len(todo)} already done")
 
     # Import MahjongCopilot + convert once (chdir handled by _import_mjcopilot).
@@ -133,17 +153,9 @@ def main() -> None:
         print(f"    -> write screenshot index {t['index_path']}")
         if not args.apply:
             continue
-        # 1) re-derive GT from the wire and write it to its OWN path first (atomic).
         records, frame_index = convert_game(gd, liqimod, GameState, Bot, GameMode,
                                             wire_name=wire_name)
-        _atomic_write(t["gt_path"], _render_records(records))
-        # 2) rename the wire only if it is still the legacy frames.jsonl (idempotent).
-        if wire_name == "frames.jsonl":
-            os.rename(os.path.join(gd, "frames.jsonl"), t["wire_dest"])
-        # 3) write the index-relative screenshot index last (frames.jsonl now free), atomic.
-        lines = [json.dumps({"seq": fi["seq"], "file": f"frames/{fi['seq']:06d}.png",
-                             "status": "ok"}) for fi in frame_index]
-        _atomic_write(t["index_path"], "".join(l + "\n" for l in lines))
+        migrate_one(gd, records, frame_index)
 
     if not args.apply:
         print("\n(dry run — nothing changed; pass --apply to migrate)")
