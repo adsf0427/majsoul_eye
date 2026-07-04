@@ -4,268 +4,159 @@ Robust image recognition of **Mahjong Soul (雀魂)** game state (场况) from s
 images — usable by a protocol-independent vision bot, a HUD overlay, or for
 recognizing arbitrary external screenshots.
 
-> Full design, rationale, element-by-element method table, risks, and roadmap:
-> **[`docs/DESIGN.md`](docs/DESIGN.md)** (mirror of the approved plan).
+> **当前管线的唯一权威文档：[`docs/PIPELINE.md`](docs/PIPELINE.md)**（数据流、各阶段命令、
+> 过时组件清单、维护规约）。Full design & rationale: [`docs/DESIGN.md`](docs/DESIGN.md)。
+> 进度史与实测结论: [`docs/STATUS.md`](docs/STATUS.md)。
 
 ## Why this exists (and what it reuses)
 
 - **`../auto/mycv`** is an existing, working *pure-vision* Mahjong Soul bot. It
-  already recognizes the full board (河/副露/dora/scores/winds) and solves the
-  4-seat perspective problem. majsoul_eye is a **clean rewrite that reuses
-  mycv's assets** (`tile.model` classifier, 707 debug frames, coordinate
-  knowledge, contour-based 河/副露 detection, seat-rotation math) as baseline +
-  bootstrap — not a green-field rebuild.
-- **`../Akagi`** has the full game state from MITM-parsed `liqi` protobuf. Here
-  it is a **training-time oracle** that produces free, accurate labels — not a
-  runtime dependency. (When you have the protocol you don't need vision; vision's
-  whole value is the feed-less case.)
-
-## Architecture (one line)
-
-Hybrid: **deterministic ROI crop + small CNN / digit-classifier / OCR** for the
-fixed "easy" zones (hand, dora, scores, buttons); a **YOLO detector (OBB where
-tiles rotate)** for the perspective "hard" zones (四家河, 副露) and for
-generalizing to mobile / external screenshots; an **anchor-based normalization**
-front-end so fixed-slot logic survives arbitrary resolutions.
+  already recognizes the full board and solves the 4-seat perspective problem.
+  majsoul_eye is a **clean rewrite that reuses mycv's assets** (classifier
+  baseline, coordinate knowledge, seat-rotation math) as bootstrap.
+- **MahjongCopilot / Akagi** provide the full game state from the `liqi`
+  protobuf. Here they are **training-time oracles** that produce free, accurate
+  labels — never a runtime dependency. (When you have the protocol you don't
+  need vision; vision's whole value is the feed-less case.)
 
 ## Labeling, in one line
 
-`Akagi protocol GT = WHAT` (which tile, who discarded, what score) +
-`geometry / contour detection = WHERE` (pixel box) → auto-generated YOLO labels,
-zero hand-drawing. mycv's "contour-localize + assign class from GT's ordered
-discard list" *is* a free auto-annotator.
+`协议 GT = WHAT` (which tile, who discarded) + `标定几何 = WHERE` (pixel box) →
+auto-generated classifier crops + YOLO labels, **zero hand-drawing**.
+
+## The pipeline (one line each; details in [`docs/PIPELINE.md`](docs/PIPELINE.md))
+
+1. **采集（唯一主路径）** `scripts/capture/autoplay_ai.py --live` — Playwright WS tap +
+   Mortal 决策自动对局 + 事件安静截图，**实时内联写统一 `GTRecord`** 到
+   `captures/raw/ai_session/run_N/`（无任何转换步骤）。
+2. **标注** `scripts/annotate/annotate_ai_session.py` — 精确 fullwarp 几何 + GT 赋类 →
+   `out/ai_session_annotations/`。
+3. **构建（一条命令，版本化）** **`scripts/data/build_datasets.py <name>`** —— 编排 标注→建库→装配，
+   产出自包含 `datasets/<name>/{annotations/, <game>/{crops,yolo}, detector/, games.json}`；
+   `--sources` 指定多个采集根、`--resume` 增量并入新局、`--force` 清空重建。现役版本 `datasets/v1`。
+4. **训练** `train_classifier.py --dataset datasets/v1 [--dataset …]` /
+   `train_detector.py --data datasets/<name>/detector/data.yaml`（GPU，手动触发；多版本可混用）。
+
+> ⚠️ **`record_gt.py`（Akagi MITM 手动 F11 采集）已列为过时** —— 新数据一律走
+> autoplay_ai；session5/6 的存量手动数据保留在训练集中。
 
 ## Layout
 
 ```text
 majsoul_eye/
-  tiles.py          # unified 38-class taxonomy + MJAI interop (shared by all components)
-  coords.py         # normalized ROI model (hand/dora slots, coarse per-quadrant river zones)
-  normalize.py      # board locators: fullscreen / letterbox / anchor(TODO) -> canonical 16:9 frame
-  paths.py          # captures/ layout single source of truth (frames_dir_for / resolve_frame_path)
-  capture/          # ⚠️ DEV-ONLY, Akagi-coupled recorder (schema / akagi_tap / screen / sync)
-  state/replay.py   # pure replayer: MJAI events -> full 4-player BoardState + invariants
-  label/            # legacy easy-zone auto-annotator: autolabel (hand+dora) + quality gate
-  annotate/         # PRECISE fullwarp annotator: pipeline (geometry engine) / frame / seatgt / cases
-  recognize/classifier.py  # TileNet 38-class classifier (+ tile_classifier.pt, 6 games 97.6%)
-  baselines/        # real-mycv engine adapter + bag-matching scorer (accuracy baseline)
+  tiles.py          # unified 38-class taxonomy + MJAI interop (single source of truth)
+  coords.py         # normalized ROI model (hand/dora slots, coarse river zones for overlays)
+  normalize.py      # board locators: fullscreen / letterbox / anchor(TODO) -> canonical 16:9
+  paths.py          # captures/ layout single source of truth (ai_captures / resolve_frame_path)
+  capture/          # ⚠️ DEV-ONLY capture stack: schema(GTRecord) / sync / screen / gtframes /
+                    #   roi_diff(遮挡防护) / overlay(浏览器检测框) / gamemeta(语言元数据);
+                    #   akagi_tap = legacy manual path
+  state/replay.py   # pure replayer: MJAI -> 4-player BoardState + invariants
+                    #   (+ is_deal_window 发牌窗 / drawn_tile 摸牌槽)
+  annotate/         # PRECISE fullwarp annotator: pipeline / frame / seatgt / cases / consistency
+  label/autolabel.py# hero hand + dora boxes for annotate_frame (old river/meld geometry removed)
+  recognize/        # SHIPPED, Akagi-free: classifier.py(TileNet) + detector.py(YOLO, lazy) +
+                    #   tile_classifier.pt(正式) + tile_detector.pt(本地)
+  baselines/        # real-mycv engine adapter + bag-matching scorer
 scripts/
-  record_gt.py / autoplay_ai.py          # capture: manual F11 (Akagi) / Mortal-AI autoplay (--auto-next)
-  crop_game.py / deletterbox_frames.py   # frame repair: crop to 16:9 / strip letterbox bars
-  ingest_run.py -> convert_mjcopilot.py  # AI run: discover games -> liqi wire -> our GT jsonl
-  build_dataset.py / train_classifier.py # auto-labeled crops + YOLO -> 38-class classifier
-  annotate_ai_session.py                 # annotation v2: per-frame river/meld/hand boxes + QA
-  build_case_annotations.py              # 11-case AB JSON (out/mahjong_AB_relative_data_with_reliability.json)
-  calibrate_annotation_model.py          # measure / refit the fullwarp constants
-  spike_topdown.py                       # ARCHIVED H_table viz spike (self-contained; superseded by annotate/)
-  inspect_capture.py / overlay_labels.py / visualize_failures.py / mycv_baseline.py  # QA & debug
-  fiftyone_view.py / cvat_export.py / cvat_import.py  # dataset review/clean (FiftyOne GUI) + box-fix round-trip (CVAT)
-  migrate_captures_layout.py             # one-shot captures/ layout migrator (dry-run default)
-tests/              # 10 suites: tiles replay sync label classifier mycv_baseline quality coords annotate_pipeline annotate_frame
-docs/DESIGN.md      # design & rationale       docs/STATUS.md  # living status + roadmap (中文)
+  capture/autoplay_ai.py         # ★ 唯一主采集（--live --auto-next [--overlay]）
+  capture/record_gt.py           # 过时：手动 F11 + Akagi（存档保留）
+  annotate/annotate_ai_session.py# 全帧标注器（默认全部 paths.ai_captures()）
+  train/build_dataset.py         # crops + YOLO（--from-annotations 复用标注; --obb 8点标签）
+  train/build_detector_dataset.py / train_classifier.py   # 均支持 --dataset 多版本清单展开
+  train/train_detector.py
+  data/build_datasets.py         # ★ 版本化构建 datasets/<name>/（标注→建库→装配 + games.json）
+  data/migrate_*.py, purge_*.py, crop_game.py, deletterbox_frames.py, convert_mjcopilot.py,
+    ingest_run.py, rebuild_datasets.py(弃用)  # 一次性/遗留工具（非管线环节，见 PIPELINE §4）
+  annotate/{build_case_annotations,calibrate_annotation_model,spike_topdown}.py  # AB case/标定/归档 spike
+  inspect/…                      # QA & debug（下方 §QA）
+weights/            # pretrained/ 训练基座 + detector/ 变体（gitignore; 正式权重在 recognize/）
+tests/              # plain-script suites (pytest-compatible)
+docs/PIPELINE.md    # ★ 权威管线   docs/STATUS.md  # 进度史(中文)   docs/DESIGN.md  # 设计
 ```
 
-## Status
+## Status (2026-07-04)
 
-**Full pipeline validated on 6 games (2 manual 4K + 4 AI 1080p) — tile classifier
-97.6% (held-out AI game 98.5%), zero manual annotation. Precise annotation v2 shipped.**
+**采集已统一为单一路径**（autoplay_ai 直接写 `GTRecord`，`intermediate/gt` 退役）。
+数据 **18 AI 局 + 2 手动 4K 局**，全部经精确标注 v2 重建（含 hero-tsumo 修复）。
 
-- Pipeline: `record(F11)/autoplay(AI) → debounce capture → protocol-GT replay → geometric auto-label → train`.
-- Classifier trajectory: 93.5 → 95.3 (label cleaning) → 96.0 (river erode) → **97.6** (+AI data).
-- Annotation v2: one calibrated fullwarp geometry for all 4 rivers / melds / hand,
-  per-frame snap + fill confidence; classifier-agreement QA 96.6–100% per zone
-  (`annotate_ai_session.py`, all 16 AI games).
-- Data: 16 AI games captured (`captures/raw/ai_session`, ~8.9k frames) all converted to GT;
-  current training set 6 games / ~112k crops; red fives now abundant.
-- `captures/` reorganized into `raw/intermediate/legacy` roles with relative frame
-  indexes (`majsoul_eye/paths.py`).
+- 分类器 `tile_classifier.pt`：held-out 整局 val_acc **0.9991**。
+- 检测器：HBB `tile_detector.pt` **mAP50 0.993 / mAP50-95 0.955**；OBB 变体
+  `weights/detector/tile_detector_obb.pt` **mAP50-95 0.9804**（rotated-IoU）。
+- 轨迹：93.5 → 95.3(P1 清洗) → 96.0(P2 erode) → 97.6(+AI) → 99.78(16 局精确) → **99.91**(dealfix)。
+- ⚠️ 待办：两模型尚未在 07-04 重建数据（hero-tsumo 手牌帧 + run_13/14）上重训。
 
-→ 完整进度、实测结论与路线图：[`docs/STATUS.md`](docs/STATUS.md)。Design rationale:
-[`docs/DESIGN.md`](docs/DESIGN.md).
+→ 细节：[`docs/STATUS.md`](docs/STATUS.md)。
 
-## 管线与脚本用法
+## 常用命令（PowerShell；管线全文见 [`docs/PIPELINE.md`](docs/PIPELINE.md)）
 
-所有代码在 conda **`auto`** 环境跑；仅 `record_gt.py`
-在 **`akagi`** 环境（跑在 Akagi 进程内）。顶层 import 是 `from majsoul_eye import ...`，
-一律从仓库根运行。命令块为 **PowerShell** 语法（bash 等价见 `CLAUDE.md` /
-`docs/STATUS.md` §四）；每开一个新终端先执行一次：
+先自行 activate conda **`auto`** 环境；顶层 import 是 `from majsoul_eye import ...`，
+一律从仓库根运行，只需设：
 
 ```powershell
-$PY = "C:/Users/zsx/miniforge3/envs/auto/python.exe"
-$env:PYTHONPATH = "."
+$env:PYTHONPATH = "."        # bash: export PYTHONPATH=.
 ```
 
-`captures/` 布局的单一真源是 `majsoul_eye/paths.py`：`raw/{ai_session,manual}`（原始，
-不可再生）→ `intermediate/{gt,derived}`（转换后 GT / 修复帧，可再生）→ `legacy/`（归档）。
-`frames.jsonl` 里存相对路径，读帧永远经 `paths.resolve_frame_path` 解析（兼容旧绝对路径）。
-
-### 1) 采集
-
-**`record_gt.py`** — 手动 F11 局：注入 GT 录制器后启动 Akagi，事件安静即截图
-（akagi 环境；autoplay OFF 被动采集、WEB 客户端 F11 全屏、默认素色桌布）。
+### 采集（AI 自动，唯一主路径）
 
 ```powershell
-conda run -n akagi pip install mss opencv-python   # 一次性：截图依赖
-conda run -n akagi python scripts/capture/record_gt.py --screenshots --quiet 0.30 --settle-cap 2.0
-# 默认写 captures/raw/manual/session_<ts>.jsonl + 同名帧目录；状态日志 → <out>.jsonl.log
+python scripts/capture/autoplay_ai.py                     # dry-run：只打日志不点击，先看动作对不对
+python scripts/capture/autoplay_ai.py --live --auto-next  # 真跑：整场循环采集（小号！）
+# 每局写 captures/raw/ai_session/run_<N>/game<M>.jsonl (GTRecord)
+#   + game<M>/{frames/*.png, frames.jsonl, liqi.jsonl 线流备份, metadata.json 语言}
 ```
 
-关键 flag：`--out`、`--screenshots`、`--quiet`（板面事件安静多少秒才截）、`--settle-cap`
-（事件连发时强制截图的上限秒数）、`--akagi-dir`。
+关键 flag：`--live`、`--auto-next`（结算自动续局）、`--overlay`（浏览器内画检测框验证）、
+`--autojoin`、`--model`、`--lang`、`--quiet`。采集期已内建发牌动画跳过 + ROI 稳定确认（防遮挡）。
 
-**`autoplay_ai.py`** — Mortal AI 自动对局采集（单 `auto` 环境：Playwright 抓 liqi WS +
-截图 + MahjongCopilot 驱动点击）。默认 dry-run 只打日志，确认动作正确后再 `--live`；小号！
+### 构建数据集（版本化，一条命令）
 
 ```powershell
-& $PY scripts/capture/autoplay_ai.py --live --auto-next      # 整场循环采集
-# 每次运行写 captures/raw/ai_session/run_<N>/（一局一个 game<M>/：liqi 线流 + 1080p PNG）
+python scripts/data/build_datasets.py v2            # 全新版本（默认 --sources captures/raw/ai_session）
+python scripts/data/build_datasets.py v1 --sources captures/raw/ai_session captures/raw/manual --resume
+#   --resume 只补缺的局并重组 detector split；--force 清空重建；--dry-run 干跑
+# 产出 datasets/<name>/{annotations/, <game>/{crops,yolo}, detector/, games.json}
 ```
 
-关键 flag：`--live`（真点击）、`--auto-next`（结算后截图守卫式点确认+"再来一局"，配
-`--auto-next-confirms` / `--auto-next-timeout`）、`--autojoin`、`--model`、`--server`、`--quiet`。
-
-**`crop_game.py`** — 非全屏手动局裁回 16:9 画布（一次检测、全局套用，非破坏性）。
+### 训练（GPU；确切命令 build_datasets 收尾会按当前局清单打印好）
 
 ```powershell
-& $PY scripts/data/crop_game.py captures/raw/manual/session5 captures/intermediate/derived/session5_16x9 --size 3840x2160
+# 38 类分类器（⚠️ 切分按局绝不按帧；PowerShell 里 --val 值必须加引号）
+python scripts/train/train_classifier.py --dataset datasets/v1 --val "ai_run_8_game1:*" --epochs 20
+# YOLO 检测器（imgsz 1280；16GiB 卡 --batch 4 防 OOM；OBB 用 --model weights/pretrained/yolov8s-obb.pt）
+python scripts/train/train_detector.py --data datasets/v1/detector/data.yaml
+# 跨版本合并检测集：
+python scripts/train/build_detector_dataset.py --dataset datasets/v1 --dataset datasets/v2 `
+      --val "ai_run_8_game1:*" --out datasets/detector_combined
 ```
 
-**`deletterbox_frames.py`** — 去黑边（如 run_5 重连局）：检测黑条 → 裁剪 → resize 回
-1920×1080，写新的自包含帧目录（seq 一一对应），之后用 `--frames-dir` 喂给标注器。
+### QA / 调试
 
 ```powershell
-& $PY scripts/data/deletterbox_frames.py --capture captures/intermediate/gt/ai_run_5_game2.jsonl `
-    --out captures/intermediate/derived/ai_run_5_game2_deletterboxed
+python scripts/inspect/inspect_capture.py <cap.jsonl> <frames_dir> --step 120   # 帧↔GT 对账
+python scripts/inspect/overlay_labels.py <cap.jsonl> <frames_dir> --out out/overlay.png --step 120
+python scripts/inspect/visualize_failures.py --crops datasets/precise_…/crops --out fails/…
+python scripts/annotate/annotate_ai_session.py --captures <cap> --qa-classifier  # 分类器一致率抽查
+python scripts/inspect/fiftyone_view.py                    # FiftyOne GUI 审查检测集（docs/dataset_review.md）
+python scripts/inspect/cvat_export.py --game precise_ai_run_1 --out cvat_pkg --zip   # CVAT 修框往返
 ```
 
-### 2) AI 数据接入（MahjongCopilot 线流 → 我们的 GT）
-
-**`ingest_run.py`** — 一键编排：自动发现 run 内各局（单局/多局布局均可）→ convert →
-build_dataset（→ 可选重训）。
+### 测试（tests/test_*.py 全部，普通脚本、兼容 pytest）
 
 ```powershell
-& $PY scripts/data/ingest_run.py captures/raw/ai_session/run_4
-& $PY scripts/data/ingest_run.py captures/raw/ai_session/run_4 --train --val "ai_run_4_game1:*"
-```
-
-**`convert_mjcopilot.py`** — 底层转换器（ingest 内部调用，也可单跑）：raw liqi 线流 →
-MahjongCopilot 的 `LiqiProto`/`GameState`（stub bot）→ MJAI → `captures/intermediate/gt/<NAME>.jsonl`
-（帧索引指回 raw/ 的 PNG）。逐事件 deepcopy（GameState 原地改手牌）、按每条 input() 增量对 seq。
-
-```powershell
-& $PY scripts/data/convert_mjcopilot.py --game "run_3/game1=ai_run_3_game1" --mjcopilot ../MahjongCopilot
-```
-
-### 3) 数据集构建
-
-**`build_dataset.py`** — 同步采集 → 分类裁剪 `crops/<牌>/` + YOLO `yolo/images,labels/`；
-按全局 `seq` join 帧↔GT；P1 牌面占比门（`--min-face-frac`，挡空毡误标）与 P2 河格 erode
-（`--river-erode-bottom/--river-erode-side`）均已默认开启。
-
-```powershell
-& $PY scripts/train/build_dataset.py captures/raw/manual/sessionN.jsonl captures/raw/manual/sessionN/ `
-    --out datasets/sessionN --locator fullscreen --drop-violations
-```
-
-关键 flag：`--locator fullscreen|letterbox`、`--drop-violations`（丢弃 invariant 违例帧）、
-`--min-bright` / `--min-face-frac`（P1 空毡门）。河/副露走精确 `annotate/` 管线；`label/autolabel`
-只剩易区，`DEFAULT_ZONES = {hand}`（dora/score/meta 为 opt-in）。
-
-### 4) 精准标注 v2（河/副露/手牌逐帧框）
-
-几何引擎是包内 **`majsoul_eye/annotate/pipeline.py`**（fullwarp 单应 + 数据标定的
-牌面网格/副露组成模型 + 缝隙/边缘掩膜检测器，脚本 `from majsoul_eye.annotate import pipeline as P`；
-曾在根级 `mahjong_relative_annotation_pipeline.py`，已移除）。共享 GT plumbing 也已进包：
-`capture.gtframes`（`build_seq_state`/`load_frames`/`load_pair`）、`annotate.seatgt`（`_screen_to_seat`/`SEAT_POS`）、
-`annotate.cases`（`CASES`）。`scripts/annotate/spike_topdown.py` 现为**已归档的自足可视化 spike**（不再承重，
-从包 import；其 H_table 几何被 `annotate/` 取代）。
-
-**`annotate_ai_session.py`** — 主产品：全帧标注器。4 家河（标定网格 + GT + 逐格 fill 置信，
-最新弃牌未渲染 → `unrendered`）、4 家副露（组成感知 strip + 逐帧 snap）、英雄手牌
-（HandModel + 白度门）。输出 `out/ai_session_annotations/`（每局 JSONL + overlays/ + summary.json）。
-
-```powershell
-& $PY scripts/annotate/annotate_ai_session.py                 # 默认标注全部 captures/intermediate/gt/*.jsonl
-& $PY scripts/annotate/annotate_ai_session.py --captures captures/intermediate/gt/ai_run_3_game1.jsonl `
-    --overlay-every 40 --qa-classifier
-```
-
-关键 flag：`--qa-classifier`（用正式分类器抽查 crop 一致率，QA ≈96.6–100%）、`--frames-dir`
-（指向 deletterbox 修复帧）、`--overlay-every`、`--out`。
-
-**`build_case_annotations.py`** — 11 个固化 case 的 AB 标注 JSON（弃牌带 GT 标签 + 副露框）。
-
-```powershell
-& $PY scripts/annotate/build_case_annotations.py --overlays out/topdown_annot
-# 写 out/mahjong_AB_relative_data_with_reliability.json
-```
-
-**`calibrate_annotation_model.py`** — 跨局测量缝隙/边缘特征 → 稳健线性拟合 → 打印建议常量
-（引擎常量漂了就复跑再校准）。
-
-```powershell
-& $PY scripts/annotate/calibrate_annotation_model.py --per-game 40 --out scratchpad/calib.json
-& $PY scripts/annotate/calibrate_annotation_model.py --refit scratchpad/calib.json
-```
-
-### 5) 训练
-
-**`train_classifier.py`** — 38 类牌分类器（TileNet）；**按局/场切分 val，绝不按帧**
-（同一物理牌横跨 ~10 帧，帧切分必泄漏）。类均衡采样 + 轻增广，GPU 自动启用。
-⚠️ PowerShell 里 `--data`/`--val` 的值**必须加引号**（裸的 `,` 会被 PS 拆成数组）。
-
-```powershell
-& $PY scripts/train/train_classifier.py `
-    --data "s6=datasets/session6_erode/crops:captures/raw/manual/session6.jsonl" `
-    --data "ai1=datasets/ai_g1/crops:captures/intermediate/gt/ai_g1.jsonl" `
-    --val "s6:E3.0,S2.0" --epochs 20 --workers 6
-```
-
-关键 flag：`--data NAME=crops:capture`（可重复）、`--val NAME:场序` / `--val NAME:*`
-（`*` = 整局 held-out）、`--epochs`、`--batch`、`--workers`（GPU 建议 6）、`--out`。
-
-### 6) QA / 调试工具
-
-```powershell
-# 帧↔GT 对账 + settle 质量（离线，不需客户端）
-& $PY scripts/inspect/inspect_capture.py captures/raw/manual/session6.jsonl captures/raw/manual/session6/ --step 120
-# 把自动标注画到帧上，肉眼校准坐标
-& $PY scripts/inspect/overlay_labels.py captures/raw/manual/session6.jsonl captures/raw/manual/session6/ `
-    --out out/overlay.png --step 120
-# 分类器错例蒙太奇（按 gt→pred 混淆对分组）
-& $PY scripts/inspect/visualize_failures.py --crops datasets/ai_g1/crops --out fails/ai_g1
-# mycv 真实管线基线（对照精度）
-& $PY scripts/inspect/mycv_baseline.py --capture captures/raw/manual/session6.jsonl `
-    --frames captures/raw/manual/session6/frames
-# captures/ 布局再迁移（dry-run 默认；写 MIGRATION_MANIFEST.json，幂等可续跑）
-& $PY scripts/data/migrate_captures_layout.py            # 预览
-& $PY scripts/data/migrate_captures_layout.py --apply --strict
-```
-
-**数据集可视化 / 清理**（YOLO 检测集，完整说明见 [`docs/dataset_review.md`](docs/dataset_review.md)）：
-
-```powershell
-& $PY -m pip install fiftyone                               # 一次性（会把 protobuf 升到 7.x）
-& $PY scripts/inspect/fiftyone_view.py                      # FiftyOne GUI：按 game/split/类别筛选 → 给坏帧打 tag reject
-& $PY scripts/inspect/fiftyone_view.py --export-clean datasets/detector_clean   # 导出剔除 reject 的干净 train/val
-# CVAT 修框往返：export 打包 → CVAT 改框 → import 无损写回 datasets/<game>/yolo/labels/
-& $PY scripts/inspect/cvat_export.py --game precise_ai_run_1 --out cvat_pkg --zip
-& $PY scripts/inspect/cvat_import.py 你从CVAT导出的.zip --dry-run
-```
-
-### 测试（10 套，普通脚本、兼容 pytest）
-
-```powershell
-foreach ($t in "tiles","replay","sync","label","river","meld","classifier","mycv_baseline","quality","coords") {
-  & $PY "tests/test_$t.py"; if ($LASTEXITCODE) { break }
-}
+foreach ($t in Get-ChildItem tests/test_*.py) { python $t.FullName; if ($LASTEXITCODE) { break } }
+# bash: for t in tests/test_*.py; do python "$t" || break; done
 ```
 
 ## ⚠️ Notes
 
 - Tile taxonomy is **38 classes** (34 tiles + 3 red fives + `back`); ordering is
-  fixed by what `tile.model` was trained on — see `tiles.py`. Do not reorder.
-- Coordinate baselines differ: **mycv = 1920×1080**, **Akagi/Playwright = 1600×900**.
+  frozen by the original `tile.model` — see `tiles.py`. Do not reorder.
+- Coordinate baselines differ: **mycv = 1920×1080**, **Playwright = 1600×900**.
   Always normalize to 0–1 before converting between them.
-- Risk/compliance (time-sync, ban-avoidance, Akagi's AGPLv3 + Commons Clause):
-  see `docs/DESIGN.md` §7. Prefer **passive capture** (观战/人工对局) over autoplay.
+- Train/val split **by kyoku/game, never by frame** (same physical tile spans ~10
+  frames; a frame split leaks).
+- `frames.jsonl` `file` entries are RELATIVE — always resolve via
+  `paths.resolve_frame_path`; the layout's single source of truth is `majsoul_eye/paths.py`.
+- Risk/compliance (time-sync, ban-avoidance): see `docs/DESIGN.md` §7. Use burner
+  accounts for autoplay capture.

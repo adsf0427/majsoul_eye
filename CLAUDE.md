@@ -16,61 +16,53 @@ screenshots. It is a clean rewrite that **reuses two sibling repos** (not vendor
 The whole design rests on: **`Akagi GT = WHAT` (which tile, who discarded) + `geometry = WHERE`
 (pixel box) → auto-generated labels, zero hand-drawing.**
 
-Read `README.md` and `docs/DESIGN.md` first — `DESIGN.md` is the authoritative approved plan
-(element-by-element method table in §4, reuse map in §5, roadmap P0–P6 in §6, risks in §7).
+Read `README.md` and **`docs/PIPELINE.md`** first — PIPELINE.md is the authoritative
+description of the CURRENT pipeline (data flow, per-stage commands, deprecated-component
+list, maintenance rules). `docs/DESIGN.md` is the original approved plan (method table §4,
+reuse map §5, risks §7); `docs/STATUS.md` is the running history.
 
 ## Environment & commands
 
-Two conda envs are involved (default-PATH python has no numpy):
-
-- **`auto`** — for all majsoul_eye code, tests, dataset building, training.
-  `PY=C:/Users/zsx/miniforge3/envs/auto/python.exe`
-- **`akagi`** — only for `record_gt.py`, which runs *inside* Akagi's process. The screenshot
-  path needs deps Akagi lacks: `conda run -n akagi pip install mss opencv-python`.
+All majsoul_eye code, tests, dataset building, and training run in the conda **`auto`** env.
+Docs and commands write plain `python` — the user activates the env themselves. Default-PATH
+python has NO numpy, so in a shell where `auto` is not activated (e.g. this harness's Bash
+tool), substitute `C:/Users/zsx/miniforge3/envs/auto/python.exe` for `python`.
+The `akagi` env exists only for the **deprecated** manual `record_gt.py` path.
 
 Imports are top-level `from majsoul_eye import ...`, so **run everything with `PYTHONPATH=.`**
 from the repo root.
 
 ```bash
-# Tests — plain scripts (no pytest dependency; also pytest-compatible). Run one:
-PYTHONPATH=. $PY tests/test_replay.py
+# Tests — plain scripts under tests/ (no pytest dependency; also pytest-compatible). One:
+PYTHONPATH=. python tests/test_replay.py
 # All of them:
-PYTHONPATH=. $PY tests/test_tiles.py && PYTHONPATH=. $PY tests/test_replay.py && \
-PYTHONPATH=. $PY tests/test_sync.py && PYTHONPATH=. $PY tests/test_river.py && \
-PYTHONPATH=. $PY tests/test_meld.py && PYTHONPATH=. $PY tests/test_label.py && \
-PYTHONPATH=. $PY tests/test_classifier.py
+for t in tests/test_*.py; do PYTHONPATH=. python "$t" || break; done
 ```
 
-### Data pipeline (capture → dataset → model)
+### Data pipeline (capture → dataset → model) — full detail in docs/PIPELINE.md
 
-`captures/` uses a role-based layout (single source of truth: `majsoul_eye/paths.py`):
-`raw/ai_session/` (MahjongCopilot autoplay) + `raw/manual/` (record_gt) both write our
-`GTRecord` format directly — `autoplay_ai.py` writes the GTRecord + screenshot index inline
-under `raw/ai_session` (same as manual); there is no separate convert step or
-`intermediate/gt` anymore (retired; legacy b64 runs were migrated in place by
-`scripts/data/migrate_ai_to_gtrecord.py`). `intermediate/derived/` (cropped / de-letterboxed)
-+ `legacy/` (archived dupes) are unchanged. Frame indexes (`frames.jsonl`) store RELATIVE
-paths; always resolve via `paths.resolve_frame_path`.
+**Single capture path (AI autoplay).** `scripts/capture/autoplay_ai.py --live` plays via
+Mortal + Playwright and writes the unified `GTRecord` + screenshot index inline under
+`captures/raw/ai_session/run_N/gameM.jsonl` + `gameM/` — no convert step, no
+`intermediate/gt` (retired; legacy b64 runs were migrated once by
+`scripts/data/migrate_ai_to_gtrecord.py`). The old manual path (`record_gt.py` + Akagi MITM,
+`captures/raw/manual/`) is **deprecated for new capture**; its session5/6 data stays in the
+training set. Frame indexes (`frames.jsonl`) store RELATIVE paths; always resolve via
+`paths.resolve_frame_path`.
 
 ```bash
-# 1. Record GT + time-synced screenshots (runs Akagi; akagi env; autoplay OFF, passive only).
-#    WEB client must be FULLSCREEN (F11). Defaults to captures/raw/manual/. Status → <out>.jsonl.log
-conda run -n akagi python scripts/capture/record_gt.py --screenshots --quiet 0.30 --settle-cap 2.0
-# 2. Inspect sync quality (offline, no client):
-PYTHONPATH=. $PY scripts/inspect/inspect_capture.py captures/raw/manual/sessionN.jsonl captures/raw/manual/sessionN/ --step <N>
-# 3. (only if not captured fullscreen) crop the 16:9 canvas out of a letterboxed session:
-$PY scripts/data/crop_game.py captures/raw/manual/sessionN captures/intermediate/derived/sessionN_16x9 --size 3840x2160
-# 4. Build auto-labeled dataset (replay → autolabel → crops/ + yolo/):
-PYTHONPATH=. $PY scripts/train/build_dataset.py captures/raw/manual/sessionN.jsonl captures/raw/manual/sessionN/ \
-       --out datasets/sessionN --locator fullscreen --drop-violations
-# 5. Train the 38-class tile classifier (KYOKU-level split — never split by frame):
-PYTHONPATH=. $PY scripts/train/train_classifier.py \
-       --data sN=datasets/sessionN/crops:captures/raw/manual/sessionN.jsonl --val sN:E3.0,S2.0 --epochs 20
-# AI (MahjongCopilot) path: scripts/capture/autoplay_ai.py writes the GTRecord + screenshot
-#   index directly under captures/raw/ai_session/run_N/ (same format as manual; no convert
-#   step). Then annotate + build: scripts/annotate/annotate_ai_session.py (defaults to all
-#   paths.ai_captures(), i.e. captures/raw/ai_session/**/*.jsonl) -> scripts/train/build_dataset.py.
-# overlay_labels.py draws auto-labels onto a frame for visual coordinate calibration.
+# 1. Capture (dry-run first, then --live; burner account):
+PYTHONPATH=. python scripts/capture/autoplay_ai.py --live --auto-next
+# 2. Build a VERSIONED dataset (annotate → per-game crops+yolo → detector split → games.json
+#    manifest). Runs immediately (--dry-run to preview); --resume adds only missing games:
+PYTHONPATH=. python scripts/data/build_datasets.py v2          # default --sources captures/raw/ai_session
+PYTHONPATH=. python scripts/data/build_datasets.py v1 --sources captures/raw/ai_session captures/raw/manual --resume
+#    (rebuild_datasets.py is DEPRECATED — superseded by build_datasets.py; current version: datasets/v1)
+# 3. Train (GPU, deliberate). --dataset expands a version's games.json; repeat it to mix versions:
+PYTHONPATH=. python scripts/train/train_classifier.py --dataset datasets/v1 --val "ai_run_8_game1:*" --epochs 20
+PYTHONPATH=. python scripts/train/train_detector.py --data datasets/v1/detector/data.yaml
+# QA: inspect_capture.py (frame↔GT join), overlay_labels.py (draw labels on a frame),
+#     annotate_ai_session.py --qa-classifier (crop-consistency spot check)
 ```
 
 ## Architecture
@@ -88,10 +80,13 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
 - **`normalize.py`** — front-end that maps an arbitrary screenshot onto the canonical frame via
   a `BoardRegion` (`locate_fullscreen` / `locate_letterbox`; `AnchorLocator` is a TODO stub).
   This is what lets fixed-slot logic survive other resolutions.
-- **`capture/`** — ⚠️ **DEV-ONLY, Akagi-coupled. The shipped recognizer never imports it.**
-  - `akagi_tap.py` monkeypatches `MajsoulBridge.parse_liqi` to tee each (raw liqi + derived
-    MJAI) tick to a background JSONL writer. Records both because **MJAI drops superset fields**
-    (`leftTileCount`, `moqie`, mid-round `scores`, full `ActionHule`) — read those from raw liqi.
+- **`capture/`** — ⚠️ **DEV-ONLY. The shipped recognizer never imports it.**
+  - `akagi_tap.py` (**legacy manual path**) monkeypatches `MajsoulBridge.parse_liqi` to tee each
+    (raw liqi + derived MJAI) tick to a background JSONL writer. Records both because **MJAI drops
+    superset fields** (`leftTileCount`, `moqie`, mid-round `scores`, full `ActionHule`).
+  - `roi_diff.py` (ROI-stability confirm — prevents discard-animation occlusion at the source),
+    `overlay.py` (`DetectionOverlay` — draws live detector boxes in the browser, `--overlay`),
+    `gamemeta.py` (per-game display-language `metadata.json`).
   - `sync.py` (`FrameSyncer`) — the top correctness risk. Protocol events fire *before* the
     animation renders, so capture is async **debounce-to-quiet**: capture one frame once no
     board event has arrived for `quiet` s (plus optional pixel-stability confirm). Decision logic
@@ -115,11 +110,18 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   hero hand + dora boxes only (`annotate_frame` calls it for those zones; `DEFAULT_ZONES = {hand}`).
   The old `river.py`/`meld.py` + `coords.RIVER_QUADS`/`MELD_STRIPS` (equal-subdivision RiverGrid) were
   **removed** — superseded by `annotate/` (see docs/STATUS.md §1.13).
-- **`recognize/classifier.py`** — `TileNet` (small CNN, 64px input, 38-class) + `TileClassifier`
-  inference wrapper. The clean rewrite of mycv's classifier.
+- **`recognize/`** — the SHIPPED product: `classifier.py` (`TileNet` small CNN, 64px, 38-class +
+  `TileClassifier`) and `detector.py` (`TileDetector`, YOLO HBB/OBB, lazy-loads ultralytics).
+  Production weights: `tile_classifier.pt` (tracked) + `tile_detector.pt` (local); training
+  bases/variants live under `weights/`.
 
 ## Critical invariants & gotchas
 
+- **Pipeline-impact discipline**: before committing any change that touches capture, annotate,
+  dataset building, or training, ask (1) does it stale the derived data under `out/`/`datasets/`
+  (→ note it, or rebuild via `build_datasets.py <name> --force`), and (2) does it change a pipeline
+  input/output/step/default (→ **update `docs/PIPELINE.md`** and add a STATUS.md entry).
+  New scripts must be classified as either a pipeline stage or a one-shot tool (PIPELINE.md §4).
 - **38-class order is frozen** by what `tile.model` was trained on (m, p, s, honors, red5(m,p,s),
   back). A *dead* commented-out s/p/m ordering exists in mycv — ignore it. **Do not reorder
   without retraining.** See the header of `tiles.py`.
@@ -146,6 +148,5 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   routes status to a sidecar `.log` (printing to stdout corrupts Akagi's Textual TUI).
 - **`recognize/` must stay Akagi-free** — it is the shipped product; keep the Akagi-coupled
   `capture/` import boundary intact.
-- **Compliance**: capture **passively** (观战/人工对局), autoplay OFF — ban-avoidance. Akagi is
-  **AGPLv3 + Commons Clause**; reusing its bridge likely makes derivatives copyleft and
-  non-commercial (DESIGN.md §7). Do not extract/redistribute Majsoul sprites or screenshots.
+- **Ban-avoidance**: AI autoplay capture runs on **burner accounts** (active ranked play);
+  don't run 24/7. Do not extract/redistribute Majsoul sprites or screenshots.
