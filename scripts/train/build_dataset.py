@@ -133,6 +133,13 @@ def main() -> None:
     ap.add_argument("--from-annotations", metavar="DIR", default=None,
                     help="Reuse annotate_ai_session records from DIR/<capture-stem>.jsonl "
                          "instead of re-running annotate_frame (no warp/mask recompute).")
+    ap.add_argument("--reuse-images", metavar="DIR", default=None,
+                    help="Label-only mode: take the frame SET + pixel dims from DIR/<seq>.png "
+                         "(an already-built yolo/images dir, e.g. the HBB precise_<game>/yolo/images) "
+                         "via a header-only read — no source-PNG decode, and DO NOT re-write images. "
+                         "Use to build OBB labels off a finished HBB build (symlink the OBB images dir "
+                         "at DIR) without re-encoding the identical frames. Requires --no-crops and no "
+                         "--occlusion-gate (both need pixels this mode never loads).")
     ap.add_argument("--occlusion-gate", dest="occlusion_gate", action="store_true",
                     help="Opt-in GT-consistency occlusion/mislabel gate (DEFAULT OFF). Runs a "
                          "classifier over every box and DELETES mismatches. Prefer capture-time "
@@ -145,7 +152,12 @@ def main() -> None:
                     help="Per-frame bad-box budget before dropping the whole frame.")
     args = ap.parse_args()
 
+    if args.reuse_images and (not args.no_crops or args.occlusion_gate):
+        ap.error("--reuse-images is label-only (loads no pixels): pass --no-crops and drop --occlusion-gate")
+
     import cv2  # auto env
+    if args.reuse_images:
+        from PIL import Image  # header-only frame-size reads
 
     from majsoul_eye import paths
     from majsoul_eye.tiles import NAME_TO_ID
@@ -204,19 +216,32 @@ def main() -> None:
             if state is None or check_invariants(state):
                 n_skip += 1
                 continue
-        frame = cv2.imread(frames[seq])
-        if frame is None:
-            n_skip += 1
-            continue
-        h, w = frame.shape[:2]
-        if abs(w / h - 16 / 9) > 0.02:       # letterboxed / non-16:9 → precise geom invalid
-            n_letterbox += 1
-            continue
-        # default path calibrates at 1920x1080 and resizes to match; reuse path keeps the
-        # native frame (the stored polys are native-px — don't rescale the frame under them).
-        if (w, h) != (1920, 1080) and not args.from_annotations:
-            frame = cv2.resize(frame, (1920, 1080), interpolation=cv2.INTER_AREA)
-            h, w = 1080, 1920
+        if args.reuse_images:
+            # Label-only: frame SET + dims come from an already-built yolo/images dir (the
+            # reference build already applied the letterbox/resize/imread filters, so a seq
+            # missing there is one it dropped). No decode, no re-encode.
+            imgp = os.path.join(args.reuse_images, f"{seq:06d}.png")
+            try:
+                with Image.open(imgp) as im:     # header only, no pixel decode
+                    w, h = im.size
+            except (FileNotFoundError, OSError):
+                n_skip += 1
+                continue
+            frame = None
+        else:
+            frame = cv2.imread(frames[seq])
+            if frame is None:
+                n_skip += 1
+                continue
+            h, w = frame.shape[:2]
+            if abs(w / h - 16 / 9) > 0.02:       # letterboxed / non-16:9 → precise geom invalid
+                n_letterbox += 1
+                continue
+            # default path calibrates at 1920x1080 and resizes to match; reuse path keeps the
+            # native frame (the stored polys are native-px — don't rescale the frame under them).
+            if (w, h) != (1920, 1080) and not args.from_annotations:
+                frame = cv2.resize(frame, (1920, 1080), interpolation=cv2.INTER_AREA)
+                h, w = 1080, 1920
 
         rec = recs[seq] if args.from_annotations else annotate_frame(frame, seq_state[seq], hom)
 
@@ -259,7 +284,8 @@ def main() -> None:
                     ci += 1
                     n_crops += 1
         if yolo_lines and not args.no_yolo:
-            cv2.imwrite(os.path.join(img_dir, f"{seq:06d}.png"), frame)   # RESIZED frame
+            if frame is not None:                                        # reuse-images: image already on disk (symlinked)
+                cv2.imwrite(os.path.join(img_dir, f"{seq:06d}.png"), frame)   # RESIZED frame
             with open(os.path.join(lbl_dir, f"{seq:06d}.txt"), "w") as lf:
                 lf.write("\n".join(yolo_lines) + "\n")
             n_yolo += 1
