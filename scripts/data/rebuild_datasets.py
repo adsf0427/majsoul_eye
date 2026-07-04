@@ -67,7 +67,7 @@ FRAMES_OVERRIDE = {
 }
 
 # Manual "human-play" sessions (record_gt): the GT jsonl is ALREADY MJAI (Akagi tees
-# raw+mjai live), so there is NO convert step and NO intermediate/gt — build_dataset
+# raw+mjai live), so there is NO convert step and NO separate converted-GT tree — build_dataset
 # reads captures/raw/manual/<name>.jsonl + its frames dir directly. They also have a
 # playing hero (seat 0), so the hero-tsumo fix applies — include them in BOTH the
 # classifier crops and the YOLO detector split. (session5/6 are 3840x2160 16:9, so no

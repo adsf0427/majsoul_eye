@@ -11,7 +11,7 @@ frames.jsonl, frames/*.png}.
 
 Idempotent + dry-run by default. Re-derives GT from the wire via the SHARED
 convert_game (same code the live capture's derivation is proven equal to), so the
-output matches the retired captures/intermediate/gt/*.jsonl byte-for-byte.
+output matches what the now-removed converted-GT tree held, byte-for-byte.
 
 Run (conda `auto` env, repo root, PYTHONPATH=.):
     PYTHONPATH=. $PY scripts/data/migrate_ai_to_gtrecord.py            # dry run

@@ -21,14 +21,14 @@ slashes work on Windows too.
 
 Milestone 1 (one game, hold out its last kyoku):
     python scripts/train/build_detector_dataset.py \
-        --data g1=datasets/precise_ai_run_3_game1/yolo:captures/intermediate/gt/ai_run_3_game1.jsonl \
+        --data g1=datasets/precise_ai_run_3_game1/yolo:captures/raw/ai_session/run_3/game1.jsonl \
         --val g1:S4.0 --out datasets/detector_g1
 
 Milestone 2 (many games, hold out one whole game):
     python scripts/train/build_detector_dataset.py \
-        --data g1=datasets/precise_ai_run_3_game1/yolo:captures/intermediate/gt/ai_run_3_game1.jsonl \
+        --data g1=datasets/precise_ai_run_3_game1/yolo:captures/raw/ai_session/run_3/game1.jsonl \
         ...(one --data per game)... \
-        --data v=datasets/precise_ai_run_8_game1/yolo:captures/intermediate/gt/ai_run_8_game1.jsonl \
+        --data v=datasets/precise_ai_run_8_game1/yolo:captures/raw/ai_session/run_8/game1.jsonl \
         --val v:* --out datasets/detector
 """
 from __future__ import annotations

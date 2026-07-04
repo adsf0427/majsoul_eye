@@ -365,7 +365,7 @@ def refit(measure_path: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--captures", nargs="*", default=None,
-                    help="capture jsonl files (default: all converted GT under captures/intermediate/gt/)")
+                    help="capture jsonl files (default: all AI GT captures under captures/raw/ai_session/)")
     ap.add_argument("--per-game", type=int, default=40)
     ap.add_argument("--out", default="scratchpad/calib_measure.json")
     ap.add_argument("--refit", default=None, help="aggregate an existing measurement JSON")
@@ -394,7 +394,7 @@ def main() -> None:
             if img.shape[1] != 1920:
                 img = cv2.resize(img, (1920, 1080), interpolation=cv2.INTER_AREA)
             for rec in measure_frame(img, seq_state[seq], hom):
-                rec["capture"] = os.path.basename(cap)
+                rec["capture"] = paths.ai_game_name(cap)
                 rec["seq"] = seq
                 records.append(rec)
             n += 1

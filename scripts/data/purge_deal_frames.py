@@ -11,8 +11,8 @@ deal-window seqs, and removes their classifier crops (``crops/<tile>/<seq>_*.png
 rewrites every ``datasets/detector*/{train,val}.txt`` to drop image lines whose file
 no longer exists (so the assembled detector split stays valid).
 
-Capture resolution: ``precise_<name>`` -> ``captures/intermediate/gt/<name>.jsonl``
-(AI games) or ``captures/raw/manual/<name>.jsonl`` (manual sessions).
+Capture resolution: ``precise_<name>`` -> ``captures/raw/ai_session/run_N/gameM.jsonl``
+(AI games, via ``paths.ai_captures``) or ``captures/raw/manual/<name>.jsonl`` (manual sessions).
 
 Dry-run by DEFAULT (prints what it WOULD delete); pass ``--apply`` to delete.
 Idempotent: a second run finds nothing to remove.
@@ -26,6 +26,7 @@ import argparse
 import glob
 import os
 
+from majsoul_eye import paths
 from majsoul_eye.capture.schema import read_records
 from majsoul_eye.capture.sync import RELEVANT_EVENTS
 from majsoul_eye.state.replay import Replayer, is_deal_window
@@ -44,11 +45,13 @@ def deal_window_seqs(capture: str) -> set[int]:
 
 
 def resolve_capture(name: str) -> str | None:
-    """precise_<name> stem -> its GT capture jsonl (AI gt/ or manual/)."""
-    for cand in (os.path.join("captures", "intermediate", "gt", f"{name}.jsonl"),
-                 os.path.join("captures", "raw", "manual", f"{name}.jsonl")):
-        if os.path.exists(cand):
-            return cand
+    """precise_<name> stem -> its GT capture jsonl (AI raw/ai_session or manual/)."""
+    manual = os.path.join(paths.RAW_MANUAL, f"{name}.jsonl")
+    if os.path.exists(manual):
+        return manual
+    for cap in paths.ai_captures():           # AI: reverse ai_game_name over discovered captures
+        if paths.ai_game_name(cap) == name:
+            return cap
     return None
 
 

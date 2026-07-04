@@ -15,10 +15,10 @@ resizes the content back to 1920x1080. Corrected PNGs + a rewritten
 per-frame ``seq`` correspondence is preserved 1:1.
 
 Run (conda `auto` env, repo root, PYTHONPATH=.):
-  $PY scripts/data/deletterbox_frames.py --capture captures/intermediate/gt/ai_run_5_game2.jsonl \
+  $PY scripts/data/deletterbox_frames.py --capture captures/raw/ai_session/run_5/game2.jsonl \
       --out captures/intermediate/derived/ai_run_5_game2_fixed
 Then annotate the corrected frames without touching the original folder:
-  $PY scripts/annotate/annotate_ai_session.py --captures captures/intermediate/gt/ai_run_5_game2.jsonl \
+  $PY scripts/annotate/annotate_ai_session.py --captures captures/raw/ai_session/run_5/game2.jsonl \
       --frames-dir captures/intermediate/derived/ai_run_5_game2_fixed --qa-classifier
 """
 from __future__ import annotations

@@ -18,7 +18,7 @@ which it imports; the superseded ``RiverGrid`` + self meld strip are inlined bel
 this file stands alone.
 
 Run from repo root with PYTHONPATH=. and the conda `auto` python:
-    PYTHONPATH=. $PY scripts/annotate/spike_topdown.py --list-seqs --capture captures/intermediate/gt/ai_run_3_game1.jsonl
+    PYTHONPATH=. $PY scripts/annotate/spike_topdown.py --list-seqs --capture captures/raw/ai_session/run_3/game1.jsonl
     PYTHONPATH=. $PY scripts/annotate/spike_topdown.py --all-cases            # Mode A (warp) + B (original)
     PYTHONPATH=. $PY scripts/annotate/spike_topdown.py --case C_kakan_single --mode both
     PYTHONPATH=. $PY scripts/annotate/spike_topdown.py --warp --case rivers_full   # debug: warp + symmetry
@@ -126,7 +126,7 @@ class RiverGrid:
 # self meld strip (was coords.MELD_STRIPS["self"]): bottom-right, right-anchored.
 _MELD_SELF = {"quad": ((0.702, 0.861), (0.911, 0.873), (0.911, 0.960), (0.702, 0.950)), "count": 6}
 
-DEFAULT_CAPTURE = "captures/intermediate/gt/ai_run_3_game1.jsonl"
+DEFAULT_CAPTURE = "captures/raw/ai_session/run_3/game1.jsonl"
 OUT_DIR = "fails/topdown_demo"
 RECT = 1000  # square rectified canvas (4-fold rotation is exact on a square)
 

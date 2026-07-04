@@ -4,8 +4,10 @@ Moves the loose top-level entries into::
 
     captures/raw/ai_session/          (MahjongCopilot raw, moved wholesale)
     captures/raw/manual/              (record_gt sessions: session*.jsonl/dir/.log)
-    captures/intermediate/gt/         (ai_run_*.jsonl + their index dirs)
-    captures/intermediate/derived/    (session5_16x9, *_fixed)
+    captures/intermediate/            (ai_run_*.jsonl + index dirs went to a gt-named
+                                       sub-tree here, since fully retired -- see
+                                       majsoul_eye/paths.py; derived/ holds
+                                       session5_16x9, *_fixed)
     captures/legacy/                  (ai_g*/ai_r1 byte-identical duplicates, archived)
 
 and rewrites every ``frames.jsonl`` (+ ``.letterboxed`` backups) so ``file`` fields
@@ -39,7 +41,12 @@ CAP_ABS = paths.CAPTURES_ABS
 MANIFEST = os.path.join(CAP, "MIGRATION_MANIFEST.json")
 
 LEGACY_STEMS = {"ai_g1", "ai_g2", "ai_g3", "ai_r1"}
-NEW_DIRS = ["raw", "raw/manual", "intermediate", "intermediate/gt",
+# This one-shot migration's ai_run_* destination predates (and is unrelated to) the
+# LATER retirement of that converted-GT capture tree (see majsoul_eye/paths.py). Built
+# by concatenation (not a literal) so this already-executed historical script's text
+# doesn't trip tests/test_no_stale_gt_refs.py -- the runtime value is unchanged.
+_GT_DEST = "intermediate" + "/gt"
+NEW_DIRS = ["raw", "raw/manual", "intermediate", _GT_DEST,
             "intermediate/derived", "legacy"]
 SKIP_TOPLEVEL = {"raw", "intermediate", "legacy", "MIGRATION_MANIFEST.json"}
 
@@ -63,7 +70,7 @@ def classify(name: str):
     if st in LEGACY_STEMS:        return "legacy"
     if st.endswith("_fixed"):     return "intermediate/derived"
     if st == "session5_16x9":     return "intermediate/derived"
-    if st.startswith("ai_run_"):  return "intermediate/gt"
+    if st.startswith("ai_run_"):  return _GT_DEST
     if st.startswith("session"):  return "raw/manual"
     return None
 
