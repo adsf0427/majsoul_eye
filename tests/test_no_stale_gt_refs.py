@@ -11,7 +11,10 @@ import glob
 #   paths.py  — defines the vestigial GT constant + documents the retirement
 #   convert_mjcopilot.py — --out default is paths.GT for the still-runnable legacy CLI
 _ALLOW = {os.path.normpath("majsoul_eye/paths.py"),
-          os.path.normpath("scripts/data/convert_mjcopilot.py")}
+          os.path.normpath("scripts/data/convert_mjcopilot.py"),
+          # prior captures-layout migration tool: names intermediate/gt as its own
+          # (historical, completed) destination — not a dangling reference.
+          os.path.normpath("scripts/data/migrate_captures_layout.py")}
 _PAT = re.compile(r"intermediate.{0,4}gt")
 
 

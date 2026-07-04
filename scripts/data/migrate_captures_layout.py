@@ -45,7 +45,7 @@ LEGACY_STEMS = {"ai_g1", "ai_g2", "ai_g3", "ai_r1"}
 # LATER retirement of that converted-GT capture tree (see majsoul_eye/paths.py). Built
 # by concatenation (not a literal) so this already-executed historical script's text
 # doesn't trip tests/test_no_stale_gt_refs.py -- the runtime value is unchanged.
-_GT_DEST = "intermediate" + "/gt"
+_GT_DEST = "intermediate/gt"
 NEW_DIRS = ["raw", "raw/manual", "intermediate", _GT_DEST,
             "intermediate/derived", "legacy"]
 SKIP_TOPLEVEL = {"raw", "intermediate", "legacy", "MIGRATION_MANIFEST.json"}
