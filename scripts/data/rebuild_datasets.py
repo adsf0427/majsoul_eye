@@ -90,16 +90,17 @@ CLASSIFIER_OUT = os.path.join("majsoul_eye", "recognize", "tile_classifier.pt")
 
 
 def game_name(capture: str) -> str:
-    return os.path.splitext(os.path.basename(capture))[0]
+    return paths.ai_game_name(capture)
 
 
 def dataset_dir(name: str) -> str:
     return os.path.join(DATASETS, f"precise_{name}")
 
 
-def gt_frames_dir(name: str) -> str:
-    # convert_mjcopilot writes <out>/<name>/frames.jsonl next to <out>/<name>.jsonl
-    return FRAMES_OVERRIDE.get(name, os.path.join(paths.GT, name))
+def gt_frames_dir(capture: str, name: str) -> str:
+    # AI GT frames now sit next to the capture jsonl (X.jsonl <-> X/); letterboxed
+    # games still override to their de-letterboxed frames.
+    return FRAMES_OVERRIDE.get(name, paths.frames_dir_for(capture))
 
 
 # ---- runner ---------------------------------------------------------------
@@ -178,13 +179,15 @@ def main() -> None:
     py = sys.executable
     r = Runner(args.yes)
 
-    captures = sorted(paths.converted_gt_captures())
+    captures = sorted(paths.ai_captures())
     if not captures:
-        raise SystemExit(f"no converted GT captures under {paths.GT} — convert AI runs first "
-                         f"(scripts/data/ingest_run.py captures/raw/ai_session/run_N)")
+        raise SystemExit(f"no AI GT captures under {paths.RAW_AI_SESSION} — capture with "
+                         f"scripts/capture/autoplay_ai.py, or migrate legacy runs with "
+                         f"scripts/data/migrate_ai_to_gtrecord.py")
     names = [game_name(c) for c in captures]
+    name_to_cap = dict(zip(names, captures))
     if args.val not in names:
-        raise SystemExit(f"--val game {args.val!r} not among converted games: {names}")
+        raise SystemExit(f"--val game {args.val!r} not among AI games: {names}")
 
     print(f"{'EXECUTE' if args.yes else 'DRY RUN'} - {len(captures)} AI game(s): {names}")
     print(f"val (held out whole): {args.val}\n")
@@ -219,7 +222,7 @@ def main() -> None:
             out = dataset_dir(n)
             if not args.no_clean:
                 r.rm(out)                            # clean is fast; do it up front
-            cmds.append([py, "scripts/train/build_dataset.py", c, gt_frames_dir(n),
+            cmds.append([py, "scripts/train/build_dataset.py", c, gt_frames_dir(c, n),
                          "--out", out, "--from-annotations", ANN_OUT, "--drop-violations"])
         # manual sessions: GT is already MJAI, so build DIRECT (annotate_frame inline,
         # no separate annotate stage / --from-annotations).
@@ -254,7 +257,7 @@ def main() -> None:
         print()
 
     # ---- not run: training + the manual/uncoverted-game steps --------------
-    val_cap = os.path.join(paths.GT, f"{args.val}.jsonl")
+    val_cap = name_to_cap[args.val]
     clf_data = " ".join(
         f"--data {n}={os.path.join(dataset_dir(n), 'crops')}:{c}" for c, n in zip(captures, names))
     for name in MANUAL_SESSIONS:                       # session5/6 crops too

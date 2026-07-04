@@ -158,7 +158,7 @@ def main() -> None:
 
     if args.from_annotations:
         import json
-        stem = os.path.splitext(os.path.basename(args.capture))[0]
+        stem = paths.ai_game_name(args.capture)
         ann_path = os.path.join(args.from_annotations, f"{stem}.jsonl")
         recs = {}
         with open(ann_path, encoding="utf-8") as f:

@@ -88,7 +88,7 @@ def _process_capture(cap, cfg):
         torch.set_num_threads(1)
     except Exception:
         pass
-    name = os.path.splitext(os.path.basename(cap))[0]
+    name = paths.ai_game_name(cap)
     try:
         seq_state = build_seq_state(cap)
         frames = load_frames(cfg["frames_dir"] or paths.frames_dir_for(cap))
@@ -223,7 +223,7 @@ def main() -> None:
                          "cores, capped). Pass a higher --workers on a big box, or 1 for sequential.")
     args = ap.parse_args()
 
-    captures = args.captures or paths.converted_gt_captures()
+    captures = args.captures or paths.ai_captures()
     if args.frames_dir and len(captures) != 1:
         ap.error("--frames-dir requires exactly one --captures")
     os.makedirs(os.path.join(args.out, "overlays"), exist_ok=True)

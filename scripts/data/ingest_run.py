@@ -68,18 +68,17 @@ def main():
         raise SystemExit(f"no games (frames.jsonl) found under {args.run_dir}")
     print(f"discovered {len(games)} game(s): {[n for _, n in games]}")
 
-    # 1) convert all games in one call
-    game_args = []
+    # 1) build_dataset per game — AI captures are already GTRecord (no convert).
+    #    discover_games returns rel dirs like "run_13/game1"; the GTRecord jsonl is
+    #    the sibling "run_13/game1.jsonl" and its frames dir is "run_13/game1/".
     for rel, name in games:
-        game_args += ["--game", f"{rel}={name}"]
-    run([py, "scripts/data/convert_mjcopilot.py", *game_args,
-         "--session", parent, "--mjcopilot", args.mjcopilot, "--out", args.captures], env)
-
-    # 2) build_dataset per game
-    for _, name in games:
-        run([py, "scripts/train/build_dataset.py",
-             os.path.join(args.captures, f"{name}.jsonl"),
-             os.path.join(args.captures, name) + os.sep,
+        cap = os.path.join(parent, rel) + ".jsonl"
+        frames_dir = os.path.join(parent, rel)
+        if not os.path.exists(cap):
+            print(f"  SKIP {name}: no GTRecord at {cap} "
+                  f"(capture with autoplay_ai or migrate a legacy b64 run first)")
+            continue
+        run([py, "scripts/train/build_dataset.py", cap, frames_dir + os.sep,
              "--out", os.path.join(args.datasets, name), "--drop-violations"], env)
 
     # crop summary
@@ -90,10 +89,10 @@ def main():
     # 3) optional retrain on EVERY dataset that has a matching capture jsonl
     if args.train:
         data_args = []
-        for cap in sorted(glob.glob(os.path.join(args.captures, "*.jsonl"))):
-            nm = os.path.splitext(os.path.basename(cap))[0]
+        for rel, nm in games:
             crops = os.path.join(args.datasets, nm, "crops")
-            if os.path.isdir(crops):
+            cap = os.path.join(parent, rel) + ".jsonl"      # this game's GTRecord jsonl
+            if os.path.isdir(crops) and os.path.exists(cap):
                 data_args += ["--data", f"{nm}={crops}:{cap}"]
         # also pick up the erode-rebuilt manual sets if present
         for nm, cap in (("session5_erode", os.path.join(paths.RAW_MANUAL, "session5.jsonl")),
