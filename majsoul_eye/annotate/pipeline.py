@@ -603,10 +603,15 @@ def tile_face_mask(fullwarp_bgr: np.ndarray) -> np.ndarray:
 
 
 def tile_back_mask(fullwarp_bgr: np.ndarray) -> np.ndarray:
-    """Orange tile-back mask (ankan end tiles, walls)."""
+    """Colored tile-back mask for snap face/back discrimination (any skin).
+
+    Saturation-based so it captures orange (default) AND skinned colored backs while
+    staying disjoint from the white face mask (S<70) — snap needs to tell back cells
+    from face cells. A near-white/grey skin back is (correctly) indistinguishable from
+    a face here; its labeling reliability comes from tile_live_mask, not this mask.
+    """
     hsv = cv2.cvtColor(fullwarp_bgr, cv2.COLOR_BGR2HSV)
-    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
-    return ((h >= 8) & (h <= 32) & (s > 110) & (v > 110)).astype(np.uint8)
+    return (hsv[..., 1] > 70).astype(np.uint8)
 
 
 def tile_live_mask(fullwarp_bgr: np.ndarray) -> np.ndarray:
