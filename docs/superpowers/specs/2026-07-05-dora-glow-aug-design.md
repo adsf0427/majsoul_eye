@@ -83,11 +83,13 @@ de-duplicated physical tiles. This is the correct denominator for "does the mode
 see enough glowing X" (each frame is one training image); the output explicitly
 labels it as frame×tile instances.
 
-**Output:** stdout only, no artifacts written. A 38-row table
-`class | total | glow | glow%`, columns split into **train** (all games except
-the val game) and **val** (the held-out game, default `ai_run_8_game1`, override
-`--val`). A trailer highlights classes with `glow < --min-glow` (default 20) and
-prints an overall summary (total glow instances, distinct dora values seen).
+**Output:** stdout only, no artifacts written. A per-class table
+`class | total | glow | glow%` (the 37 glow-eligible classes; `back` is omitted —
+it never appears in the counted zones), printed once per split: **train** (all
+games except the val game) and **val** (the held-out game, default
+`ai_run_8_game1`, override `--val`). Each table ends with a TOTAL row (aggregate
+total/glow/glow%) and a trailer highlighting classes with `glow < --min-glow`
+(default 20).
 
 ## Component 2 — explicit detector aug config in `train_detector.py`
 
