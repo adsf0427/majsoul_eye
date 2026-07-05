@@ -37,11 +37,16 @@ FRAME_STATUSES = ("ok", "timeout")
 
 def glow_eligible_tiles(state):
     """The raw (MJAI) tile strings of every glow-eligible box in one frame:
-    hero hand + every seat's river + every seat's meld tiles. Excludes the dora
-    indicator strip (never glows) and 'back' (face-down, filtered by caller)."""
+    hero hand + every seat's visible river + every seat's meld tiles. Excludes
+    the dora indicator strip (never glows) and 'back' (face-down, filtered by
+    caller). Rivers use visible_river() to exclude called-away tiles (which are
+    counted in the meld zone instead, avoiding double-counting)."""
     out = list(state.hero_hand)
-    for river in state.rivers:
-        out.extend(rt.pai for rt in river)
+    for seat in range(len(state.rivers)):
+        # visible_river excludes called-away tiles: a called tile is physically
+        # moved into the caller's meld, so counting it in both river and meld
+        # would double-count (mirrors replay.check_invariants / annotate.seat_gt).
+        out.extend(rt.pai for rt in state.visible_river(seat))
     for melds in state.melds:
         for m in melds:
             out.extend(m.tiles)
@@ -60,7 +65,7 @@ def count_game(capture: str, frames_dir: str):
         dset = dora_names(state.dora_markers)
         for raw in glow_eligible_tiles(state):
             canon = from_mjai(raw)
-            if canon == "back":              # defensive; hand/river/meld never back
+            if canon == "back":              # unreachable in practice ('back' has no MJAI form); defensive only
                 continue
             glow = is_red_five(canon) or red_to_normal(canon) in dset
             tally[canon][0] += 1
