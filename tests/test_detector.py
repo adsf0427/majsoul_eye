@@ -13,6 +13,7 @@ import train_detector as td  # noqa: E402
 import build_dataset as bd  # noqa: E402
 
 from majsoul_eye.tiles import TILE_NAMES, NUM_CLASSES  # noqa: E402
+from majsoul_eye.hud import DET_NAMES  # noqa: E402
 
 
 def _parse_names(yaml_text):
@@ -31,11 +32,17 @@ def _parse_names(yaml_text):
 
 
 def test_data_yaml_names_match_frozen_taxonomy():
+    # Task 9: the detector head grew from the frozen 38 tile classes to the full
+    # 55-class hud.DET_NAMES (38 tiles + 17 HUD elements); v1 (pre-HUD) label
+    # files only ever used ids 0-37, so the tile prefix/order must stay frozen.
     txt = bdd.build_data_yaml_text("datasets/detector")
-    assert f"nc: {NUM_CLASSES}" in txt
+    assert f"nc: {len(DET_NAMES)}" in txt
     names = _parse_names(txt)
-    assert len(names) == NUM_CLASSES == 38
-    # order MUST match tiles.TILE_NAMES (== NAME_TO_ID used at label export)
+    assert len(names) == len(DET_NAMES) == 55
+    assert [names[i] for i in range(len(DET_NAMES))] == list(DET_NAMES)
+    # tile prefix (ids 0..37) MUST match tiles.TILE_NAMES (== NAME_TO_ID used at
+    # label export) — this is what keeps old 38-class labels valid under the
+    # 55-class head.
     assert [names[i] for i in range(NUM_CLASSES)] == list(TILE_NAMES)
 
 
