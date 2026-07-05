@@ -129,10 +129,10 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
             x1, y1, x2, y2 = region.norm_to_px(dora_slot(i))
             f = 0.0
             if x2 > x1 and y2 > y1:
-                hsv = cv2.cvtColor(img[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
                 if is_back:                          # skin-agnostic: any rendered tile back
                     f = float(P.tile_live_mask(img[y1:y2, x1:x2]).mean())
                 else:                                # white tile-face
+                    hsv = cv2.cvtColor(img[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
                     f = float(((hsv[..., 1] < 70) & (hsv[..., 2] > 165)).mean())
             d = {"tile": tile, "px_box": [x1, y1, x2, y2], "fill": round(f, 3), "back": is_back}
             if f < FILL_OK:
