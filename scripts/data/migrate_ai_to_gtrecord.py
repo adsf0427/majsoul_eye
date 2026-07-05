@@ -56,13 +56,8 @@ def _looks_like_wire(frames_jsonl: str) -> bool:
 def plan_targets(game_dir: str) -> dict:
     """Compute new-layout targets for a b64 game dir (pure; no I/O)."""
     gd = os.path.abspath(game_dir).replace("\\", "/")
-    parts = gd.split("/")
-    game = parts[-1]
-    parent = parts[-2]
-    if game.startswith("game"):
-        name = f"ai_{parent}_{game}"                 # run_N/gameM -> ai_run_N_gameM
-    else:
-        name = f"ai_{game}"                          # run_1 (single-game) -> ai_run_1
+    game = gd.split("/")[-1]
+    name = paths.ai_game_name(gd)                      # source-root-qualified (shared namer)
     gt_path = os.path.join(game_dir, f"{game}.jsonl")  # nested: GT INSIDE the game dir
     return {
         "name": name,

@@ -14,16 +14,23 @@ from majsoul_eye import paths
 
 def test_ai_game_name_multi_game():
     # nested (new canon): jsonl inside its own frames dir
-    assert paths.ai_game_name("captures/raw/ai_session/run_3/game1/game1.jsonl") == "ai_run_3_game1"
+    assert paths.ai_game_name("captures/raw/ai_session/run_3/game1/game1.jsonl") == "ai_session_run_3_game1"
     # absolute + backslash variants resolve the same
-    assert paths.ai_game_name(r"D:\x\captures\raw\ai_session\run_10\game2\game2.jsonl") == "ai_run_10_game2"
+    assert paths.ai_game_name(r"D:\x\captures\raw\ai_session\run_10\game2\game2.jsonl") == "ai_session_run_10_game2"
     # legacy sibling shape still resolves (un-migrated trees)
-    assert paths.ai_game_name("captures/raw/ai_session/run_8/game6.jsonl") == "ai_run_8_game6"
+    assert paths.ai_game_name("captures/raw/ai_session/run_8/game6.jsonl") == "ai_session_run_8_game6"
 
 
 def test_ai_game_name_single_game_run():
-    assert paths.ai_game_name("captures/raw/ai_session/run_1/run_1.jsonl") == "ai_run_1"  # nested
-    assert paths.ai_game_name("captures/raw/ai_session/run_1.jsonl") == "ai_run_1"        # legacy sibling
+    assert paths.ai_game_name("captures/raw/ai_session/run_1/run_1.jsonl") == "ai_session_run_1"  # nested
+    assert paths.ai_game_name("captures/raw/ai_session/run_1.jsonl") == "ai_session_run_1"        # legacy sibling
+
+
+def test_ai_game_name_source_root_qualified():
+    # a NON-canonical root: its basename tags the name, so the same run number under
+    # two roots is distinct (raw.7z's ai_session2/run_1 vs ai_session/run_1 no longer clash).
+    assert paths.ai_game_name("captures/raw/ai_session2/run_1/game1/game1.jsonl") == "ai_session2_run_1_game1"
+    assert paths.ai_game_name("captures/raw/ai_session2/run_1/run_1.jsonl") == "ai_session2_run_1"
 
 
 def test_ai_game_name_fallback_for_manual():

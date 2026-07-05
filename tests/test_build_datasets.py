@@ -29,29 +29,35 @@ def test_discover_games_shapes_and_kinds():
         _touch(os.path.join(root, "session9.jsonl"))
         games = bds.discover_games([root])
         by_name = {g["name"]: g for g in games}
-        assert set(by_name) == {"ai_run_1", "ai_run_2_game1", "session9"}, by_name
-        assert by_name["ai_run_1"]["kind"] == "ai"
-        assert by_name["ai_run_2_game1"]["kind"] == "ai"
+        assert set(by_name) == {"ai_session_run_1", "ai_session_run_2_game1", "session9"}, by_name
+        assert by_name["ai_session_run_1"]["kind"] == "ai"
+        assert by_name["ai_session_run_2_game1"]["kind"] == "ai"
         assert by_name["session9"]["kind"] == "manual"
         # frames dir = capture with .jsonl stripped, POSIX-slashed
-        assert by_name["ai_run_2_game1"]["frames_dir"].endswith("run_2/game1")
-        assert "\\" not in by_name["ai_run_2_game1"]["frames_dir"]
+        assert by_name["ai_session_run_2_game1"]["frames_dir"].endswith("run_2/game1")
+        assert "\\" not in by_name["ai_session_run_2_game1"]["frames_dir"]
         # dir defaults to the game name (no prefix)
-        assert by_name["ai_run_1"]["dir"] == "ai_run_1"
+        assert by_name["ai_session_run_1"]["dir"] == "ai_session_run_1"
 
 
-def test_discover_games_collision_and_empty():
-    """Same run numbering in two roots must abort; an empty root must abort."""
+def test_discover_games_source_qualified_and_empty():
+    """Same run number in two roots must NOT collide now (names are source-root
+    qualified); the SAME root listed twice is a real duplicate and aborts; an empty
+    root aborts."""
     with tempfile.TemporaryDirectory() as td:
         r1 = os.path.join(td, "ai_session")
-        r2 = os.path.join(td, "ai_session_2")
+        r2 = os.path.join(td, "ai_session2")
         _touch(os.path.join(r1, "run_1", "game1", "game1.jsonl"))
         _touch(os.path.join(r2, "run_1", "game1", "game1.jsonl"))
+        names = {g["name"] for g in bds.discover_games([r1, r2])}
+        assert names == {"ai_session_run_1_game1", "ai_session2_run_1_game1"}, names
+        # same root passed twice -> genuine duplicate -> abort
         try:
-            bds.discover_games([r1, r2])
-            raise AssertionError("collision not detected")
+            bds.discover_games([r1, r1])
+            raise AssertionError("duplicate not detected")
         except SystemExit as e:
-            assert "collision" in str(e)
+            assert "duplicate" in str(e)
+        # empty root -> abort
         try:
             bds.discover_games([os.path.join(td, "empty")])
             raise AssertionError("empty root not detected")
@@ -65,8 +71,8 @@ def test_frames_override_applies():
         root = os.path.join(td, "ai_session")
         _touch(os.path.join(root, "run_5", "game2", "game2.jsonl"))
         (g,) = bds.discover_games([root])
-        assert g["name"] == "ai_run_5_game2"
-        assert g["frames_dir"] == bds.FRAMES_OVERRIDE["ai_run_5_game2"].replace(os.sep, "/")
+        assert g["name"] == "ai_session_run_5_game2"
+        assert g["frames_dir"] == bds.FRAMES_OVERRIDE["ai_session_run_5_game2"].replace(os.sep, "/")
 
 
 def test_manifest_roundtrip_and_training_expansion():

@@ -19,7 +19,7 @@ def test_plan_targets_multi_game():
     mod = _load()
     gd = "captures/raw/ai_session/run_3/game1"
     t = mod.plan_targets(gd)
-    assert t["name"] == "ai_run_3_game1"
+    assert t["name"] == "ai_session_run_3_game1"
     assert t["gt_path"].replace(os.sep, "/").endswith("run_3/game1/game1.jsonl")
     assert t["wire_dest"].replace(os.sep, "/").endswith("run_3/game1/liqi.jsonl")
     assert t["index_path"].replace(os.sep, "/").endswith("run_3/game1/frames.jsonl")
@@ -29,7 +29,7 @@ def test_plan_targets_single_game_run():
     mod = _load()
     gd = "captures/raw/ai_session/run_1"
     t = mod.plan_targets(gd)
-    assert t["name"] == "ai_run_1"
+    assert t["name"] == "ai_session_run_1"
     assert t["gt_path"].replace(os.sep, "/").endswith("run_1/run_1.jsonl")
     assert t["wire_dest"].replace(os.sep, "/").endswith("run_1/liqi.jsonl")
 

@@ -11,7 +11,7 @@ from majsoul_eye import paths
 def test_annotate_and_build_agree_on_name():
     # Both derive the annotation filename the same way for an AI capture (nested layout).
     cap = "captures/raw/ai_session/run_3/game1/game1.jsonl"
-    assert paths.ai_game_name(cap) == "ai_run_3_game1"
+    assert paths.ai_game_name(cap) == "ai_session_run_3_game1"
 
 
 def test_build_dataset_uses_ai_game_name():

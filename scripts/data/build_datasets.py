@@ -16,10 +16,11 @@ usual per-game ``--data`` entries.
 
 Sources: each root is scanned for the AI shapes (``run_*/game*.jsonl`` and
 ``run_*.jsonl``) plus the manual shape (``session*.jsonl``). Game names come from
-``paths.ai_game_name`` and must be UNIQUE across all sources — keep run numbering
-global (e.g. a future ``captures/raw/ai_session_2`` starts at ``run_15``), or the
-build aborts on the collision. AI games go annotate -> build ``--from-annotations``;
-manual games build direct (no annotate stage).
+``paths.ai_game_name``, which tags each name with its SOURCE-ROOT basename
+(``captures/raw/ai_session2/run_1/game1`` -> ``ai_session2_run_1_game1``), so the same
+run number under different roots never collides — no cross-source run-renumbering
+needed. AI games go annotate -> build ``--from-annotations``; manual games build
+direct (no annotate stage).
 
 Unlike ``rebuild_datasets.py`` (DEPRECATED — in-place regen of the fixed legacy
 layout), this runs IMMEDIATELY (``--dry-run`` to preview) and never touches other
@@ -54,11 +55,11 @@ from majsoul_eye import paths
 # Games whose GT frames are letterboxed; annotate + crop from the de-letterboxed
 # frames instead (captures/intermediate/derived, see deletterbox_frames.py).
 FRAMES_OVERRIDE = {
-    "ai_run_5_game2": os.path.join(paths.DERIVED, "ai_run_5_game2_fixed"),
-    "ai_run_5_game3": os.path.join(paths.DERIVED, "ai_run_5_game3_fixed"),
+    "ai_session_run_5_game2": os.path.join(paths.DERIVED, "ai_run_5_game2_fixed"),
+    "ai_session_run_5_game3": os.path.join(paths.DERIVED, "ai_run_5_game3_fixed"),
 }
 
-DEFAULT_VAL = "ai_run_8_game1"   # held-out whole game (classifier + detector convention)
+DEFAULT_VAL = "ai_session_run_8_game1"   # held-out whole game (classifier + detector convention)
 
 # Stage-2 default: per-game build_dataset processes are RAM-bound, so cap at 8.
 DEFAULT_JOBS = max(1, min(8, (os.cpu_count() or 4) // 2))
@@ -96,7 +97,8 @@ def discover_games(sources: list) -> list:
     """Scan source roots for captures -> manifest entries (pure; no side effects).
 
     Returns [{name, dir, kind, capture, frames_dir}] with repo-relative POSIX paths.
-    Raises SystemExit on an empty root or a cross-source name collision.
+    Raises SystemExit on an empty root or a duplicate game name (e.g. the same source
+    root listed twice; distinct roots are source-root-qualified and never collide).
     """
     games, seen = [], {}
     for root in sources:
@@ -108,8 +110,9 @@ def discover_games(sources: list) -> list:
         for cap in ai + manual:
             name = paths.ai_game_name(cap)
             if name in seen:
-                raise SystemExit(f"game name collision: {name!r} from both {seen[name]} and "
-                                 f"{cap} — run numbering must be unique across sources")
+                raise SystemExit(f"duplicate game name {name!r} from both {seen[name]} and "
+                                 f"{cap} — pass each source root once (names are already "
+                                 f"source-root-qualified, so distinct roots never collide)")
             seen[name] = cap
             frames = FRAMES_OVERRIDE.get(name, paths.frames_dir_for(cap))
             games.append({"name": name, "dir": name,
