@@ -1611,3 +1611,57 @@ T13(组装+端到端QA, 需T11/T12) ── T14(docs)
   per-class AP 即可，不阻塞；后续采集自然积累。
 - v1 旧 annotations 无 `hud_boxes` → HUD 训练数据只来自 v2 全量重 annotate，
   混训 v1 只贡献牌面标签（合法，nc=55 兼容 0–37 标签）。
+
+---
+
+### Task 15: capture 多拍 + 相对时间戳（2026-07-06 追加；用户需求）
+
+背景：真实数据发现新帧类——帧落在"鸣牌事件与强制舍牌之间"（约 2%），本质与按钮
+窗口同源（事件已到、画面未定）。方案：截图带相对时间戳 + 不确定窗口同帧多拍，
+便于事后按 dt 选最佳帧并调整截图时机。GT 侧 is_call_window 丢帧谓词【暂不做，
+待与另一 session 协调】。
+
+**Files:**
+- Modify: `scripts/capture/autoplay_ai.py`（`_frame_index_line` 加字段 + 多拍调度接线）
+- Create: `majsoul_eye/capture/multishot.py`（纯调度器，可注入时钟，单测无需客户端）
+- Test: `tests/test_multishot.py`
+- Modify(test): `tests/test_autoplay_gt.py` 若其断言 `_frame_index_line` 的输出则同步
+
+**兼容性契约（硬性）：**
+- 规范帧 `{seq:06d}.png` 的产生逻辑（quiet 防抖+像素稳定）与文件名**完全不变**。
+- frames.jsonl 现有行只**增量**加字段：`"dt"`（float 秒 = 落盘时刻 − 该 seq 触发
+  事件到达时刻 `last_event_t`）。消费方只读 seq/file/status，不受影响。
+- 额外帧独立成行：`{"seq": N, "file": "frames/{seq:06d}_dt{ms:04d}.png",
+  "status": "extra", "ts": <epoch>, "dt": <实测秒>}`；文件名中 ms 为**计划**偏移
+  （0600/1200/2400），jsonl 的 dt 为**实测**值。`load_frames` 按 statuses 过滤，
+  "extra" 对全部现有下游自动不可见（加一个断言测试钉死）。
+
+**多拍语义：**
+- 触发窗口（armed 时判定，二者满足其一）：① 触发记录的 mjai 事件含
+  chi/pon/daiminkan/ankan/kakan/nukidora（鸣牌→强制舍牌窗口）；② `ops_from_record`
+  给出非 dapai 操作（按钮窗口）。
+- 计划：触发事件后 `--multishot-offsets`（默认 0.6 1.2 2.4 秒）各补拍一张；
+  **不做**像素稳定门控（目的就是按固定时刻采样动画时间线）。
+- 取消：新的 board 事件到达（pending_seq 变化）即取消旧 seq 未拍的计划
+  （避免拍到下一状态挂错 seq）。
+- CLI：默认开启；`--no-multishot` 关闭；`--multishot-offsets LO..` 可调。
+
+**纯调度器接口（multishot.py，完整实现由实施者按此契约写）：**
+```python
+class MultiShot:
+    def __init__(self, offsets=(0.6, 1.2, 2.4)): ...
+    def arm(self, seq: int, event_t: float, window: bool) -> None:
+        """新 pending seq。window=False 时本 seq 无补拍；任何 arm 都取消旧计划。"""
+    def due(self, now: float) -> list[tuple[int, int]]:
+        """到期未拍的 (seq, planned_ms)，每项只返回一次。"""
+```
+autoplay_ai 主循环每 tick 调 `due(time.time())`，对每项 `screenshot_png()` 落盘
+`{seq:06d}_dt{planned_ms:04d}.png` + 写 "extra" 行（dt=实测）。
+
+- [ ] Step 1: tests/test_multishot.py 失败测试（arm/due/一次性/supersede 取消/
+      window=False 无计划；load_frames 忽略 "extra" 行 + 规范映射不变）
+- [ ] Step 2: 实现 multishot.py → 绿
+- [ ] Step 3: autoplay_ai 接线（_frame_index_line 加 dt；armed 处判窗口——复用
+      ops_from_record + 事件集合；主循环 due 落盘）+ 回归 test_autoplay_gt/
+      test_autoplay_opdelay/test_autoplay_autonext
+- [ ] Step 4: commit `feat(capture): multi-shot extras + relative dt timestamps for uncertain windows`
