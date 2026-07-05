@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from majsoul_eye.state.observe import ObservedState, check_observed
+from majsoul_eye.tiles import red_to_normal
 
 WINDS = ["E", "S", "W", "N"]
 
@@ -28,26 +29,110 @@ class ReconstructionResult:
 
 # --- search (Task 3: rotation only; Task 4 adds calls; Task 5 adds kans/riichi) ---
 
+def _minus(tiles: list, remove: list) -> list:
+    """Multiset removal with red-five fallback both ways."""
+    out = list(tiles)
+    for x in remove:
+        if x in out:
+            out.remove(x)
+            continue
+        for t in list(out):
+            if red_to_normal(t) == red_to_normal(x):
+                out.remove(t)
+                break
+    return out
+
+
+@dataclass(frozen=True)
+class _Item:
+    kind: str        # chi | pon | daiminkan | ankan | kakan
+    owner: int
+    target: int      # rel seat whose discard is claimed (== owner for ankan/kakan)
+    pai: str         # claimed tile | kakan's added tile | "" for ankan
+    consumed: tuple  # tiles leaving owner's HAND
+    mi: int          # on-screen meld index (owner chronology)
+
+
+def _items_for(obs: ObservedState):
+    """(per-owner creation list in screen order, kakan own-turn parts)."""
+    creation: list[list[_Item]] = [[] for _ in range(4)]
+    kakans: list[_Item] = []
+    for o in range(4):
+        for mi, m in enumerate(obs.melds[o]):
+            t = (o + m.from_rel) % 4
+            if m.type in ("chi", "pon", "daiminkan"):
+                creation[o].append(_Item(m.type, o, t, m.called_pai,
+                                         tuple(_minus(m.tiles, [m.called_pai])), mi))
+            elif m.type == "kakan":
+                pon_cons = tuple(_minus(m.tiles, [m.called_pai, m.added_pai]))
+                creation[o].append(_Item("pon", o, t, m.called_pai, pon_cons, mi))
+                kakans.append(_Item("kakan", o, o, m.added_pai,
+                                    tuple(_minus(m.tiles, [m.added_pai])), mi))
+            elif m.type == "ankan":
+                creation[o].append(_Item("ankan", o, o, "", tuple(m.tiles), mi))
+    return creation, kakans
+
+
 def _search(obs: ObservedState, oya_rel: int) -> Optional[list]:
-    """Return op list or None. Ops:
-    ("draw", rel) | ("discard", rel, idx) — extended by later tasks."""
+    """Ops: ("draw",rel) ("discard",rel,idx) ("ghost",rel,pai,reach)
+    ("call",_Item) ("ankan",_Item) ("kakan",_Item). Canonical branch order:
+    visible discard > own-turn kan > ghost/call (calls as late as feasible)."""
     rivers = obs.rivers
     n = [len(r) for r in rivers]
+    creation, kakans = _items_for(obs)
+    ncre = [len(c) for c in creation]
+    failed: set = set()
 
-    def go(cursors: tuple, actor: int) -> Optional[list]:
-        if list(cursors) == n:
+    def all_done(cur, cidx, kkmask):
+        return list(cur) == n and list(cidx) == ncre and kkmask == (1 << len(kakans)) - 1
+
+    def go(cur, cidx, kkmask, actor):
+        key = (cur, cidx, kkmask, actor)
+        if key in failed:
+            return None
+        if all_done(cur, cidx, kkmask):
             if obs.drawn_tile is not None:
                 return [("draw", 0)] if actor == 0 else None
             return []
-        if cursors[actor] < n[actor]:
-            nxt = list(cursors)
-            nxt[actor] += 1
-            rest = go(tuple(nxt), (actor + 1) % 4)
-            if rest is not None:
-                return [("draw", actor), ("discard", actor, cursors[actor])] + rest
+        rest = decide(cur, cidx, kkmask, actor, drew=True)
+        if rest is not None:
+            return [("draw", actor)] + rest
+        failed.add(key)
         return None
 
-    return go((0, 0, 0, 0), oya_rel)
+    def decide(cur, cidx, kkmask, actor, drew):
+        # success mid-turn: hero holds the final draw (incl. post-rinshan)
+        if (drew and actor == 0 and obs.drawn_tile is not None
+                and all_done(cur, cidx, kkmask)):
+            return []
+        # (a) plain visible discard
+        if cur[actor] < n[actor]:
+            nxt = list(cur)
+            nxt[actor] += 1
+            rest = go(tuple(nxt), cidx, kkmask, (actor + 1) % 4)
+            if rest is not None:
+                return [("discard", actor, cur[actor])] + rest
+        # (b) own-turn kans — Task 5
+        # (c) ghost discard + call
+        for o in range(4):
+            if o == actor or cidx[o] >= ncre[o]:
+                continue
+            it = creation[o][cidx[o]]
+            if it.kind in ("chi", "pon", "daiminkan") and it.target == actor:
+                ncidx = list(cidx)
+                ncidx[o] += 1
+                pre = [("ghost", actor, it.pai, False), ("call", it)]
+                if it.kind == "daiminkan":
+                    rest = decide(cur, tuple(ncidx), kkmask, o, drew=True)
+                    if rest is not None:
+                        return pre + [("draw", o)] + rest
+                else:
+                    rest = decide(cur, tuple(ncidx), kkmask, o, drew=False)
+                    if rest is not None:
+                        return pre + rest
+        return None
+
+    return go((0, 0, 0, 0), (0, 0, 0, 0), 0, oya_rel)
 
 
 # --- emission -----------------------------------------------------------------
@@ -57,6 +142,7 @@ def _emit(obs: ObservedState, ops: list, oya_rel: int):
     events: list = []
     haipai = list(obs.hero_hand)
     reach_count = [0] * 4
+    just_called_hero = False
     for i, op in enumerate(ops):
         kind = op[0]
         if kind == "draw":
@@ -69,12 +155,34 @@ def _emit(obs: ObservedState, ops: list, oya_rel: int):
                 nxt = ops[i + 1]
                 if nxt[0] == "discard":
                     pai = obs.rivers[0][nxt[2]].pai
+                elif nxt[0] == "ghost" and nxt[1] == 0:
+                    pai = nxt[2]
+                elif nxt[0] == "ankan" and nxt[1].owner == 0:
+                    pai = nxt[1].consumed[0]
+                elif nxt[0] == "kakan" and nxt[1].owner == 0:
+                    pai = nxt[1].pai
             events.append({"type": "tsumo", "actor": 0, "pai": pai})
-        elif kind == "discard":
-            r, idx = op[1], op[2]
-            pai = obs.rivers[r][idx].pai
+        elif kind in ("discard", "ghost"):
+            r = op[1]
+            pai = obs.rivers[r][op[2]].pai if kind == "discard" else op[2]
+            if r == 0:
+                tsumogiri = not just_called_hero
+                if just_called_hero:
+                    haipai.append(pai)            # forced tedashi came from haipai
+                just_called_hero = False
+            else:
+                tsumogiri = False                 # refined for riichi in Task 5
             events.append({"type": "dahai", "actor": r, "pai": pai,
-                           "tsumogiri": r == 0})
+                           "tsumogiri": tsumogiri})
+        elif kind == "call":
+            it = op[1]
+            events.append({"type": it.kind, "actor": it.owner, "target": it.target,
+                           "pai": it.pai, "consumed": list(it.consumed)})
+            if it.owner == 0:
+                haipai.extend(it.consumed)
+                if it.kind in ("chi", "pon"):
+                    just_called_hero = True
+        # ("ankan"/"kakan") handled in Task 5
     return events, {"haipai": haipai, "reach_count": reach_count}
 
 

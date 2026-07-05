@@ -96,6 +96,76 @@ def test_infeasible_reports_reason():
     assert not r.ok and r.reason
 
 
+def test_pon_ghost_discard_and_forced_tedashi():
+    # hero(rel0) pon P from rel2 (across). hero hand 10 + pon = 13.
+    o = _obs(hero_hand=H13[:10],
+             melds=[[ObservedMeld("pon", ["P", "P", "P"], called_pai="P", from_rel=2)],
+                    [], [], []],
+             rivers=[[ObservedRiverTile("9p")],          # hero's forced tedashi after pon
+                     [ObservedRiverTile("E")],
+                     [ObservedRiverTile("S")],           # across also has a VISIBLE discard
+                     []])
+    r = _roundtrip(o)
+    evs = r.events
+    pon = next(e for e in evs if e["type"] == "pon")
+    assert pon["actor"] == 0 and pon["target"] == 2 and pon["consumed"] == ["P", "P"]
+    # ghost dahai P by seat 2 immediately precedes the pon
+    ghost = evs[evs.index(pon) - 1]
+    assert ghost == {"type": "dahai", "actor": 2, "pai": "P", "tsumogiri": False}
+    # hero's discard right after the pon is tedashi and lands in haipai
+    after = evs[evs.index(pon) + 1]
+    assert after["type"] == "dahai" and after["actor"] == 0 and after["tsumogiri"] is False
+    sk = evs[1]
+    assert sorted(sk["tehais"][0]) == sorted(H13[:10] + ["P", "P", "9p"])
+
+
+def test_chi_only_from_kamicha():
+    # NOTE: rel3 (kamicha) must NOT also carry a second, later visible discard
+    # here (e.g. an extra "W") the way the pon test gives its target seat one:
+    # chi's target is always adjacent to the caller (kamicha -> hero), so the
+    # call never skips a seat the way pon/kan can. With rel1/rel2 both empty,
+    # rotation can only ever reach rel3 once (as oya's first turn); asking it
+    # for a second discard with no way to lap back through 1/2 is an
+    # unreachable board state, not a search-algorithm limitation.
+    o = _obs(hero_hand=H13[:10],
+             melds=[[ObservedMeld("chi", ["4s", "5s", "6s"], called_pai="5s", from_rel=3)],
+                    [], [], []],
+             rivers=[[ObservedRiverTile("9p")], [], [], []])
+    r = _roundtrip(o)
+    chi = next(e for e in r.events if e["type"] == "chi")
+    assert chi["target"] == 3 and sorted(chi["consumed"]) == ["4s", "6s"]
+
+
+def test_call_timing_needs_backtracking():
+    # Late-call-first fails: 0:A -> 1:C -> 2 has nothing => backtrack to the
+    # ghost branch (1 discards ghost P before its visible C).
+    o = _obs(hero_hand=H13[:10],
+             melds=[[ObservedMeld("pon", ["P", "P", "P"], called_pai="P", from_rel=1)],
+                    [], [], []],
+             rivers=[[ObservedRiverTile("1m"), ObservedRiverTile("9p")],
+                     [ObservedRiverTile("2m")], [], []])
+    _roundtrip(o)
+
+
+def test_daiminkan_by_opponent():
+    # rel1 daiminkan's C from hero (from_rel=3 -> target rel0): hero discards a
+    # ghost C, rel1 kans + rinshan-draws + discards F. dora NOT yet flipped
+    # (1 marker for 1 kan): allowed (daiminkan flip is delayed).
+    o = _obs(melds=[[], [ObservedMeld("daiminkan", ["C", "C", "C", "C"],
+                                      called_pai="C", from_rel=3)], [], []],
+             rivers=[[ObservedRiverTile("9p")],
+                     [ObservedRiverTile("E"), ObservedRiverTile("F")],
+                     [ObservedRiverTile("S")], [ObservedRiverTile("W")]],
+             dora_markers=["5s"])
+    r = _roundtrip(o)
+    kan = next(e for e in r.events if e["type"] == "daiminkan")
+    assert kan["actor"] == 1 and kan["target"] == 0 and kan["consumed"] == ["C", "C", "C"]
+    # the ghost C came from the hero: it was that turn's fabricated draw
+    ghost = r.events[[i for i, e in enumerate(r.events)
+                      if e["type"] == "dahai" and e["pai"] == "C"][0]]
+    assert ghost["actor"] == 0 and ghost["tsumogiri"] is True
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
