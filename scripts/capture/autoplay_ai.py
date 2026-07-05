@@ -94,6 +94,14 @@ def _frame_index_line(seq: int, ts: float, dt: float) -> dict:
     return {"seq": seq, "file": f"frames/{seq:06d}.png", "status": "ok", "ts": ts, "dt": dt}
 
 
+def _resolve_syncing_flag(game_state_obj) -> bool:
+    """Resolve the syncing flag from a game_state object (reconnect replay detection).
+    True if the game is in a reconnect replay (syncGame/enterGame), where events are
+    stale history and should not be double-counted. MahjongCopilot's GameState exposes
+    this via the is_ms_syncing attribute."""
+    return bool(getattr(game_state_obj, "is_ms_syncing", False))
+
+
 # mjai event types whose arrival opens a meld -> forced-dahai window: the
 # animation runs into the next dahai with uncertain timing, so it's worth
 # extra-shot sampling (Task 15) rather than trusting a single quiet capture.
@@ -625,7 +633,8 @@ def main() -> None:
             method, action_name = gt_fields(msg)
             rec = GTRecord(
                 seq=seq, ts=ts, flow_id="", seat=getattr(game_state, "seat", -1),
-                last_op_step=0, syncing=False, method=method, action_name=action_name,
+                last_op_step=0, syncing=_resolve_syncing_flag(game_state),
+                method=method, action_name=action_name,
                 raw_liqi=msg, mjai=mjai)
             gt_writer.put(rec)
             return rec

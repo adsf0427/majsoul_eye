@@ -29,6 +29,31 @@ def test_frame_index_line_shape():
     assert line == {"seq": 9, "file": "frames/000009.png", "status": "ok", "ts": 123.5, "dt": 0.42}
 
 
+def test_resolve_syncing_flag():
+    mod = _load_autoplay()
+
+    # Test with game_state that has is_ms_syncing=True (reconnect replay)
+    class FakeGameState:
+        is_ms_syncing = True
+
+    assert mod._resolve_syncing_flag(FakeGameState()) is True
+
+    # Test with game_state that has is_ms_syncing=False (fresh game)
+    class FakeGameStateNotSyncing:
+        is_ms_syncing = False
+
+    assert mod._resolve_syncing_flag(FakeGameStateNotSyncing()) is False
+
+    # Test with game_state missing the attribute (should default to False)
+    class FakeGameStateNoAttr:
+        pass
+
+    assert mod._resolve_syncing_flag(FakeGameStateNoAttr()) is False
+
+    # Test with None
+    assert mod._resolve_syncing_flag(None) is False
+
+
 def test_autoplay_ai_still_imports_and_has_flags():
     mod = _load_autoplay()
     seen = {}
