@@ -13,7 +13,13 @@ import numpy as np
 from majsoul_eye.coords import HUD_SEEDS
 from majsoul_eye.hud import NUMERIC_FIELDS
 
-INK_THRESH = 150   # gray level splitting glyph from dark panel  # CALIBRATE
+# CALIBRATED (Task 6): 150 only caught the brightest anti-aliased crest of the
+# round_label/wall_count glyphs (cyan text tops out at gray~171 under BGR2GRAY,
+# vs ~52 panel background) — measured histogram showed the bulk of their ink
+# sitting in the 100-160 band. 120 gives full-body coverage for cyan text while
+# staying far above the dark-panel background (~50-90) and orange/white digit
+# fields (max gray 200+), which were already comfortably captured at 150.
+INK_THRESH = 120   # gray level splitting glyph from dark panel
 INK_MIN_PX = 12    # fewer bright px than this = field not rendered
 INK_PAD = 3        # px of context kept around the glyph extent
 

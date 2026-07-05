@@ -136,19 +136,78 @@ RIVER_ZONES: dict[str, NormBox] = {k: px_box(*v) for k, v in RIVER_ZONES_PX.item
 
 
 # --- HUD field seed ROIs (px @ 1920x1080 web client) --------------------------
-# ⚠️ CALIBRATE (Task 6 of the HUD plan): score_self/right/across + riichi/honba
-# seeds come from mycv's get_f1/f2/f3/bangzi/benchang; score_left / wall_count /
-# round_label / seat_wind_self are eyeballed from run_1 frames. ink_snap tightens
-# numeric fields per frame, so seeds only need to CONTAIN the glyphs w/ margin.
+# CALIBRATED (Task 6 of the HUD plan) against real run_3/run_4/run_5/run_8
+# ai_session frames (scripts/inspect/overlay_hud.py) — every box below was found
+# by scanning per-row/per-column ink-brightness (`gray>=INK_THRESH`) profiles
+# inside the center diamond + top-left panel, not eyeballed. Two seeds from the
+# Task-5 seed guess were WRONG (not just loose) and had to move to a different
+# glyph entirely:
+#   - "round_label"/"wall_count" were swapped one row too high: the old
+#     round_label box (y350-385) actually framed score_across's upside-down
+#     digits, and the old wall_count box (y385-415) framed round_label's own
+#     東N局 text. wall_count (余NN) is a further row down (y422-455).
+#   - "seat_wind_self" pointed at empty panel chrome; the real corner wind tag
+#     is BELOW the diamond (y488-540, near score_self), not beside score_left.
+#     Verified via an E3 frame where hero is oya (seat_wind_self='E'): this box
+#     turns solid red exactly like the other seats' oya-highlighted corner tags,
+#     while the neighboring top-left corner tag (some other seat, out of scope —
+#     HUD_NAMES has no seat_wind_left/across/right) does NOT.
+# A SECOND calibration pass (still Task 6, after the first landed) found every
+# numeric seed still touching a bright non-glyph neighbor on >=1 side, verified
+# by re-running ink_snap and checking whether the *raw* (pre-pad) ink bbox sits
+# within 1-2px of the seed edge across dozens of frames/games (a coincidental
+# pad-only touch is fine; a raw-ink touch means real contamination bleeding the
+# box open on that side):
+#   - score_self/left/right/across each sit at one vertex of the center diamond,
+#     which has a decorative glint/highlight (a plain glow normally, an ornate
+#     flame/crown motif when the seat is oya) right at that vertex, OUTSIDE the
+#     digits but INSIDE the old seed — score_self's seed reached down into the
+#     glow below the digits (y0/y1 trimmed 460-500 -> 467-497), score_across's
+#     reached up into the glow/crown above them (y0 pushed 325 -> 353),
+#     score_left's reached into the glow at its own vertex (x0 pushed
+#     850 -> 858), score_right's reached into the glow at its vertex (x1 pulled
+#     in 1068 -> 1063).
+#   - riichi_stick_count/honba_count reached down into the panel's own bottom
+#     trim (a bright ~3px border, full seed width, right above y=180) — trimmed
+#     y1 185 -> 175 for both. honba_count *also* reached right into the panel's
+#     slanted bottom-right corner cut (measured creep-start as far left as
+#     x=302 at the bottom sampled row) — trimmed x1 318 -> 300. Both also
+#     reached left into their own icon glyph (the riichi-stick/honba-dice icon
+#     to the left of "x N" is itself a bright white glyph, not glow) — x0 pulled
+#     in a further 3px (88->85, 225->222) to land in the clean gap between icon
+#     and text instead of flush against the text's own left edge.
+#   - wall_count reached up into round_label's own descender bleed (y0 pushed
+#     422 -> 427) and right into the panel's corner bezel highlight, a smaller
+#     analog of honba_count's corner-cut problem (x1 pulled in 1010 -> 952).
+# score_left/right also had 300%+ contamination risk from the Task-5 pass: their
+# seed height reached up into an unrelated corner wind-tag badge, and
+# score_right's width reached into a same-row bright blob (a per-seat decorative
+# hand/tile graphic that can render beside the score) — both trimmed to the
+# actual digit column measured via cv2.connectedComponentsWithStats.
+#
+# RESIDUAL / KNOWN LIMITATION (documented, not fixed here — see module docstring
+# "2D HUD does not scale... resolution-dependent"): all of the above is verified
+# clean (no raw-ink touch within 1-2px of any seed edge, sampled ~30 frames each
+# across run_3 x4 games / run_4 / run_5 game1 / run_7 / run_8 x6 games / run_13 /
+# run_14 — all native 1920x1080) plus 3 harmless one-off outliers (a mid-animation
+# hand graphic transiently covering score_across; one frame that GT-paired to a
+# client loading screen, a sync artifact unrelated to seeds; one 1px-tight but
+# uncontaminated score_across touch). run_5/game2+game3 capture at 1923x1142
+# (aspect 1.684, NOT 16:9 like every other capture) and show real contamination
+# on riichi_stick_count/honba_count/score_across specifically because that
+# resolution's top-left panel does not scale the icon<->text gap the same way
+# the 1920x1080-derived normalized seed assumes — a non-uniform-scaling artifact
+# of a non-16:9 source, not a seed placement error. Proper fix is the
+# `AnchorLocator` TODO in normalize.py; out of scope for Task 6's fixed-slot seeds.
 _HUD_SEEDS_PX: dict[str, tuple[int, int, int, int]] = {
-    "score_self":         (900, 460, 1020, 500),   # CALIBRATE
-    "score_right":        (1040, 330, 1085, 460),  # CALIBRATE (vertical digits)
-    "score_across":       (900, 295, 1020, 335),   # CALIBRATE
-    "score_left":         (835, 330, 880, 460),    # CALIBRATE (vertical digits)
-    "round_label":        (905, 350, 1015, 385),   # CALIBRATE  東N局
-    "wall_count":         (925, 385, 995, 415),    # CALIBRATE  余NN
-    "seat_wind_self":     (855, 455, 900, 500),    # CALIBRATE  corner wind tag
-    "riichi_stick_count": (95, 135, 175, 185),     # CALIBRATE  mycv get_bangzi
-    "honba_count":        (235, 135, 315, 185),    # CALIBRATE  mycv get_benchang
+    "score_self":         (900, 467, 1020, 497),   # y0/y1 trimmed clear of the diamond-vertex glow (see note)
+    "score_right":        (1028, 385, 1063, 462),  # vertical digits; x1 trimmed short of the vertex glow (~x1067)
+    "score_across":       (895, 353, 1030, 383),   # upside-down digits; y0 trimmed below the vertex glow/crown, y1 widened (to just short of round_label's seed) for bottom margin
+    "score_left":         (858, 385, 900, 462),    # vertical digits; y0 trimmed below the corner wind-tag badge; x0 trimmed clear of the vertex glow (~x854)
+    "round_label":        (912, 384, 1008, 414),   # 東N局 (below score_across, above wall_count)
+    "wall_count":         (910, 427, 952, 455),    # 余NN (below round_label); y0 trimmed clear of round_label's descender bleed, x1 trimmed clear of the panel's corner bezel highlight (~x956)
+    "seat_wind_self":     (793, 488, 852, 540),    # corner wind tag beside score_self (see note above)
+    "riichi_stick_count": (85, 135, 178, 175),      # mycv get_bangzi; x0 clears the icon (ends ~x67) w/ 3px margin before the "x" glyph (starts ~x88), y1 trimmed clear of the panel's bottom trim (~y180)
+    "honba_count":        (222, 135, 300, 175),     # mycv get_benchang; x0 clears the icon (ends ~x205) w/ 3px margin before the "x" glyph (starts ~x225), x1/y1 trimmed clear of the panel's bottom-right corner cut
 }
 HUD_SEEDS: dict[str, NormBox] = {k: px_box(*v) for k, v in _HUD_SEEDS_PX.items()}

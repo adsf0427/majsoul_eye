@@ -57,8 +57,11 @@ ROUND_CLASSES: list[str] = [f"{w}{k}" for w in "ESWN" for k in (1, 2, 3, 4)]  # 
 WIND_CLASSES: list[str] = ["E", "S", "W", "N"]
 
 # Per-class rotation (degrees CW) that uprights the crop before reading.
-# score_across is upside down; left/right signs are CALIBRATED in Task 6 —
-# the values below are the seed guess from captures/raw/ai_session frames.
+# CALIBRATED (Task 6): verified on a real run_8/game1 frame (score_left="25000",
+# score_right="24000") by cropping the ink-snapped digit column and testing both
+# 90 and 270 with cv2.rotate — score_left only reads as the correct digit
+# ORDER (not just individually-symmetric digits) after a 270 CW turn (equiv. to
+# 90 CCW), score_right only after a 90 CW turn. score_across is upside down.
 FIELD_ROT: dict[str, int] = {
     "score_self": 0, "score_across": 180, "score_left": 270, "score_right": 90,
     "round_label": 0, "wall_count": 0, "seat_wind_self": 0,
