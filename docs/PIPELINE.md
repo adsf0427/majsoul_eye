@@ -161,6 +161,7 @@ python scripts/train/train_detector.py --data datasets/v1/detector/data.yaml
 | `scripts/annotate/spike_topdown.py` | 已归档的可视化 spike，不承重 |
 | `captures/intermediate/gt/` | **已退役删除**（AI 采集直接写 GTRecord，无转换产物） |
 | `label/`（`autolabel.py`） | 仅剩 hero 手牌+dora 框供 `annotate_frame` 调用；river/meld 旧几何已删 |
+| `scripts/inspect/count_dora_glow.py` | **现役一次性诊断工具**（非管线环节）：统计每个 tile 类别的「发光实例/总实例」覆盖，判断是否需要为宝牌闪光加专门增强。读 GT 采集（Akagi-free），纯 stdout。见 `docs/superpowers/specs/2026-07-05-dora-glow-aug-design.md` |
 
 ## 5. 数据与权重现状快照（2026-07-04）
 
