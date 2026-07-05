@@ -133,3 +133,22 @@ RIVER_ZONES: dict[str, NormBox] = {k: px_box(*v) for k, v in RIVER_ZONES_PX.item
 # equal-subdivision RiverGrid model) was removed here — it is superseded by the
 # precise fullwarp annotator in ``majsoul_eye.annotate`` (data-calibrated
 # DISCARD_GRID / composition-aware melds). See docs/STATUS.md §1.13.
+
+
+# --- HUD field seed ROIs (px @ 1920x1080 web client) --------------------------
+# ⚠️ CALIBRATE (Task 6 of the HUD plan): score_self/right/across + riichi/honba
+# seeds come from mycv's get_f1/f2/f3/bangzi/benchang; score_left / wall_count /
+# round_label / seat_wind_self are eyeballed from run_1 frames. ink_snap tightens
+# numeric fields per frame, so seeds only need to CONTAIN the glyphs w/ margin.
+_HUD_SEEDS_PX: dict[str, tuple[int, int, int, int]] = {
+    "score_self":         (900, 460, 1020, 500),   # CALIBRATE
+    "score_right":        (1040, 330, 1085, 460),  # CALIBRATE (vertical digits)
+    "score_across":       (900, 295, 1020, 335),   # CALIBRATE
+    "score_left":         (835, 330, 880, 460),    # CALIBRATE (vertical digits)
+    "round_label":        (905, 350, 1015, 385),   # CALIBRATE  東N局
+    "wall_count":         (925, 385, 995, 415),    # CALIBRATE  余NN
+    "seat_wind_self":     (855, 455, 900, 500),    # CALIBRATE  corner wind tag
+    "riichi_stick_count": (95, 135, 175, 185),     # CALIBRATE  mycv get_bangzi
+    "honba_count":        (235, 135, 315, 185),    # CALIBRATE  mycv get_benchang
+}
+HUD_SEEDS: dict[str, NormBox] = {k: px_box(*v) for k, v in _HUD_SEEDS_PX.items()}
