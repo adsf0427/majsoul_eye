@@ -149,6 +149,29 @@ def _dora_dets(markers):
     return dets
 
 
+def test_river_last_row_hole_flags_violation():
+    # 8-tile river missing tile #7 (first tile of row 1): the surviving row-1
+    # tile sits one pitch off the row origin — must be flagged, not silently
+    # returned as a shorter river with wrong order. Final-review probe.
+    from majsoul_eye.recognize.assemble import _assign_river, _fw_points
+    dets = _river_dets(0, ["1m", "9p", "E", "5sr", "2s", "7p", "C", "3m"])
+    del dets[6]
+    items = [(d, _fw_points(d, REGION, H["H_full"])) for d in dets]
+    _, viol = _assign_river(0, items)
+    assert viol
+
+
+def test_river_mid_row_hole_flags_violation():
+    # 4-tile river missing tile #2: rows 0-only, cross-row prefix check can't
+    # see it; the within-row gap (2x pitch) must. Final-review probe.
+    from majsoul_eye.recognize.assemble import _assign_river, _fw_points
+    dets = _river_dets(0, ["1m", "9p", "E", "2s"])
+    del dets[1]
+    items = [(d, _fw_points(d, REGION, H["H_full"])) for d in dets]
+    _, viol = _assign_river(0, items)
+    assert viol
+
+
 def test_full_frame_roundtrip():
     from majsoul_eye.recognize.assemble import assemble
     hand = ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "1p"]
@@ -161,7 +184,10 @@ def test_full_frame_roundtrip():
     dets += _meld_dets(0, [_gt("pon", ["P", "P", "P"], called="P",
                                from_seat_rel=2, seat=0)])
     dets += _meld_dets(2, [_gt("ankan", ["F", "F", "F", "F"], seat=2)])
-    # a stray opponent-hand back far from every zone must be dropped silently
+    # a stray opponent-hand back must be dropped silently: backs never route to
+    # river zones (measured: this point is only ~53px from seat-0's river frame,
+    # inside the 60px cutoff — the back-only-melds rule is what excludes it),
+    # and its meld distance is far beyond the cutoff
     dets.append(_det_from_poly([[940, 510], [980, 510], [980, 570], [940, 570]],
                                "back"))
     o = assemble(dets, REGION)

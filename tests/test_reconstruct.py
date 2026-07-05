@@ -246,6 +246,16 @@ def test_riichi_tile_claimed_ghost_reach():
     assert nxt["pai"] in ("W", "N")
 
 
+def test_upstream_violations_block_reconstruction():
+    # assemble() records parse failures in obs.violations (e.g. an opponent's
+    # meld strip dropped as unparsable) — reconstruct must refuse such states:
+    # check_observed alone cannot re-derive the loss (opponent melds carry no
+    # hand-size implication and concealed_counts are None). Final-review seam gap.
+    o = _obs(violations=["seat2 meld strip unparsable (3 cells)"])
+    r = reconstruct(o)
+    assert not r.ok and "unparsable" in r.reason
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

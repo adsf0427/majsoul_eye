@@ -70,6 +70,14 @@ def _assign_river(seat: int, items):
             viol.append(f"seat{seat} river row{r} occupied but row{r-1} not full")
         if r < 2 and len(rows[r]) > P.DISCARD_COLS:
             viol.append(f"seat{seat} river row{r} has {len(rows[r])}>6 tiles")
+        if rows[r]:
+            u_first = rows[r][0][0]
+            if abs(u_first) > 0.6 * col_pitch:
+                viol.append(f"seat{seat} river row{r} starts off-origin ({u_first:.0f}px)")
+            for i in range(len(rows[r]) - 1):
+                gap = rows[r][i + 1][0] - rows[r][i][0]
+                if gap > 1.5 * col_pitch:
+                    viol.append(f"seat{seat} river row{r} hole (gap {gap:.0f}px)")
         out.extend(t for _, t in rows[r])
     return out, viol
 
@@ -81,7 +89,6 @@ def _strip_cells(seat: int, items):
     corner = np.array(cfg["corner"], float)
     along = np.array(cfg["along"], float)
     cross = np.array(cfg["cross"], float)
-    d = cfg["d"]
     raw = []
     for det, pts in items:
         c = pts.mean(axis=0)

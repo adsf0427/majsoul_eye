@@ -280,7 +280,7 @@ def _relabel(events: list, hero_abs: int) -> list:
 
 
 def reconstruct(obs: ObservedState) -> ReconstructionResult:
-    viol = check_observed(obs)
+    viol = list(obs.violations) + check_observed(obs)
     if viol:
         return ReconstructionResult(False, reason="; ".join(viol))
     if obs.seat_wind_self is not None:
