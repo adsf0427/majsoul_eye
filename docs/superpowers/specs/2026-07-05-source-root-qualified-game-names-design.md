@@ -133,8 +133,9 @@ root-qualified.
 
 1. `for t in tests/test_*.py; do PYTHONPATH=. python "$t" || break; done` — all green.
 2. `PYTHONPATH=. python scripts/data/build_datasets.py v2 --sources
-   captures/raw/ai_session captures/raw/ai_session2 --dry-run` — discovers ai_session
-   (`ai_session_run_*`) + ai_session2 (`ai_session2_run_*`) with **no collision**,
-   default val `ai_session_run_8_game1` resolves, and the printed per-game commands
-   carry the qualified names. (Run against whatever is on disk; the raw.7z original
-   layout is the target once extracted.)
+   captures/raw/ai_session captures/raw/ai_session2 --dry-run` — discovers both roots'
+   games (`ai_session_run_*` + `ai_session2_run_*`) with **no collision/duplicate
+   abort**, default val `ai_session_run_8_game1` resolves, and the printed per-game
+   commands carry the qualified names. (Run against whatever is on disk — the exact
+   game count varies with disk state, e.g. `ai_session/run_1`'s GTRecord jsonl is
+   missing per STATUS §1.27; the raw.7z original layout is the target once extracted.)
