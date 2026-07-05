@@ -166,24 +166,32 @@ def _match_group(seat, group):
 def _parse_melds(seat: int, items):
     """Meld-zone detections -> (melds in SCREEN order oldest-first, violations).
 
-    Whole-strip recursive parse: a group size that matches locally but leaves an
-    unparsable tail is backtracked (e.g. pon KKK followed by a meld starting
-    with K would otherwise be swallowed as a fake daiminkan)."""
+    Whole-strip recursive parse trying size 4 then 3 at each position. A strip
+    with more than one forward-consistent decomposition is REJECTED (violation)
+    rather than guessed at: with legal tile counts such ambiguity cannot arise
+    (a same-kind 3+4 collision needs >4 copies, which check_observed also
+    rejects), so it only fires on detector noise — prefer no parse to a wrong
+    one."""
     cells = _strip_cells(seat, items)
 
     def parse(i: int):
+        """Complete parses from cell i, capped at 2."""
         if i == len(cells):
-            return []
+            return [[]]
+        out = []
         for size in (4, 3):
             if i + size <= len(cells):
                 got = _match_group(seat, cells[i:i + size])
                 if got is not None:
-                    rest = parse(i + size)
-                    if rest is not None:
-                        return [got] + rest
-        return None
+                    for rest in parse(i + size):
+                        out.append([got] + rest)
+                        if len(out) >= 2:
+                            return out
+        return out
 
-    melds = parse(0)
-    if melds is None:
+    parses = parse(0)
+    if not parses:
         return [], [f"seat{seat} meld strip unparsable ({len(cells)} cells)"]
-    return melds, []
+    if len(parses) > 1:
+        return [], [f"seat{seat} meld strip ambiguous ({len(cells)} cells)"]
+    return parses[0], []

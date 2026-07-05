@@ -109,6 +109,19 @@ def test_meld_parse_flags_garbage():
     assert viol
 
 
+def test_meld_parse_rejects_ambiguous_strip():
+    # pon(C from kamicha) + daiminkan(C from kamicha) renders a cell sequence
+    # with TWO forward-consistent decompositions (needs 7 C's — game-illegal,
+    # only reachable via detector noise; check_observed would also reject the
+    # frame). The parser must refuse rather than silently pick one.
+    from majsoul_eye.recognize.assemble import _fw_points, _parse_melds
+    gt = [_gt("pon", ["C", "C", "C"], called="C", from_seat_rel=3, seat=0),
+          _gt("daiminkan", ["C", "C", "C", "C"], called="C", from_seat_rel=3, seat=0)]
+    items = [(d, _fw_points(d, REGION, H["H_full"])) for d in _meld_dets(0, gt)]
+    melds, viol = _parse_melds(0, items)
+    assert melds == [] and any("ambiguous" in v for v in viol)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
