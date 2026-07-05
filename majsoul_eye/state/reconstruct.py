@@ -83,25 +83,33 @@ def _search(obs: ObservedState, oya_rel: int) -> Optional[list]:
     ncre = [len(c) for c in creation]
     failed: set = set()
 
+    # precompute per-seat sideways visible index (None if no riichi shown)
+    side_idx = [next((i for i, t in enumerate(rivers[r]) if t.sideways), None)
+                for r in range(4)]
+
+    def declared(r, cur, rghost):
+        if side_idx[r] is None:
+            return bool(rghost >> r & 1)
+        return cur[r] > side_idx[r] or bool(rghost >> r & 1)
+
     def all_done(cur, cidx, kkmask):
         return list(cur) == n and list(cidx) == ncre and kkmask == (1 << len(kakans)) - 1
 
-    def go(cur, cidx, kkmask, actor):
-        key = (cur, cidx, kkmask, actor)
+    def go(cur, cidx, kkmask, rghost, actor):
+        key = (cur, cidx, kkmask, rghost, actor)
         if key in failed:
             return None
         if all_done(cur, cidx, kkmask):
             if obs.drawn_tile is not None:
                 return [("draw", 0)] if actor == 0 else None
             return []
-        rest = decide(cur, cidx, kkmask, actor, drew=True)
+        rest = decide(cur, cidx, kkmask, rghost, actor, drew=True)
         if rest is not None:
             return [("draw", actor)] + rest
         failed.add(key)
         return None
 
-    def decide(cur, cidx, kkmask, actor, drew):
-        # success mid-turn: hero holds the final draw (incl. post-rinshan)
+    def decide(cur, cidx, kkmask, rghost, actor, drew):
         if (drew and actor == 0 and obs.drawn_tile is not None
                 and all_done(cur, cidx, kkmask)):
             return []
@@ -109,30 +117,59 @@ def _search(obs: ObservedState, oya_rel: int) -> Optional[list]:
         if cur[actor] < n[actor]:
             nxt = list(cur)
             nxt[actor] += 1
-            rest = go(tuple(nxt), cidx, kkmask, (actor + 1) % 4)
+            rest = go(tuple(nxt), cidx, kkmask, rghost, (actor + 1) % 4)
             if rest is not None:
                 return [("discard", actor, cur[actor])] + rest
-        # (b) own-turn kans — Task 5
-        # (c) ghost discard + call
+        # (b) own-turn kans (need a fresh draw; kakan forbidden after riichi)
+        if drew:
+            if cidx[actor] < ncre[actor] and creation[actor][cidx[actor]].kind == "ankan":
+                it = creation[actor][cidx[actor]]
+                ncidx = list(cidx)
+                ncidx[actor] += 1
+                rest = decide(cur, tuple(ncidx), kkmask, rghost, actor, drew=True)
+                if rest is not None:
+                    return [("ankan", it), ("draw", actor)] + rest
+            if not declared(actor, cur, rghost):
+                for ki, it in enumerate(kakans):
+                    if kkmask >> ki & 1 or it.owner != actor:
+                        continue
+                    # its pon-part must already be triggered
+                    pon_pos = next(j for j, c in enumerate(creation[actor])
+                                   if c.mi == it.mi)
+                    if cidx[actor] <= pon_pos:
+                        continue
+                    rest = decide(cur, cidx, kkmask | (1 << ki), rghost, actor, drew=True)
+                    if rest is not None:
+                        return [("kakan", it), ("draw", actor)] + rest
+        # (c) ghost discard + call (a riichi'd owner cannot call)
         for o in range(4):
             if o == actor or cidx[o] >= ncre[o]:
                 continue
             it = creation[o][cidx[o]]
-            if it.kind in ("chi", "pon", "daiminkan") and it.target == actor:
-                ncidx = list(cidx)
-                ncidx[o] += 1
-                pre = [("ghost", actor, it.pai, False), ("call", it)]
+            if it.kind not in ("chi", "pon", "daiminkan") or it.target != actor:
+                continue
+            if declared(o, cur, rghost):
+                continue
+            ncidx = list(cidx)
+            ncidx[o] += 1
+            variants = [False]
+            if side_idx[actor] is not None and cur[actor] == side_idx[actor] \
+                    and not declared(actor, cur, rghost):
+                variants.append(True)          # bind the reach to this ghost
+            for reach_here in variants:
+                nrg = rghost | (1 << actor) if reach_here else rghost
+                pre = [("ghost", actor, it.pai, reach_here), ("call", it)]
                 if it.kind == "daiminkan":
-                    rest = decide(cur, tuple(ncidx), kkmask, o, drew=True)
+                    rest = decide(cur, tuple(ncidx), kkmask, nrg, o, drew=True)
                     if rest is not None:
                         return pre + [("draw", o)] + rest
                 else:
-                    rest = decide(cur, tuple(ncidx), kkmask, o, drew=False)
+                    rest = decide(cur, tuple(ncidx), kkmask, nrg, o, drew=False)
                     if rest is not None:
                         return pre + rest
         return None
 
-    return go((0, 0, 0, 0), (0, 0, 0, 0), 0, oya_rel)
+    return go((0, 0, 0, 0), (0, 0, 0, 0), 0, 0, oya_rel)
 
 
 # --- emission -----------------------------------------------------------------
@@ -142,7 +179,18 @@ def _emit(obs: ObservedState, ops: list, oya_rel: int):
     events: list = []
     haipai = list(obs.hero_hand)
     reach_count = [0] * 4
+    declared = [False] * 4
     just_called_hero = False
+    side_idx = [next((i for i, t in enumerate(r) if t.sideways), None)
+                for r in obs.rivers]
+    dora_next = 1                      # markers[0] went into start_kyoku
+
+    def flip_dora():
+        nonlocal dora_next
+        if dora_next < len(obs.dora_markers):
+            events.append({"type": "dora", "dora_marker": obs.dora_markers[dora_next]})
+            dora_next += 1
+
     for i, op in enumerate(ops):
         kind = op[0]
         if kind == "draw":
@@ -164,16 +212,27 @@ def _emit(obs: ObservedState, ops: list, oya_rel: int):
             events.append({"type": "tsumo", "actor": 0, "pai": pai})
         elif kind in ("discard", "ghost"):
             r = op[1]
-            pai = obs.rivers[r][op[2]].pai if kind == "discard" else op[2]
+            if kind == "discard":
+                idx, pai = op[2], obs.rivers[r][op[2]].pai
+                is_reach = (idx == side_idx[r]) and not declared[r]
+            else:
+                pai = op[2]
+                is_reach = op[3]
+            if is_reach:
+                events.append({"type": "reach", "actor": r})
             if r == 0:
                 tsumogiri = not just_called_hero
                 if just_called_hero:
-                    haipai.append(pai)            # forced tedashi came from haipai
+                    haipai.append(pai)
                 just_called_hero = False
             else:
-                tsumogiri = False                 # refined for riichi in Task 5
+                tsumogiri = declared[r]        # post-riichi discards are forced tsumogiri
             events.append({"type": "dahai", "actor": r, "pai": pai,
                            "tsumogiri": tsumogiri})
+            if is_reach:
+                events.append({"type": "reach_accepted", "actor": r})
+                declared[r] = True
+                reach_count[r] = 1
         elif kind == "call":
             it = op[1]
             events.append({"type": it.kind, "actor": it.owner, "target": it.target,
@@ -182,7 +241,20 @@ def _emit(obs: ObservedState, ops: list, oya_rel: int):
                 haipai.extend(it.consumed)
                 if it.kind in ("chi", "pon"):
                     just_called_hero = True
-        # ("ankan"/"kakan") handled in Task 5
+            if it.kind == "daiminkan":
+                flip_dora()
+        elif kind == "ankan":
+            it = op[1]
+            events.append({"type": "ankan", "actor": it.owner,
+                           "consumed": list(it.consumed)})
+            if it.owner == 0:
+                haipai.extend(it.consumed[1:])   # 4th copy was that turn's draw
+            flip_dora()
+        elif kind == "kakan":
+            it = op[1]
+            events.append({"type": "kakan", "actor": it.owner, "pai": it.pai,
+                           "consumed": list(it.consumed)})
+            flip_dora()                          # added tile was the draw: nothing to haipai
     return events, {"haipai": haipai, "reach_count": reach_count}
 
 

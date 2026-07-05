@@ -166,6 +166,86 @@ def test_daiminkan_by_opponent():
     assert ghost["actor"] == 0 and ghost["tsumogiri"] is True
 
 
+def test_opponent_riichi_reach_events_and_tsumogiri():
+    o = _obs(rivers=[[ObservedRiverTile("9p"), ObservedRiverTile("1p")],
+                     [ObservedRiverTile("E"), ObservedRiverTile("W", sideways=True),
+                      ObservedRiverTile("N")],
+                     [ObservedRiverTile("S"), ObservedRiverTile("S")],
+                     [ObservedRiverTile("C"), ObservedRiverTile("F")]],
+             reach=[False, True, False, False])
+    r = _roundtrip(o)
+    evs = r.events
+    ri = next(i for i, e in enumerate(evs) if e["type"] == "reach")
+    assert evs[ri]["actor"] == 1
+    assert evs[ri + 1]["type"] == "dahai" and evs[ri + 1]["pai"] == "W"
+    assert evs[ri + 2] == {"type": "reach_accepted", "actor": 1}
+    # post-riichi discards by seat 1 are forced tsumogiri
+    later = [e for e in evs[ri + 3:] if e["type"] == "dahai" and e["actor"] == 1]
+    assert later and all(e["tsumogiri"] for e in later)
+    # backfill: kyotaku defaults to observed riichi count -> start 0; score +1000
+    sk = evs[1]
+    assert sk["kyotaku"] == 0 and sk["scores"][1] == 26000
+
+
+def test_hero_ankan_with_kandora():
+    o = _obs(hero_hand=H13[:9] + ["C"],                     # 10 concealed
+             melds=[[ObservedMeld("ankan", ["F", "F", "F", "F"])], [], [], []],
+             rivers=[[ObservedRiverTile("9p")], [ObservedRiverTile("E")],
+                     [ObservedRiverTile("S")], [ObservedRiverTile("W")]],
+             dora_markers=["5s", "6s"])
+    r = _roundtrip(o)
+    evs = r.events
+    ak = next(i for i, e in enumerate(evs) if e["type"] == "ankan")
+    assert evs[ak]["consumed"] == ["F", "F", "F", "F"]
+    assert evs[ak + 1] == {"type": "dora", "dora_marker": "6s"}
+    # the 4th F was that turn's draw: haipai holds only 3 F
+    assert evs[1]["tehais"][0].count("F") == 3
+
+
+def test_kakan_pon_then_upgrade():
+    # On-screen kakan = TWO events at different times: its pon (needs rel1's
+    # ghost P) and the own-turn upgrade. The frame ends with hero holding the
+    # rinshan draw, so the search must finish 'kakan -> rinshan tsumo'.
+    o = _obs(hero_hand=H13[:10],
+             melds=[[ObservedMeld("kakan", ["P", "P", "P", "P"],
+                                  called_pai="P", added_pai="P", from_rel=1)],
+                    [], [], []],
+             rivers=[[ObservedRiverTile("9p")], [ObservedRiverTile("E")],
+                     [ObservedRiverTile("S")], [ObservedRiverTile("W")]],
+             drawn_tile="6s", dora_markers=["5s", "6s"])
+    r = _roundtrip(o)
+    kinds = [e["type"] for e in r.events]
+    assert kinds.index("pon") < kinds.index("kakan")
+    kk = next(e for e in r.events if e["type"] == "kakan")
+    assert kk["pai"] == "P" and kk["consumed"] == ["P", "P", "P"]
+    ki = r.events.index(kk)
+    assert r.events[ki + 1] == {"type": "dora", "dora_marker": "6s"}
+    assert r.events[-1] == {"type": "tsumo", "actor": 0, "pai": "6s"}
+    # haipai: 10 concealed + pon's [P,P] + forced tedashi 9p = 13
+    assert sorted(r.events[1]["tehais"][0]) == sorted(H13[:10] + ["P", "P", "9p"])
+
+
+def test_riichi_tile_claimed_ghost_reach():
+    # rel2's riichi declaration tile was ponned by rel1 -> rel2's NEXT discard
+    # renders sideways. Search must bind reach to the ghost.
+    o = _obs(hero_hand=H13[:13],
+             melds=[[], [ObservedMeld("pon", ["W", "W", "W"], called_pai="W",
+                                      from_rel=1)], [], []],
+             rivers=[[ObservedRiverTile("9p"), ObservedRiverTile("1p")],
+                     [ObservedRiverTile("E"), ObservedRiverTile("F")],
+                     [ObservedRiverTile("S"), ObservedRiverTile("N", sideways=True)],
+                     [ObservedRiverTile("C"), ObservedRiverTile("P")]],
+             reach=[False, False, True, False])
+    r = _roundtrip(o)
+    evs = r.events
+    ri = next(i for i, e in enumerate(evs) if e["type"] == "reach")
+    assert evs[ri]["actor"] == 2
+    nxt = evs[ri + 1]
+    assert nxt["type"] == "dahai" and nxt["actor"] == 2
+    # either binding is legal; the DECLARATION discard may be W (ghost) or N
+    assert nxt["pai"] in ("W", "N")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
