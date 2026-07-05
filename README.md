@@ -62,10 +62,13 @@ scripts/
   capture/autoplay_ai.py         # ★ 唯一主采集（--live --auto-next [--overlay]）
   capture/record_gt.py           # 过时：手动 F11 + Akagi（存档保留）
   annotate/annotate_ai_session.py# 全帧标注器（默认全部 paths.ai_captures()）
-  train/build_dataset.py         # crops + YOLO（--from-annotations 复用标注; --obb 8点标签）
+  train/build_dataset.py         # crops + YOLO（--from-annotations 复用标注; --obb 8点标签;
+                                 #   --reuse-images 仅写OBB标签、复用HBB帧不重编码）
   train/build_detector_dataset.py / train_classifier.py   # 均支持 --dataset 多版本清单展开
   train/train_detector.py
+  train/launch_detector.sh       # ★ 起一次检测器训练：hbb|obb 多卡 DDP 包装 train_detector.py
   data/build_datasets.py         # ★ 版本化构建 datasets/<name>/（标注→建库→装配 + games.json）
+  data/regen_detector_dataset.sh # GPU 服务器侧重建检测集（分局并行, --obb/--obb-only/--skip-annotate）
   data/migrate_*.py, purge_*.py, crop_game.py, deletterbox_frames.py, convert_mjcopilot.py,
     ingest_run.py, rebuild_datasets.py(弃用)  # 一次性/遗留工具（非管线环节，见 PIPELINE §4）
   annotate/{build_case_annotations,calibrate_annotation_model,spike_topdown}.py  # AB case/标定/归档 spike
@@ -130,6 +133,23 @@ python scripts/train/train_detector.py --data datasets/v1/detector/data.yaml
 # 跨版本合并检测集：
 python scripts/train/build_detector_dataset.py --dataset datasets/v1 --dataset datasets/v2 `
       --val "ai_run_8_game1:*" --out datasets/detector_combined
+```
+
+#### GPU 服务器（多卡 DDP，bash 脚本）
+
+远端 GPU 机上一条命令重建检测集 + 一条命令起训（只需 raw 采集 + `captures/intermediate/gt/` 的 GT
+副本，无需 MahjongCopilot）。两个脚本都从仓库根、`auto` 环境跑，用 `PY=` 指到该 python：
+
+```bash
+# 1. 重建 YOLO 检测集：分局并行；--obb 追加 OBB 变体（复用 HBB 帧、只写 8 点标签），
+#    --obb-only 只补 OBB，--skip-annotate 复用已有 out/ai_session_annotations，--jobs=N 并发
+PY=/path/to/envs/auto/python bash scripts/data/regen_detector_dataset.sh [--obb|--obb-only] [--skip-annotate] [--jobs=N]
+# 2. 起一次训练：hbb/obb 各自挑好 dataset/基座/输出/run 目录。CUDA_VISIBLE_DEVICES 选物理卡，
+#    --gpus N 定 DDP 卡数（--batch 是全局 batch，跨这 N 卡切分）
+CUDA_VISIBLE_DEVICES=0,1,2,3 bash scripts/train/launch_detector.sh hbb --gpus 4   # -> recognize/tile_detector.pt
+CUDA_VISIBLE_DEVICES=4,5,6,7 bash scripts/train/launch_detector.sh obb --gpus 4   # -> weights/detector/tile_detector_obb.pt
+#   默认 batch 128 / epochs 60 / imgsz 1280；run 目录 runs/<mode>/<ts>/；`--` 之后原样透传 train_detector.py
+#   （如 -- --patience 30 --lr0 0.001）。换骨架：--model weights/pretrained/yolo11m.pt。
 ```
 ### 可视化
 ```powershell

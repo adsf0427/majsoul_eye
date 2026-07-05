@@ -112,6 +112,18 @@
   跨版本先合并 split：`build_detector_dataset.py --dataset datasets/v1 --dataset datasets/v2
   --val ai_run_8_game1:* --out datasets/detector_combined`。
 - 训练命令 `build_datasets.py` 收尾会按当前局清单打印好，直接复制。
+- **GPU 服务器（多卡 DDP，bash，tar-and-go）**——两个脚本只需 raw 采集（+ 信箱局的
+  `intermediate/derived/…_fixed` 帧），**无需 MahjongCopilot、也无需已退役的 `intermediate/gt`**：
+  - `scripts/data/regen_detector_dataset.sh [--obb|--obb-only] [--skip-annotate] [--jobs=N]`
+    —— 在服务器上重建**扁平** `datasets/detector`（加 `--obb` 再出 `datasets/detector_obb`）。
+    局发现复用 `build_datasets.discover_games`（嵌套 `paths.ai_captures()` + 信箱 override，与版本化
+    构建同源；AI 局；`SOURCES="root..."` 可改扫描根）。OBB 复用 HBB 帧、只写 8 点标签
+    （`build_dataset.py --reuse-images`，不重编码 ~17G 帧）；缺帧的局（如未 rsync 的 derived）
+    **大声丢弃、不中断**。
+  - `scripts/train/launch_detector.sh {hbb|obb} --gpus N` —— `train_detector.py` 的单次训练包装：
+    按变体挑好 dataset/基座/输出（HBB→`recognize/tile_detector.pt`，OBB→`weights/detector/
+    tile_detector_obb.pt`）与 run 目录 `runs/<mode>/<ts>/`；`CUDA_VISIBLE_DEVICES` 选物理卡、
+    `--gpus N` 定 DDP 卡数、`--batch` 为跨卡全局 batch；默认 batch128/epochs60/imgsz1280，`--` 后透传。
 
 ## 3. SOP：新采集一个 run 后
 
@@ -143,6 +155,7 @@ python scripts/train/train_detector.py --data datasets/v1/detector/data.yaml
 | `scripts/data/migrate_ai_to_gtrecord.py` | 一次性迁移（18 局 b64 → GTRecord），**已完成**（2026-07-04）。仅新发现遗留线流时再用（现产出嵌套布局） |
 | `scripts/data/migrate_captures_layout.py` | 一次性布局迁移，已完成（2026-07-02） |
 | `scripts/data/migrate_gt_into_gamedir.py` | 一次性布局迁移（GT jsonl 归入对局目录 + 改写 `datasets/*/games.json`），**已完成**（2026-07-05）。幂等，dry-run 默认 |
+| `scripts/capture/backfill_skin_meta.py` | 一次性回填 `--skins` 局的 `metadata.json`（旧 bug：`skins.table` 误读 `players[0]` 而非 hero 的 views），从 `liqi.jsonl` 重导出正确 table + `hero_account_id`。**已对 ai_session2 完成**（2026-07-05）。幂等，dry-run 默认 |
 | `scripts/data/purge_deal_frames.py` / `apply_deal_purge.py` / `purge_occlusion_frames.py` | 针对旧数据集的一次性清洗；现由采集期规避 + 建库期丢弃取代。全量重建后无需再跑 |
 | `scripts/data/crop_game.py` / `deletterbox_frames.py` | 仅历史遗留局的帧修复（session5 非全屏 / run_5 信箱）。新采集全屏 1080p 用不到 |
 | `scripts/annotate/spike_topdown.py` | 已归档的可视化 spike，不承重 |
