@@ -58,9 +58,9 @@ PYTHONPATH=. python scripts/capture/autoplay_ai.py --live --auto-next
 #    manifest). Runs immediately (--dry-run to preview); --resume adds only missing games:
 PYTHONPATH=. python scripts/data/build_datasets.py v2          # default --sources captures/raw/ai_session
 PYTHONPATH=. python scripts/data/build_datasets.py v1 --sources captures/raw/ai_session captures/raw/manual --resume
-#    (rebuild_datasets.py is DEPRECATED — superseded by build_datasets.py; current version: datasets/v1)
+#    (rebuild_datasets.py was REMOVED 2026-07-05 — superseded by build_datasets.py; current version: datasets/v1)
 # 3. Train (GPU, deliberate). --dataset expands a version's games.json; repeat it to mix versions:
-PYTHONPATH=. python scripts/train/train_classifier.py --dataset datasets/v1 --val "ai_run_8_game1:*" --epochs 20
+PYTHONPATH=. python scripts/train/train_classifier.py --dataset datasets/v1 --val "ai_session_run_8_game1:*" --epochs 20
 PYTHONPATH=. python scripts/train/train_detector.py --data datasets/v1/detector/data.yaml
 # QA: inspect_capture.py (frame↔GT join), overlay_labels.py (draw labels on a frame),
 #     annotate_ai_session.py --qa-classifier (crop-consistency spot check)

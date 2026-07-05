@@ -70,7 +70,7 @@ scripts/
   data/build_datasets.py         # ★ 版本化构建 datasets/<name>/（标注→建库→装配 + games.json）
   data/regen_detector_dataset.sh # GPU 服务器侧重建检测集（分局并行, --obb/--obb-only/--skip-annotate）
   data/migrate_*.py, purge_*.py, crop_game.py, deletterbox_frames.py, convert_mjcopilot.py,
-    ingest_run.py, rebuild_datasets.py(弃用)  # 一次性/遗留工具（非管线环节，见 PIPELINE §4）
+    ingest_run.py  # 一次性/遗留工具（非管线环节，见 PIPELINE §4）
   annotate/{build_case_annotations,calibrate_annotation_model,spike_topdown}.py  # AB case/标定/归档 spike
   inspect/…                      # QA & debug（下方 §QA）
 weights/            # pretrained/ 训练基座 + detector/ 变体（gitignore; 正式权重在 recognize/）
@@ -78,16 +78,19 @@ tests/              # plain-script suites (pytest-compatible)
 docs/PIPELINE.md    # ★ 权威管线   docs/STATUS.md  # 进度史(中文)   docs/DESIGN.md  # 设计
 ```
 
-## Status (2026-07-04)
+## Status (2026-07-05)
 
 **采集已统一为单一路径**（autoplay_ai 直接写 `GTRecord`，`intermediate/gt` 退役）。
-数据 **18 AI 局 + 2 手动 4K 局**，全部经精确标注 v2 重建（含 hero-tsumo 修复）。
+数据 **28 AI 局（含 10 换肤局 `ai_session2/run_21..23`）+ 2 手动 4K 局**，检测器已在
+28 局重训（STATUS §1.31：regen 并发竞态截断 1092 个 OBB 标签已修 + build_datasets 完整性门）。
 
-- 分类器 `tile_classifier.pt`：held-out 整局 val_acc **0.9991**。
-- 检测器：HBB `tile_detector.pt` **mAP50 0.993 / mAP50-95 0.955**；OBB 变体
-  `weights/detector/tile_detector_obb.pt` **mAP50-95 0.9804**（rotated-IoU）。
+- 分类器 `tile_classifier.pt`：held-out 整局 val_acc **0.9991**（07-03 数据）。
+- 检测器（07-05，28 局，held-out `ai_run_8_game1`）：正式 `tile_detector.pt` = **OBB
+  mAP50 0.9946 / mAP50-95 0.9848**（rotated-IoU）；HBB 变体
+  `weights/detector/tile_detector_hbb.pt` **0.9940 / 0.9653**。
 - 轨迹：93.5 → 95.3(P1 清洗) → 96.0(P2 erode) → 97.6(+AI) → 99.78(16 局精确) → **99.91**(dealfix)。
-- ⚠️ 待办：两模型尚未在 07-04 重建数据（hero-tsumo 手牌帧 + run_13/14）上重训。
+- ⚠️ 待办：分类器尚未在 07-05 数据重训；换肤局 dora 牌背被橙背校验丢框（back 类换肤覆盖缺口，
+  STATUS §1.31 遗留）。
 
 → 细节：[`docs/STATUS.md`](docs/STATUS.md)。
 
@@ -127,12 +130,12 @@ python scripts/data/build_datasets.py v2 --sources captures/raw/ai_session captu
 
 ```powershell
 # 38 类分类器（⚠️ 切分按局绝不按帧；PowerShell 里 --val 值必须加引号）
-python scripts/train/train_classifier.py --dataset datasets/v1 --val "ai_run_8_game1:*" --epochs 20
+python scripts/train/train_classifier.py --dataset datasets/v1 --val "ai_session_run_8_game1:*" --epochs 20
 # YOLO 检测器（imgsz 1280；16GiB 卡 --batch 4 防 OOM；OBB 用 --model weights/pretrained/yolov8s-obb.pt）
 python scripts/train/train_detector.py --data datasets/v1/detector/data.yaml
 # 跨版本合并检测集：
 python scripts/train/build_detector_dataset.py --dataset datasets/v1 --dataset datasets/v2 `
-      --val "ai_run_8_game1:*" --out datasets/detector_combined
+      --val "ai_session_run_8_game1:*" --out datasets/detector_combined
 ```
 
 #### GPU 服务器（多卡 DDP，bash 脚本）

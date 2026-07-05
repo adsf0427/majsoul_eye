@@ -43,7 +43,7 @@
 
 三个内部阶段（单独跑/调试时才手动调）：`annotate_ai_session.py`（精确 fullwarp 几何 + GT 赋类，
 **可跳过**——见 §2 建库）→ `build_dataset.py`（crops+yolo）→ `build_detector_dataset.py`（split）。
-（`rebuild_datasets.py` 已弃用——被版本化的 build_datasets 取代，见 §4。）
+（`rebuild_datasets.py` 已删除（2026-07-05）——被版本化的 build_datasets 取代，见 §4。）
 
 ## 1. 数据目录与角色（单一真源 `majsoul_eye/paths.py`）
 
@@ -102,18 +102,18 @@
 
 ### 装配 + 训练
 - **切分铁律：按局/kyoku，绝不按帧**（同一物理牌跨 ~10 帧，帧切分必泄漏）。
-  惯例 held-out：**整局 `ai_run_8_game1`**（分类器与检测器同一局，趋势可比）。
+  惯例 held-out：**整局 `ai_session_run_8_game1`**（分类器与检测器同一局，趋势可比）。
 - **多版本输入**：`train_classifier.py` 与 `build_detector_dataset.py` 均支持可重复的
   `--dataset datasets/<name>`（读 `games.json` 自动展开成逐局 `--data` 条目；同名局后者覆盖
   前者并打印提示；仍可混用显式 `--data`）。
-- 分类器：`train_classifier.py --dataset datasets/v1 [--dataset datasets/v2 ...] --val ai_run_8_game1:* --epochs 20`。
+- 分类器：`train_classifier.py --dataset datasets/v1 [--dataset datasets/v2 ...] --val ai_session_run_8_game1:* --epochs 20`。
 - 检测器：`train_detector.py --data datasets/<name>/detector/data.yaml`（imgsz 1280；16GiB 卡加
   `--batch 4` + expandable_segments 防 OOM；OBB 用 `--model weights/pretrained/yolov8s-obb.pt`）。
   **增强现为显式 CLI**（`--fliplr/--hsv-v/--hsv-s/--mosaic/...`，启动日志打印 `aug:` 行）：
   默认 `fliplr=0`（麻将牌有方向，水平翻转造镜像牌）、`hsv_v=0.5`（亮度/宝牌闪光近似），
   其余沿用 ultralytics detect 默认。是否加真·局部 bloom 由 `count_dora_glow.py` 覆盖统计决定。
   跨版本先合并 split：`build_detector_dataset.py --dataset datasets/v1 --dataset datasets/v2
-  --val ai_run_8_game1:* --out datasets/detector_combined`。
+  --val ai_session_run_8_game1:* --out datasets/detector_combined`。
 - 训练命令 `build_datasets.py` 收尾会按当前局清单打印好，直接复制。
 - **GPU 服务器（多卡 DDP，bash，tar-and-go）**——两个脚本只需 raw 采集（+ 信箱局的
   `intermediate/derived/…_fixed` 帧），**无需 MahjongCopilot、也无需已退役的 `intermediate/gt`**：
@@ -134,24 +134,27 @@
 # 先自行 activate conda auto 环境；仓库根运行
 $env:PYTHONPATH = "."        # bash: export PYTHONPATH=.
 # A) 增量并入当前版本（日常推荐）：只处理缺的局，detector split + games.json 自动重组
+#    （--resume 校验已存在局的 yolo 完整性与标签格式——截断/HBB↔OBB 混用的局自动重建
+#      而非跳过；装配 detector split 前同一校验兜底，坏局报错拒绝装配。2026-07-05 加）
 python scripts/data/build_datasets.py v1 --sources captures/raw/ai_session captures/raw/manual --resume
 # B) 建全新版本（标注代码变更后 / 要干净快照时）：
 python scripts/data/build_datasets.py v2                       # 默认 sources = captures/raw/ai_session
 # （--force 清空重建同名版本；--dry-run 干跑；机器好加 -j 12 一把统管两阶段并行，
 #   或分开写 --workers 16 --jobs 12 分别调标注/建库）
 # C) GPU 训练（可吃多个版本；确切命令 build_datasets 收尾已打印）
-python scripts/train/train_classifier.py --dataset datasets/v1 --val "ai_run_8_game1:*" --epochs 20
+python scripts/train/train_classifier.py --dataset datasets/v1 --val "ai_session_run_8_game1:*" --epochs 20
 python scripts/train/train_detector.py --data datasets/v1/detector/data.yaml
 ```
 
-新 run 在 `--sources` 根下自动发现，无需登记；**游戏名（run 编号）必须跨 source 根全局唯一**
-（如将来 `captures/raw/ai_session_2` 从 `run_15` 起编号），冲突会直接报错。
+新 run 在 `--sources` 根下自动发现，无需登记；**游戏名按 source 根目录 basename 加前缀**
+（`captures/raw/ai_session2/run_1/game1` → `ai_session2_run_1_game1`），故同一 run 编号跨不同源根
+**不再撞名，无需跨源改号**；仅真重复（同一源根传两次）才直接报错。
 
 ## 4. 过时/降级组件清单（勿再当作管线环节）
 
 | 组件 | 现状 |
 |---|---|
-| `scripts/data/rebuild_datasets.py` | **已弃用**——被版本化的 `build_datasets.py` 取代（原地重建旧固定布局 vs 自包含 `datasets/<name>/`）。验证期后删除 |
+| `scripts/data/rebuild_datasets.py` | **已删除（2026-07-05）**——被版本化的 `build_datasets.py` 取代（原地重建旧固定布局 vs 自包含 `datasets/<name>/`） |
 | `scripts/capture/record_gt.py`（+ akagi 环境、Akagi MITM） | **过时的采集方式**。新数据一律 autoplay_ai；脚本保留仅为存档 |
 | `scripts/data/convert_mjcopilot.py` | 降级为**共享转换库**（`convert_game` 被迁移器复用）；不再是管线一环。可独立 CLI 处理任何遗留 b64 线流 |
 | `scripts/data/ingest_run.py` | 遗留便捷入口（发现→建库）。用 §3 的 build_datasets 代替 |

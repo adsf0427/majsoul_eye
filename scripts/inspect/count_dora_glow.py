@@ -15,7 +15,7 @@ that is the right denominator for "does the model see enough glowing X". Meld
 tiles are counted by their true identity from Meld.tiles; the on-screen
 annotator renders some kan cells as 'back'/duplicated, so kan-meld per-class
 counts are a slight approximation (kan is rare — negligible for a coarse
-coverage read). Split train/val by whole game (val default ai_run_8_game1).
+coverage read). Split train/val by whole game (val default ai_session_run_8_game1).
 
     PYTHONPATH=. python scripts/inspect/count_dora_glow.py
     PYTHONPATH=. python scripts/inspect/count_dora_glow.py \

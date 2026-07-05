@@ -274,7 +274,7 @@ def discard_face_poly(poly_fullwarp: Iterable[Iterable[float]], seat: int) -> np
 # GENERATES discard + meld boxes for a whole board from ground truth (river tile
 # lists, riichi index, meld list) using a fixed-camera calibration in fullwarp
 # space, so every case_frame can be auto-annotated with GT labels (WHAT) placed at
-# geometry (WHERE). Calibrated on the AB case_frames (1920x1080, ai_run_3_game1/ai_run_3_game3).
+# geometry (WHERE). Calibrated on the AB case_frames (1920x1080, ai_session_run_3_game1/ai_session_run_3_game3).
 #
 # Relative seat = screen position: 0=self(bottom) 1=shimocha(right)
 # 2=toimen(top) 3=kamicha(left). Each seat's discard grid is one 90deg rotation.
