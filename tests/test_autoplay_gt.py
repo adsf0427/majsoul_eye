@@ -25,8 +25,8 @@ def test_gt_jsonl_written_inside_game_dir():
 
 def test_frame_index_line_shape():
     mod = _load_autoplay()
-    line = mod._frame_index_line(9, 123.5)
-    assert line == {"seq": 9, "file": "frames/000009.png", "status": "ok", "ts": 123.5}
+    line = mod._frame_index_line(9, 123.5, 0.42)
+    assert line == {"seq": 9, "file": "frames/000009.png", "status": "ok", "ts": 123.5, "dt": 0.42}
 
 
 def test_autoplay_ai_still_imports_and_has_flags():

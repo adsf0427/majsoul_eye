@@ -61,6 +61,9 @@ from collections import deque
 from majsoul_eye.capture.roi_diff import roi_diff
 from majsoul_eye.capture.schema import GTRecord, GTWriter
 from majsoul_eye.capture.mjcopilot_gt import make_capturing_game_state, gt_fields
+from majsoul_eye.capture.multishot import MultiShot
+from majsoul_eye.state.ops import ops_from_record
+from majsoul_eye.hud import buttons_for_ops
 
 MJC = r"D:/code/phoenix/MahjongCopilot"
 
@@ -80,11 +83,36 @@ def stable_capture_step(state, frame, thresh):
     return "wait", {"ref": frame}
 
 
-def _frame_index_line(seq: int, ts: float) -> dict:
+def _frame_index_line(seq: int, ts: float, dt: float) -> dict:
     """One screenshot-index record (index-relative file path), matching the
     manual FrameSyncer's frames.jsonl shape so build_dataset consumes it the
-    same way."""
-    return {"seq": seq, "file": f"frames/{seq:06d}.png", "status": "ok", "ts": ts}
+    same way. `dt` (added for Task 15) is the seconds between the triggering
+    event's arrival (`last_event_t`) and this frame landing on disk (`ts`) —
+    how stale the quiet-debounce capture is relative to the board-changing
+    event that armed it. Purely additive: existing consumers only read
+    seq/file/status and are unaffected."""
+    return {"seq": seq, "file": f"frames/{seq:06d}.png", "status": "ok", "ts": ts, "dt": dt}
+
+
+# mjai event types whose arrival opens a meld -> forced-dahai window: the
+# animation runs into the next dahai with uncertain timing, so it's worth
+# extra-shot sampling (Task 15) rather than trusting a single quiet capture.
+MULTISHOT_MELD_TYPES = {"chi", "pon", "daiminkan", "ankan", "kakan", "nukidora"}
+
+
+def multishot_window(record) -> bool:
+    """True if `record` (a GTRecord, or None) opens an uncertain-timing
+    capture window worth extra-shot sampling: a meld event (see
+    MULTISHOT_MELD_TYPES) or any pending hero op that puts a button on
+    screen (`buttons_for_ops` non-empty). `record` may be None (e.g. no GT
+    writer / no mjai derived this tick) — no record means no evidence of a
+    window, so no extra shots."""
+    if record is None:
+        return False
+    if any(ev.get("type") in MULTISHOT_MELD_TYPES for ev in (record.mjai or [])):
+        return True
+    ops = ops_from_record(record)
+    return bool(ops and buttons_for_ops(ops))
 
 
 def auto_next_flow(*, button_guard, main_menu_visible, click_at, delay_step,
@@ -211,6 +239,14 @@ def main() -> None:
     ap.add_argument("--quiet", type=float, default=0.40, help="Screenshot once the board is event-quiet this long.")
     ap.add_argument("--stable-thresh", type=float, default=3.0,
                     help="Table-ROI frame-diff below this == settled (discard animation done).")
+    ap.add_argument("--no-multishot", dest="multishot", action="store_false", default=True,
+                    help="Disable extra-shot sampling of uncertain-timing windows (meld->forced-dahai, "
+                         "action-button offers). On by default: purely additive to the canonical quiet "
+                         "capture — writes {seq:06d}_dt<planned_ms>.png + a status:'extra' frames.jsonl "
+                         "line per configured offset, invisible to existing ('ok'[,'timeout']) consumers.")
+    ap.add_argument("--multishot-offsets", nargs="+", type=float, default=[0.6, 1.2, 2.4],
+                    help="Seconds after the triggering event to fire extra shots (default 0.6 1.2 2.4). "
+                         "No pixel-stability gating — fixed points on the animation timeline, not settle-wait.")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--overlay", action="store_true",
@@ -567,23 +603,30 @@ def main() -> None:
     fulfilled_seq = None
     last_event_t = 0.0
     _stab = {"ref": None}       # pixel-stability ref for the currently-armed pending_seq
+    multishot = MultiShot(tuple(args.multishot_offsets)) if args.multishot else None
 
     def write_gt(seq, ts, msg):
         """Derive this message's mjai and, if any, append a GTRecord. Wrapped so
-        recording can never break the capture loop (mirrors akagi_tap)."""
+        recording can never break the capture loop (mirrors akagi_tap). Returns
+        the GTRecord (or None if none was derived/written) so the caller can
+        also feed it to multishot_window() — drain_mjai() is single-consume,
+        so the mjai events can't be independently re-derived after this call."""
         if gt_writer is None or drain_mjai is None:
-            return
+            return None
         try:
             mjai = drain_mjai()
             if not mjai:
-                return                                   # emit-on-new-mjai (see design §4)
+                return None                              # emit-on-new-mjai (see design §4)
             method, action_name = gt_fields(msg)
-            gt_writer.put(GTRecord(
+            rec = GTRecord(
                 seq=seq, ts=ts, flow_id="", seat=getattr(game_state, "seat", -1),
                 last_op_step=0, syncing=False, method=method, action_name=action_name,
-                raw_liqi=msg, mjai=mjai))
+                raw_liqi=msg, mjai=mjai)
+            gt_writer.put(rec)
+            return rec
         except Exception as e:
             print(f"  gt write err seq {seq}: {type(e).__name__}: {e}", flush=True)
+            return None
 
     def maybe_screenshot():
         nonlocal pending_seq, fulfilled_seq
@@ -604,9 +647,30 @@ def main() -> None:
         with open(os.path.join(game_frames_dir, f"{pending_seq:06d}.png"), "wb") as fh:
             fh.write(png)
         if game_index_fh is not None:
-            game_index_fh.write(json.dumps(_frame_index_line(pending_seq, time.time())) + "\n")
+            now = time.time()
+            game_index_fh.write(json.dumps(_frame_index_line(pending_seq, now, now - last_event_t)) + "\n")
             game_index_fh.flush()
         fulfilled_seq = pending_seq
+
+    def fire_extra_shots():
+        """Poll the multishot plan for due (seq, planned_ms) pairs and write
+        each as an independent 'extra' frame — no stability gating, no effect
+        on pending_seq/fulfilled_seq (the canonical capture is untouched)."""
+        if multishot is None or game_frames_dir is None:
+            return
+        for due_seq, planned_ms in multishot.due(time.time()):
+            png = screenshot_png()
+            if not png:
+                continue
+            fname = f"{due_seq:06d}_dt{planned_ms:04d}.png"
+            with open(os.path.join(game_frames_dir, fname), "wb") as fh:
+                fh.write(png)
+            if game_index_fh is not None:
+                now = time.time()
+                line = {"seq": due_seq, "file": f"frames/{fname}", "status": "extra",
+                        "ts": now, "dt": now - last_event_t}
+                game_index_fh.write(json.dumps(line) + "\n")
+                game_index_fh.flush()
 
     overlay = None
     if args.overlay:
@@ -671,6 +735,8 @@ def main() -> None:
                         game_index_fh = open(os.path.join(game_dir, "frames.jsonl"), "w", encoding="utf-8")
                         gt_writer = GTWriter(os.path.join(game_dir, f"game{game_idx}.jsonl"))
                     seq, pending_seq, fulfilled_seq = 0, None, None
+                    if multishot is not None:
+                        multishot.arm(0, time.time(), False)   # drop any leftover plan from the prior game
                     game_hero_account = (msg.get("data") or {}).get("accountId")
                     game_state, drain_mjai = make_capturing_game_state(GameState, bot)
                     seq += 1
@@ -714,7 +780,7 @@ def main() -> None:
                 except Exception as e:
                     print(f"  game_state.input err on {method}: {type(e).__name__}: {e}", flush=True)
                     continue
-                write_gt(seq, ts, msg)
+                gt_rec = write_gt(seq, ts, msg)
                 kyoku_just_ended = game_state.kyoku_just_ended
                 game_state.kyoku_just_ended = False
 
@@ -722,6 +788,8 @@ def main() -> None:
                     if (msg.get("data") or {}).get("name") not in DEAL_ACTION_NAMES:
                         pending_seq = seq                        # skip the deal-in animation frame
                         last_event_t = time.time()
+                        if multishot is not None:
+                            multishot.arm(seq, last_event_t, multishot_window(gt_rec))
 
                 if reaction:
                     rtype = reaction.get("type")
@@ -759,6 +827,7 @@ def main() -> None:
                         gt_writer = None
 
             maybe_screenshot()
+            fire_extra_shots()
             # Watchdog: next was clicked (flow returned, state stays active) but no authGame
             # ever arrived — misclick or matchmaking never started. Give up so the run doesn't
             # sit "active" forever; with --autojoin the fallback below then takes over.
