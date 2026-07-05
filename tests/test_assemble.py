@@ -122,6 +122,71 @@ def test_meld_parse_rejects_ambiguous_strip():
     assert melds == [] and any("ambiguous" in v for v in viol)
 
 
+def _hand_dets(pais, drawn=None):
+    from majsoul_eye.coords import HAND
+    dets = []
+    for i, p in enumerate(pais):
+        b = HAND.slot_box(i)
+        dets.append(_det_from_poly(
+            [[b.x0 * 1920, b.y0 * 1080], [b.x1 * 1920, b.y0 * 1080],
+             [b.x1 * 1920, b.y1 * 1080], [b.x0 * 1920, b.y1 * 1080]], p))
+    if drawn:
+        b = HAND.slot_box(len(pais), is_tsumo=True)
+        dets.append(_det_from_poly(
+            [[b.x0 * 1920, b.y0 * 1080], [b.x1 * 1920, b.y0 * 1080],
+             [b.x1 * 1920, b.y1 * 1080], [b.x0 * 1920, b.y1 * 1080]], drawn))
+    return dets
+
+
+def _dora_dets(markers):
+    from majsoul_eye.coords import dora_slot
+    dets = []
+    for i, p in enumerate(markers):
+        b = dora_slot(i)
+        dets.append(_det_from_poly(
+            [[b.x0 * 1920, b.y0 * 1080], [b.x1 * 1920, b.y0 * 1080],
+             [b.x1 * 1920, b.y1 * 1080], [b.x0 * 1920, b.y1 * 1080]], p))
+    return dets
+
+
+def test_full_frame_roundtrip():
+    from majsoul_eye.recognize.assemble import assemble
+    hand = ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "1p"]
+    dets = _hand_dets(hand, drawn="4p")
+    dets += _dora_dets(["5s"])
+    dets += _river_dets(0, ["9p", "1s"])
+    dets += _river_dets(1, ["E", "W", "N"], sideways_idx=1)
+    dets += _river_dets(2, ["S"])
+    dets += _river_dets(3, ["C", "9s"])
+    dets += _meld_dets(0, [_gt("pon", ["P", "P", "P"], called="P",
+                               from_seat_rel=2, seat=0)])
+    dets += _meld_dets(2, [_gt("ankan", ["F", "F", "F", "F"], seat=2)])
+    # a stray opponent-hand back far from every zone must be dropped silently
+    dets.append(_det_from_poly([[940, 510], [980, 510], [980, 570], [940, 570]],
+                               "back"))
+    o = assemble(dets, REGION)
+    assert o.violations == []
+    assert o.hero_hand == hand and o.drawn_tile == "4p"
+    assert o.dora_markers == ["5s"]
+    assert [t.pai for t in o.rivers[1]] == ["E", "W", "N"]
+    assert o.rivers[1][1].sideways and o.reach == [False, True, False, False]
+    assert o.melds[0][0].type == "pon" and o.melds[0][0].from_rel == 2
+    assert o.melds[2][0].type == "ankan"
+    assert o.zone_confidence["hand"] > 0
+
+
+def test_full_frame_feeds_reconstruct():
+    from majsoul_eye.recognize.assemble import assemble
+    from majsoul_eye.state.reconstruct import reconstruct
+    hand = ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "1p", "2p", "3p", "4p"]
+    dets = _hand_dets(hand) + _dora_dets(["5s"])
+    dets += _river_dets(0, ["9p"]) + _river_dets(1, ["E"]) + _river_dets(2, ["S"])
+    o = assemble(dets, REGION)
+    assert o.violations == []
+    r = reconstruct(o)
+    assert r.ok, r.reason
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

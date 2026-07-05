@@ -195,3 +195,91 @@ def _parse_melds(seat: int, items):
     if len(parses) > 1:
         return [], [f"seat{seat} meld strip ambiguous ({len(cells)} cells)"]
     return parses[0], []
+
+
+from majsoul_eye.coords import DORA_STRIP, HAND
+from majsoul_eye.state.observe import ObservedState, check_observed
+
+HAND_MIN_H = 0.11            # hand tiles are ~0.141 canon-high; hero meld tiles ~0.083
+
+
+def assemble(dets, region: BoardRegion) -> ObservedState:
+    """One frame's detections -> ObservedState. HUD fields stay None (their
+    readers are the 2026-07-04 spec). 'back' detections only ever route to MELD
+    zones (ankan renders back/face/face/back); opponents' concealed rows sit off
+    the felt plane, land outside every calibrated zone after the homography and
+    are dropped silently (concealed_counts stays None — cross-check only)."""
+    o = ObservedState()
+    Hs = P.build_homographies(CANON_W, CANON_H)
+    hand_cand, dora_cand, table = [], [], []
+    conf: dict[str, list] = {}
+
+    def note(zone, det):
+        conf.setdefault(zone, []).append(det.score)
+
+    for det in dets:
+        x0, y0, x1, y1 = det.xyxy
+        nb = region.px_to_norm_box(x0, y0, x1, y1)
+        if DORA_STRIP.x0 <= nb.cx <= DORA_STRIP.x1 and \
+                DORA_STRIP.y0 <= nb.cy <= DORA_STRIP.y1:
+            if det.tile != "back":
+                dora_cand.append((nb.x0, det))
+                note("dora", det)
+            continue
+        if det.tile != "back" and nb.h >= HAND_MIN_H and nb.cy >= HAND.y0 - 0.02:
+            hand_cand.append((nb.x0, nb, det))
+            note("hand", det)
+            continue
+        table.append((det, _fw_points(det, region, Hs["H_full"])))
+
+    # hand + drawn (gap of >= ~half a slot before the last tile)
+    hand_cand.sort(key=lambda t: t[0])
+    o.hero_hand = [d.tile for _, _, d in hand_cand]
+    if len(hand_cand) >= 2:
+        gap = hand_cand[-1][0] - hand_cand[-2][0]
+        if gap > HAND.slot_w + 0.5 * HAND.tsumo_gap:
+            o.drawn_tile = o.hero_hand.pop()
+    o.dora_markers = [d.tile for _, d in sorted(dora_cand, key=lambda t: t[0])]
+
+    # route table detections to the nearest seat zone (river vs meld)
+    per_river: list[list] = [[] for _ in range(4)]
+    per_meld: list[list] = [[] for _ in range(4)]
+    for det, pts in table:
+        c = pts.mean(axis=0)
+        best = None                                    # (dist, kind, seat)
+        for seat in range(4):
+            disc0, colu, rowu, col_pitch = _river_frame(seat)
+            offs = P.DISCARD_ROW_OFFSETS[seat]
+            u = float(np.dot(c - disc0, colu))
+            v = float(np.dot(c - disc0, rowu))
+            du = max(0.0, -u, u - 10 * col_pitch)
+            dv = min(abs(v - x) for x in offs)
+            d_river = float(np.hypot(du, dv))
+            cfg = P.MELD_STRIP2[seat]
+            a = float(np.dot(c - np.array(cfg["corner"]), np.array(cfg["along"])))
+            cr = float(np.dot(c - np.array(cfg["corner"]), np.array(cfg["cross"])))
+            da = max(0.0, -a, a - 16 * cfg["w"])
+            dc = max(0.0, -cr, cr - 2.2 * cfg["d"])
+            d_meld = float(np.hypot(da, dc))
+            kinds = (("meld", d_meld),) if det.tile == "back" else \
+                    (("river", d_river), ("meld", d_meld))
+            for kind, dist in kinds:
+                if best is None or dist < best[0]:
+                    best = (dist, kind, seat)
+        if best[0] > 60.0:
+            if det.tile != "back":     # opponents' concealed rows are expected strays
+                o.violations.append(
+                    f"stray detection {det.tile} ({best[0]:.0f}px off-zone)")
+            continue
+        (per_river if best[1] == "river" else per_meld)[best[2]].append((det, pts))
+        note(f"{best[1]}{best[2]}", det)
+
+    for seat in range(4):
+        o.rivers[seat], v1 = _assign_river(seat, per_river[seat])
+        melds, v2 = _parse_melds(seat, per_meld[seat])
+        o.melds[seat] = melds
+        o.violations.extend(v1 + v2)
+        o.reach[seat] = any(t.sideways for t in o.rivers[seat])
+    o.zone_confidence = {z: min(s) for z, s in conf.items()}
+    o.violations.extend(check_observed(o))
+    return o
