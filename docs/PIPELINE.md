@@ -109,6 +109,9 @@
 - 分类器：`train_classifier.py --dataset datasets/v1 [--dataset datasets/v2 ...] --val ai_run_8_game1:* --epochs 20`。
 - 检测器：`train_detector.py --data datasets/<name>/detector/data.yaml`（imgsz 1280；16GiB 卡加
   `--batch 4` + expandable_segments 防 OOM；OBB 用 `--model weights/pretrained/yolov8s-obb.pt`）。
+  **增强现为显式 CLI**（`--fliplr/--hsv-v/--hsv-s/--mosaic/...`，启动日志打印 `aug:` 行）：
+  默认 `fliplr=0`（麻将牌有方向，水平翻转造镜像牌）、`hsv_v=0.5`（亮度/宝牌闪光近似），
+  其余沿用 ultralytics detect 默认。是否加真·局部 bloom 由 `count_dora_glow.py` 覆盖统计决定。
   跨版本先合并 split：`build_detector_dataset.py --dataset datasets/v1 --dataset datasets/v2
   --val ai_run_8_game1:* --out datasets/detector_combined`。
 - 训练命令 `build_datasets.py` 收尾会按当前局清单打印好，直接复制。
