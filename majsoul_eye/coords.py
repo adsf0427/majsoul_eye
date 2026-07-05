@@ -203,3 +203,8 @@ _HUD_SEEDS_PX: dict[str, tuple[int, int, int, int]] = {
     "honba_count":        (222, 135, 300, 175),     # mycv get_benchang; x0 clears the icon (ends ~x205) w/ 3px margin before the "x" glyph (starts ~x225), x1/y1 trimmed clear of the panel's bottom-right corner cut
 }
 HUD_SEEDS: dict[str, NormBox] = {k: px_box(*v) for k, v in _HUD_SEEDS_PX.items()}
+
+
+# Action-button strip (bottom, above the hand). Wide on purpose — the locator
+# contours inside it; only containment matters.  # CALIBRATE (Task 7 Step 5)
+BTN_ZONE = NormBox(0.30, 0.66, 0.98, 0.82)

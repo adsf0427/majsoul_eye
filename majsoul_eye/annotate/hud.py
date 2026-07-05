@@ -10,8 +10,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from majsoul_eye.coords import HUD_SEEDS
-from majsoul_eye.hud import NUMERIC_FIELDS
+from majsoul_eye.coords import HUD_SEEDS, BTN_ZONE
+from majsoul_eye.hud import NUMERIC_FIELDS, buttons_for_ops
 
 # CALIBRATED (Task 6): 150 only caught the brightest anti-aliased crest of the
 # round_label/wall_count glyphs (cyan text tops out at gray~171 under BGR2GRAY,
@@ -80,3 +80,43 @@ def hud_field_boxes(img: np.ndarray, state, region) -> list[dict]:
              "fill": fill}
         out.append(d)
     return out
+
+
+BTN_MIN_AREA = 2500    # px² @1080p; banners are ~160x50   # CALIBRATE
+BTN_THRESH = 140       # banner glow vs table              # CALIBRATE
+BTN_ORDER_LTR = True   # display order left->right == buttons_for_ops order
+                       # (empirical; flip after eyeballing harvest frames)
+
+
+def locate_button_candidates(img, region) -> list[tuple[int, int, int, int]]:
+    """Bright banner blobs inside BTN_ZONE, x-sorted, as original-px boxes."""
+    x0, y0, x1, y1 = region.norm_to_px(BTN_ZONE)
+    roi = img[y0:y1, x0:x1]
+    g = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    m = (g >= BTN_THRESH).astype(np.uint8) * 255
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((9, 25), np.uint8))
+    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    out = []
+    for c in cnts:
+        x, y, w, h = cv2.boundingRect(c)
+        if w * h >= BTN_MIN_AREA and w > h:            # wide banner shape
+            out.append((x0 + x, y0 + y, x0 + x + w, y0 + y + h))
+    return sorted(out)
+
+
+def button_boxes(img, state, region) -> list[dict]:
+    """GT-expected buttons matched to located candidates by order.
+    Count mismatch -> every box unreliable + flagged (frame contributes no
+    button labels; 宁缺毋滥)."""
+    expected = buttons_for_ops(state.pending_ops or [])
+    if not expected:
+        return []
+    cands = locate_button_candidates(img, region)
+    ordered = expected if BTN_ORDER_LTR else expected[::-1]
+    if len(cands) != len(expected):
+        return [{"name": n, "px_box": list(c) if i < len(cands) else None,
+                 "reliable": False, "flag": "count_mismatch"}
+                for i, (n, c) in enumerate(
+                    zip(ordered, list(cands) + [None] * len(expected)))
+                if n][:len(expected)]
+    return [{"name": n, "px_box": list(c)} for n, c in zip(ordered, cands)]
