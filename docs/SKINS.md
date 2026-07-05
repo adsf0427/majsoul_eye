@@ -101,9 +101,14 @@ Flags: `--skins-port` (23410), `--skins-env` (majsoulmax), `--skins-dir` (`_exte
 With `--skins`, each `game<N>/metadata.json` records — next to `language` — both the config and the
 **actual per-game skins** (parsed from the rewritten `authGame` RES the browser receives):
 `"skins": {"enabled", "randomize", "slots", "all_seats", "table": {slot: item_id …}, "characters":
-[{account_id, charid, skin, robot} × seats]}`. `table` = the hero's view decorations that render
-the whole table (`7`=牌背 `6`=桌布 `8`=场景); `characters` = every seat's 立绘. So you can stratify
-the dataset by the exact tile-back / desktop / scene / portraits each game actually used.
+[{account_id, charid, skin, robot} × seats], "hero_account_id"}`. `table` = the HERO's view
+decorations that render the whole table (`7`=牌背 `6`=桌布 `8`=场景); `characters` = every seat's
+立绘. So you can stratify the dataset by the exact tile-back / desktop / scene / portraits each
+game actually used. The hero is found by `hero_account_id` (from the `authGame` REQ) — the RES's
+`players` list is account_id-sorted, NOT hero-first (seat order lives in `seat_list`), so
+`players[0]` is usually a stranger. Metadata written before this fix (2026-07-05, ai_session2)
+recorded `players[0]`'s views as `table` (usually `{}`); `scripts/capture/backfill_skin_meta.py`
+re-derived the correct values from each game's recorded wire (already applied to ai_session2).
 
 ## Decoration slot reference (`ItemDefinitionItem.type` == view slot)
 

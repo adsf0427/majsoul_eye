@@ -83,14 +83,38 @@ def test_extract_authgame_skins():
                    {"accountId": 0, "character": {"charid": 200013, "skin": 401301}}],
         "seatList": [123, 0, 0, 0],
     }
-    out = gm.extract_authgame_skins(data)
+    out = gm.extract_authgame_skins(data, hero_account=123)
     assert out["table"] == {"7": 305015, "6": 305012, "8": 307001}   # hero views = table 牌背/桌布/场景
+    assert out["hero_account_id"] == 123
     assert out["characters"][0] == {"account_id": 123, "charid": 200042, "skin": 400421, "robot": False}
     assert [c["charid"] for c in out["characters"]] == [200042, 200005, 200009, 200013]
     assert [c["robot"] for c in out["characters"]] == [False, True, True, True]
     # graceful on empties / missing character
     assert gm.extract_authgame_skins({}) == {"table": {}, "characters": []}
     assert gm.extract_authgame_skins({"players": [{}]})["characters"][0]["skin"] == 0
+
+
+def test_extract_authgame_skins_hero_not_first():
+    # REAL layout (ai_session2): players[] is account_id-sorted, NOT hero-first (seat order lives in
+    # seatList). table must be the HERO's views — mod.py rewrites only the hero's — never players[0]'s.
+    data = {
+        "players": [
+            {"accountId": 22641905, "character": {"charid": 200078, "skin": 407801},
+             "views": [{"slot": 0, "itemId": 305624}, {"slot": 7, "itemId": 30570013}]},   # a stranger's own 装扮
+            {"accountId": 23775192, "character": {"charid": 20000103, "skin": 40010301},
+             "views": [{"slot": 7, "itemId": 308045}, {"slot": 6, "itemId": 30580023},
+                       {"slot": 8, "itemId": 307008}]},                                    # the hero (randomized)
+        ],
+        "seatList": [23775192, 22641905],
+    }
+    out = gm.extract_authgame_skins(data, hero_account=23775192)
+    assert out["table"] == {"7": 308045, "6": 30580023, "8": 307008}
+    assert out["hero_account_id"] == 23775192
+    # hero unknown / not found -> EMPTY table (a stranger's cosmetics must not pose as our swap),
+    # and no hero_account_id key (nothing trustworthy to record).
+    for out in (gm.extract_authgame_skins(data), gm.extract_authgame_skins(data, hero_account=999)):
+        assert out["table"] == {}
+        assert "hero_account_id" not in out
 
 
 def test_probe_language_js_is_str():

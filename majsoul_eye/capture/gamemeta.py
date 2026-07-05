@@ -106,13 +106,18 @@ def parse_probe_dump(dump):
     return None
 
 
-def extract_authgame_skins(data):
+def extract_authgame_skins(data, hero_account=None):
     """Pull the ACTUAL per-game skins from a parsed ``.lq.FastTest.authGame`` RES dict (as produced
     by MahjongCopilot's liqi parser — camelCase keys). Returns
-    ``{"table": {slot: item_id, ...}, "characters": [{account_id, charid, skin, robot}, ...]}``.
+    ``{"table": {slot: item_id, ...}, "characters": [{account_id, charid, skin, robot}, ...]}``
+    plus ``hero_account_id`` when the hero was identified.
 
-    ``table`` = the hero's (``players[0]``) ``views`` decorations — mod.py randomizes only the
-    hero's views, and those render the whole table we capture (牌背=slot 7 / 桌布=6 / 场景=8).
+    ``table`` = the HERO's ``views`` decorations — mod.py randomizes only the hero's views, and
+    those render the whole table we capture (牌背=slot 7 / 桌布=6 / 场景=8). The hero is found by
+    ``hero_account`` (the authGame REQ's accountId): ``players`` is account_id-sorted, NOT
+    hero-first (seat order lives in ``seatList``), so ``players[0]`` is usually a stranger. With
+    no/unmatched ``hero_account`` the table is left EMPTY rather than recording a stranger's own
+    cosmetics as our swap.
     ``characters`` = every seat's 立绘 (charid+skin); ``players`` are humans, ``robots`` the AI.
     Reads the frame AFTER mod.py rewrote it (our WS tap sees what the browser receives), so these
     are the swapped values actually rendered. Missing/zero fields default to 0."""
@@ -126,12 +131,15 @@ def extract_authgame_skins(data):
     players_raw = data.get("players") or []
     characters = [_seat(p, False) for p in players_raw] + \
                  [_seat(p, True) for p in (data.get("robots") or [])]
-    table = {}
-    if players_raw:
-        for v in (players_raw[0].get("views") or []):
+    out = {"table": {}, "characters": characters}
+    hero = next((p for p in players_raw
+                 if hero_account is not None and p.get("accountId") == hero_account), None)
+    if hero is not None:
+        for v in (hero.get("views") or []):
             if v.get("slot") is not None:
-                table[str(v.get("slot"))] = v.get("itemId", 0)
-    return {"table": table, "characters": characters}
+                out["table"][str(v.get("slot"))] = v.get("itemId", 0)
+        out["hero_account_id"] = hero_account
+    return out
 
 
 def write_metadata(game_dir, language, extra=None):

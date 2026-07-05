@@ -519,6 +519,7 @@ def main() -> None:
 
     game_state = None
     drain_mjai = None           # closure from make_capturing_game_state (per game)
+    game_hero_account = None    # hero accountId from the authGame REQ (identifies OUR player in the RES)
     game_idx = 0                # which game in this run (-> out_dir/game<idx>/)
     game_wire_fh = None         # current game's raw-wire liqi.jsonl handle
     gt_writer = None            # current game's GTRecord writer (game<idx>.jsonl)
@@ -633,6 +634,7 @@ def main() -> None:
                         game_index_fh = open(os.path.join(game_dir, "frames.jsonl"), "w", encoding="utf-8")
                         gt_writer = GTWriter(os.path.join(game_dir, f"game{game_idx}.jsonl"))
                     seq, pending_seq, fulfilled_seq = 0, None, None
+                    game_hero_account = (msg.get("data") or {}).get("accountId")
                     game_state, drain_mjai = make_capturing_game_state(GameState, bot)
                     seq += 1
                     if game_wire_fh is not None:
@@ -661,7 +663,8 @@ def main() -> None:
                 # real 牌背/桌布/场景 + 立绘 into this game's metadata.json (over the config-only stub).
                 if not args.dry_run and skin_meta and (mtype, method) == (liqi.MsgType.RES, liqi.LiqiMethod.authGame):
                     try:
-                        actual = gamemeta.extract_authgame_skins(msg.get("data") or {})
+                        actual = gamemeta.extract_authgame_skins(msg.get("data") or {},
+                                                                 hero_account=game_hero_account)
                         gamemeta.write_metadata(game_dir, game_language,
                                                 extra={"skins": {**skin_meta, **actual}})
                         print(f"  skins: table={actual['table']} "
