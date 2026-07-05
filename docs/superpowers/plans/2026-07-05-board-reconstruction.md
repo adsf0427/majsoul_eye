@@ -2,6 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **⚠️ 已执行完毕（2026-07-06，branch feat/board-recon）。本文保留为历史规格；下列执行期
+> 裁定的偏差以代码为准（详见 `.git/worktrees/majsoul_eye-recon/sdd/progress-board-recon.md`）：**
+> 1. **Task 4** `test_chi_only_from_kamicha`：本文的 fixture `rivers[3]=[W]` 被证明不可行
+>    （吃只能吃上家=相邻座、无跳座，r1/r2 空时上家拿不到第二次舍牌轮）——实现删去 W，断言未动。
+> 2. **Task 7** `_parse_melds`：本文的"size-4 优先贪心"存在"误配尾部恰好也可解析→静默错分组"
+>    漏洞（复现需 ≥7 张同种牌，合法局面不可达）——实现改为**歧义检测**（枚举完整解析，≥2 个
+>    即拒绝并记 violation），新增 `test_meld_parse_rejects_ambiguous_strip`。
+> 3. **Task 8** `test_full_frame_roundtrip`：本文 fixture 中 r3 的 "F" 与暗杠 F×4 凑成 5 张
+>    自相矛盾——实现换成 "9s"，断言未动。
+> 4. **Task 9** 真实数据发现新帧类：鸣牌事件与强制舍牌之间的间隙帧（209/10330 ≈ 2%，其中 11
+>    帧不可重建）——新增 `replay.is_call_pending` 谓词（镜像 `is_deal_window`）+
+>    `BoardState.awaiting_discard` 字段，oracle 按类跳过并计数；另修 `run_engine` 的
+>    failure 计数器类型 bug（本文代码 `report["fail"] += 1` 打在 list 上）→ `engine_fail`。
+>    engine 层本次未跑（环境无 mjai bot 命令）。
+
 **Goal:** 单帧识别结果 → `ObservedState`（第 1 步）→ 从 `start_kyoku` 到当前状态的合法 hero 视角 MJAI 序列（第 2 步），并配三层 GT 评测。
 
 **Architecture:** 三个新模块：`state/observe.py`（可见状态数据模型 + 校验 + GT 投影）、`recognize/assemble.py`（检测框 → ObservedState，反用 `annotate/pipeline` 标定几何）、`state/reconstruct.py`（回合模拟 + 回溯 DFS → mjai 事件）。评测 harness `scripts/eval/eval_reconstruction.py` 用现有 GTRecord 捕获免费驱动。Spec：`docs/superpowers/specs/2026-07-05-board-reconstruction-design.md`。
