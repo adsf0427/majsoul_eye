@@ -24,8 +24,8 @@ def test_discover_games_shapes_and_kinds():
     """AI multi-game, AI single-game, and manual session shapes are all found."""
     with tempfile.TemporaryDirectory() as td:
         root = os.path.join(td, "ai_session")
-        _touch(os.path.join(root, "run_1.jsonl"))
-        _touch(os.path.join(root, "run_2", "game1.jsonl"))
+        _touch(os.path.join(root, "run_1.jsonl"))                       # legacy single-game shape
+        _touch(os.path.join(root, "run_2", "game1", "game1.jsonl"))     # nested (new canon)
         _touch(os.path.join(root, "session9.jsonl"))
         games = bds.discover_games([root])
         by_name = {g["name"]: g for g in games}
@@ -45,8 +45,8 @@ def test_discover_games_collision_and_empty():
     with tempfile.TemporaryDirectory() as td:
         r1 = os.path.join(td, "ai_session")
         r2 = os.path.join(td, "ai_session_2")
-        _touch(os.path.join(r1, "run_1", "game1.jsonl"))
-        _touch(os.path.join(r2, "run_1", "game1.jsonl"))
+        _touch(os.path.join(r1, "run_1", "game1", "game1.jsonl"))
+        _touch(os.path.join(r2, "run_1", "game1", "game1.jsonl"))
         try:
             bds.discover_games([r1, r2])
             raise AssertionError("collision not detected")
@@ -63,7 +63,7 @@ def test_frames_override_applies():
     """The letterboxed run_5 games must point at the de-letterboxed derived frames."""
     with tempfile.TemporaryDirectory() as td:
         root = os.path.join(td, "ai_session")
-        _touch(os.path.join(root, "run_5", "game2.jsonl"))
+        _touch(os.path.join(root, "run_5", "game2", "game2.jsonl"))
         (g,) = bds.discover_games([root])
         assert g["name"] == "ai_run_5_game2"
         assert g["frames_dir"] == bds.FRAMES_OVERRIDE["ai_run_5_game2"].replace(os.sep, "/")
@@ -131,6 +131,23 @@ def test_dataset_root_naming():
     assert bds.dataset_root("v2") == os.path.join("datasets", "v2")
     assert bds.dataset_root("datasets/v2") == "datasets/v2"
     assert bds.dataset_root("scratch/x") == "scratch/x"
+
+
+def test_resolve_parallelism_shared_and_overrides():
+    """`-j/--parallel` is the shared default for both heavy stages; an explicit
+    per-stage --workers/--jobs overrides it. workers stays None when nothing is
+    given (annotate then uses its own cap); jobs always lands on a concrete int."""
+    # nothing set: workers falls through to annotate's own default (None), jobs -> DEFAULT_JOBS
+    assert bds.resolve_parallelism(None, None, None) == (None, bds.DEFAULT_JOBS)
+    # -j alone drives BOTH stages
+    assert bds.resolve_parallelism(12, None, None) == (12, 12)
+    # explicit per-stage flags override -j on their stage only
+    assert bds.resolve_parallelism(12, 16, 6) == (16, 6)
+    assert bds.resolve_parallelism(12, None, 6) == (12, 6)
+    # legacy invocation (no -j) still honours explicit --workers/--jobs
+    assert bds.resolve_parallelism(None, 16, 12) == (16, 12)
+    # a per-stage flag with no -j leaves the other stage on its own default
+    assert bds.resolve_parallelism(None, 16, None) == (16, bds.DEFAULT_JOBS)
 
 
 if __name__ == "__main__":

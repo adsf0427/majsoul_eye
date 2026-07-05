@@ -33,7 +33,8 @@ PowerShell ``$env:PYTHONPATH = "."`` / bash ``export PYTHONPATH=.``):
     python scripts/data/build_datasets.py v2 --sources captures/raw/ai_session captures/raw/manual
     # after capturing new runs: pick up only what's missing
     python scripts/data/build_datasets.py v2 --resume
-    # big-RAM server:
+    # big-RAM server — one knob for both stages, or tune each:
+    python scripts/data/build_datasets.py v2 -j 12
     python scripts/data/build_datasets.py v2 --workers 16 --jobs 12
 """
 
@@ -58,6 +59,24 @@ FRAMES_OVERRIDE = {
 }
 
 DEFAULT_VAL = "ai_run_8_game1"   # held-out whole game (classifier + detector convention)
+
+# Stage-2 default: per-game build_dataset processes are RAM-bound, so cap at 8.
+DEFAULT_JOBS = max(1, min(8, (os.cpu_count() or 4) // 2))
+
+
+def resolve_parallelism(parallel, workers, jobs):
+    """Fold the shared ``-j/--parallel`` knob into the two per-stage degrees.
+
+    Both heavy stages are "N games at once, one OS process each" — stage-1 annotate
+    (``--workers``) and stage-2 per-game build (``--jobs``) — and they run
+    sequentially, so one number is safe for both. ``-j`` sets the default for each;
+    an explicit ``--workers``/``--jobs`` overrides its own stage. ``workers`` may stay
+    ``None`` (annotate then falls back to its own conservative cap of 4); ``jobs``
+    always resolves to a concrete int for ``run_parallel``.
+    """
+    eff_workers = workers if workers is not None else parallel
+    eff_jobs = jobs if jobs is not None else (parallel if parallel is not None else DEFAULT_JOBS)
+    return eff_workers, eff_jobs
 
 
 def _posix(p: str) -> str:
@@ -197,13 +216,21 @@ def main() -> None:
     ap.add_argument("--force", action="store_true",
                     help="delete datasets/<name> first and rebuild from scratch.")
     ap.add_argument("--dry-run", action="store_true", help="print the commands, touch nothing.")
+    ap.add_argument("-j", "--parallel", type=int, default=None,
+                    help="degree of parallelism shared by BOTH heavy stages (stage-1 annotate "
+                         "workers and stage-2 per-game build jobs — each is one OS process per "
+                         "game, RAM-bound, and the stages run sequentially). Sets the default for "
+                         "--workers and --jobs; pass either to override that one stage.")
     ap.add_argument("--workers", type=int, default=None,
-                    help="annotate_ai_session parallel workers (default: its own cap of 4).")
-    ap.add_argument("--jobs", type=int, default=max(1, min(8, (os.cpu_count() or 4) // 2)),
-                    help="parallel build_dataset processes (RAM-bound; default min(8, cpu//2)).")
+                    help="override stage-1 annotate parallel workers only (default: follows "
+                         "--parallel, else annotate_ai_session's own cap of 4).")
+    ap.add_argument("--jobs", type=int, default=None,
+                    help=f"override stage-2 parallel build_dataset processes only (RAM-bound; "
+                         f"default: follows --parallel, else min(8, cpu//2)={DEFAULT_JOBS}).")
     ap.add_argument("--obb", action="store_true", help="emit OBB (8-point) YOLO labels.")
     args = ap.parse_args()
 
+    workers, jobs = resolve_parallelism(args.parallel, args.workers, args.jobs)
     py = sys.executable
     ds = dataset_root(args.name)
     ann = os.path.join(ds, "annotations")
@@ -231,7 +258,7 @@ def main() -> None:
         todo = [g for g in games if g["kind"] == "ai"
                 and not (args.resume and os.path.exists(os.path.join(ann, g["name"] + ".jsonl")))]
         print(f"[1/3] annotate {len(todo)} game(s) -> {ann}")
-        wk = ["--workers", str(args.workers)] if args.workers else []
+        wk = ["--workers", str(workers)] if workers else []
         batch = [g["capture"] for g in todo if g["name"] not in FRAMES_OVERRIDE]
         if batch:
             r.run([py, "scripts/annotate/annotate_ai_session.py",
@@ -258,8 +285,8 @@ def main() -> None:
                 cmd += ["--obb"]
             cmds.append(cmd)
         print(f"[2/3] build_dataset {len(cmds)} game(s) -> {os.path.join(ds, '<game>')}"
-              f"   (jobs={args.jobs})")
-        r.run_parallel(cmds, args.jobs)
+              f"   (jobs={jobs})")
+        r.run_parallel(cmds, jobs)
         print()
 
     # ---- stage 3: detector split (always rebuilt over ALL games) -----------
