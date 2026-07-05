@@ -15,6 +15,14 @@ def _load_autoplay():
     return mod
 
 
+def test_gt_jsonl_written_inside_game_dir():
+    # nested layout contract: the GTRecord jsonl goes INSIDE game<M>/, not next to it
+    path = os.path.join(os.path.dirname(__file__), "..", "scripts", "capture", "autoplay_ai.py")
+    src = open(path, encoding="utf-8").read()
+    assert 'GTWriter(os.path.join(game_dir, f"game{game_idx}.jsonl"))' in src
+    assert 'GTWriter(os.path.join(out_dir' not in src
+
+
 def test_frame_index_line_shape():
     mod = _load_autoplay()
     line = mod._frame_index_line(9, 123.5)
@@ -40,7 +48,7 @@ def test_autoplay_ai_still_imports_and_has_flags():
     finally:
         argparse.ArgumentParser.parse_args = real
     flat = {opt for opts in seen for opt in opts}
-    assert "--out" in flat and "--server" in flat
+    assert "--out" in flat and "--server" in flat and "--dry-run" in flat
 
 
 if __name__ == "__main__":
