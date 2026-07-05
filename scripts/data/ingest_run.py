@@ -30,8 +30,9 @@ from majsoul_eye import paths
 
 def discover_games(run_dir: str) -> list[tuple[str, str]]:
     """Return [(rel_dir_under_session, name), ...] for each game in run_dir.
-    `rel` is relative to the run_dir's parent (matches the GTRecord jsonl's own
-    layout: "run_13/game1" <-> sibling "run_13/game1.jsonl")."""
+    `rel` is relative to the run_dir's parent; the GTRecord jsonl is resolved from
+    the frames dir via paths.capture_for_frames_dir ("run_13/game1" ->
+    "run_13/game1/game1.jsonl", legacy sibling as fallback)."""
     run_dir = os.path.normpath(run_dir)
     parent = os.path.dirname(run_dir)
     run = os.path.basename(run_dir)
@@ -74,10 +75,10 @@ def main():
 
     # 1) build_dataset per game — AI captures are already GTRecord (no convert
     #    step: discover_games returns rel dirs like "run_13/game1"; the GTRecord
-    #    jsonl is the sibling "run_13/game1.jsonl" and its frames dir is "run_13/game1/").
+    #    jsonl lives inside it, "run_13/game1/game1.jsonl").
     for rel, name in games:
-        cap = os.path.join(parent, rel) + ".jsonl"
         frames_dir = os.path.join(parent, rel)
+        cap = paths.capture_for_frames_dir(frames_dir)
         if not os.path.exists(cap):
             print(f"  SKIP {name}: no GTRecord at {cap} "
                   f"(capture with autoplay_ai or migrate a legacy b64 run first)")
@@ -95,7 +96,7 @@ def main():
         data_args = []
         for rel, nm in games:
             crops = os.path.join(args.datasets, nm, "crops")
-            cap = os.path.join(parent, rel) + ".jsonl"      # this game's GTRecord jsonl
+            cap = paths.capture_for_frames_dir(os.path.join(parent, rel))  # this game's GTRecord jsonl
             if os.path.isdir(crops) and os.path.exists(cap):
                 data_args += ["--data", f"{nm}={crops}:{cap}"]
         # also pick up the erode-rebuilt manual sets if present

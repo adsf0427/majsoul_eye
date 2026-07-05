@@ -29,10 +29,10 @@ NOT resize under them).
 
 Usage (conda `auto` env, repo root, PYTHONPATH=.):
   # self-contained (re-annotates):
-  python scripts/train/build_dataset.py captures/raw/ai_session/run_3/game1.jsonl \
+  python scripts/train/build_dataset.py captures/raw/ai_session/run_3/game1/game1.jsonl \
          captures/raw/ai_session/run_3/game1 --out datasets/ai_g_run3_1
   # reuse annotate_ai_session output (no re-annotation):
-  python scripts/train/build_dataset.py captures/raw/ai_session/run_3/game1.jsonl \
+  python scripts/train/build_dataset.py captures/raw/ai_session/run_3/game1/game1.jsonl \
          captures/raw/ai_session/run_3/game1 --out datasets/precise_ai_run_3_game1 \
          --from-annotations out/ai_session_annotations --no-yolo
 """

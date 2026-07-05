@@ -7,8 +7,12 @@ of hardcoding ``"captures/..."`` paths or re-deriving the frames-dir stem rule.
 Layout::
 
     captures/
-      raw/            ai_session/ (GTRecord, written inline by autoplay_ai.py — same
-                      format as manual)  +  manual/ (record_gt sessions)
+      raw/            ai_session/ (GTRecord, written inline by autoplay_ai.py; NESTED
+                      layout — the GT jsonl lives INSIDE its frames dir:
+                      ``run_N/gameM/gameM.jsonl`` + ``run_N/gameM/{liqi.jsonl,
+                      frames.jsonl, frames/, metadata.json}``)  +  manual/
+                      (record_gt sessions; legacy SIBLING layout ``sessionN.jsonl``
+                      next to ``sessionN/``, still resolved everywhere)
       intermediate/   derived/ (cropped / de-letterboxed) — ``gt/`` (converted GT +
                       hollow indexes) is RETIRED; AI captures now write ``GTRecord``
                       directly under ``raw/ai_session/`` instead of a separate
@@ -51,14 +55,32 @@ CAPTURES_ABS = os.path.join(REPO_ROOT, CAPTURES)
 
 
 def frames_dir_for(capture: str) -> str:
-    """``captures/.../ai_run_3_game1.jsonl`` -> ``captures/.../ai_run_3_game1``.
+    """GT capture jsonl -> its frames dir. The one place this coupling is defined.
 
-    The frames dir is the capture path with its ``.jsonl`` suffix stripped — a
-    sibling with the same stem. The one place this ``X.jsonl <-> X/`` coupling
-    is defined.
+    Nested (canonical AI layout): the jsonl lives INSIDE its frames dir —
+    ``.../run_3/game1/game1.jsonl`` -> ``.../run_3/game1``.
+    Sibling (legacy; manual sessions): same-stem dir next to the jsonl —
+    ``.../session5.jsonl`` -> ``.../session5``.
     """
     stem, _ = os.path.splitext(str(capture))
-    return stem
+    parent = os.path.dirname(stem)
+    if parent and os.path.basename(parent) == os.path.basename(stem):
+        return parent                                  # nested: X/X.jsonl -> X/
+    return stem                                        # sibling: X.jsonl -> X/
+
+
+def capture_for_frames_dir(frames_dir: str) -> str:
+    """Inverse of ``frames_dir_for``: frames dir -> its GT capture jsonl.
+
+    Prefers the nested form (``<dir>/<base>.jsonl``); falls back to a legacy
+    sibling ``<dir>.jsonl`` only when that exists and the nested one does not.
+    """
+    d = os.path.normpath(str(frames_dir))
+    nested = os.path.join(d, os.path.basename(d) + ".jsonl")
+    sibling = d + ".jsonl"
+    if os.path.exists(nested) or not os.path.exists(sibling):
+        return nested
+    return sibling
 
 
 def rel_to_captures(path: str) -> str:
@@ -125,14 +147,18 @@ def resolve_frame_path(file_field: str, index_dir=None) -> str:
 def ai_game_name(capture_path: str) -> str:
     """Stable flattened dataset name for an AI GTRecord capture.
 
-    ``.../run_N/gameM.jsonl`` -> ``ai_run_N_gameM``;
-    ``.../run_1.jsonl``       -> ``ai_run_1`` (single-game legacy run);
-    anything else             -> the basename stem (manual sessions pass through).
+    ``.../run_N/gameM/gameM.jsonl`` -> ``ai_run_N_gameM`` (nested, canonical);
+    ``.../run_N/gameM.jsonl``       -> ``ai_run_N_gameM`` (legacy sibling);
+    ``.../run_1/run_1.jsonl``       -> ``ai_run_1``       (single-game run, either shape);
+    anything else                   -> the basename stem  (manual sessions pass through).
     """
     p = os.path.abspath(capture_path).replace("\\", "/")
     parts = p.split("/")
     stem = os.path.splitext(parts[-1])[0]                 # gameM  or  run_N
-    parent = parts[-2] if len(parts) >= 2 else ""
+    anc = parts[:-1]
+    if anc and anc[-1] == stem:                           # nested: drop the frames dir itself
+        anc = anc[:-1]
+    parent = anc[-1] if anc else ""
     if re.fullmatch(r"run_\d+", parent) and re.fullmatch(r"game\d+", stem):
         return f"ai_{parent}_{stem}"
     if re.fullmatch(r"run_\d+", stem):
@@ -140,11 +166,28 @@ def ai_game_name(capture_path: str) -> str:
     return stem
 
 
+def _is_nested(jsonl_path: str) -> bool:
+    """True when the jsonl sits inside its own same-named frames dir (X/X.jsonl)."""
+    return (os.path.basename(os.path.dirname(jsonl_path))
+            == os.path.splitext(os.path.basename(jsonl_path))[0])
+
+
 def _ai_captures_in(ai_session_dir: str) -> list:
-    """AI GTRecord jsonls under a given ai_session root (test seam for ai_captures)."""
-    multi = _glob.glob(os.path.join(ai_session_dir, "run_*", "game*.jsonl"))
-    single = _glob.glob(os.path.join(ai_session_dir, "run_*.jsonl"))
-    return sorted(multi + single)
+    """AI GTRecord jsonls under a given ai_session root (test seam for ai_captures).
+
+    Canonical nested shapes first (``run_N/gameM/gameM.jsonl``, ``run_N/run_N.jsonl``);
+    legacy sibling shapes (``run_N/gameM.jsonl``, ``run_N.jsonl``) are included only
+    when their nested twin does not exist yet (mid-migration dedupe).
+    """
+    nested = [p for p in
+              _glob.glob(os.path.join(ai_session_dir, "run_*", "game*", "game*.jsonl"))
+              + _glob.glob(os.path.join(ai_session_dir, "run_*", "run_*.jsonl"))
+              if _is_nested(p)]
+    sibling = (_glob.glob(os.path.join(ai_session_dir, "run_*", "game*.jsonl"))
+               + _glob.glob(os.path.join(ai_session_dir, "run_*.jsonl")))
+    legacy = [p for p in sibling if not _is_nested(p) and not os.path.exists(
+        os.path.join(os.path.splitext(p)[0], os.path.basename(p)))]
+    return sorted(nested + legacy)
 
 
 def ai_captures() -> list:

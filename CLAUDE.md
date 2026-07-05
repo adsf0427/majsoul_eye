@@ -43,7 +43,8 @@ for t in tests/test_*.py; do PYTHONPATH=. python "$t" || break; done
 
 **Single capture path (AI autoplay).** `scripts/capture/autoplay_ai.py --live` plays via
 Mortal + Playwright and writes the unified `GTRecord` + screenshot index inline under
-`captures/raw/ai_session/run_N/gameM.jsonl` + `gameM/` — no convert step, no
+`captures/raw/ai_session/run_N/gameM/` (self-contained: `gameM.jsonl` GTRecord +
+frames/wire/metadata) — no convert step, no
 `intermediate/gt` (retired; legacy b64 runs were migrated once by
 `scripts/data/migrate_ai_to_gtrecord.py`). The old manual path (`record_gt.py` + Akagi MITM,
 `captures/raw/manual/`) is **deprecated for new capture**; its session5/6 data stays in the
@@ -135,12 +136,15 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   every kyoku, so frame filenames would collide and later rounds overwrite earlier ones.
 - **`captures/` layout is defined once in `majsoul_eye/paths.py`** — `raw/{ai_session,manual}`,
   `intermediate/derived`, `legacy/` (`intermediate/gt` is retired — AI GTRecords now live under
-  `raw/ai_session`). Don't hardcode `captures/...` paths or re-derive the frames-dir stem rule;
-  use `paths.frames_dir_for` / `paths.ai_captures()` (`converted_gt_captures()` is kept as a thin
-  alias for old callers) and resolve every `frames.jsonl` `file` (RELATIVE now) through
-  `paths.resolve_frame_path` (accepts legacy absolute too). To reorganize again,
-  `scripts/data/migrate_captures_layout.py` moves dirs + rewrites indexes idempotently
-  (dry-run default).
+  `raw/ai_session`). The AI GT jsonl is NESTED inside its frames dir
+  (`run_N/gameM/gameM.jsonl`); the old sibling shape (`run_N/gameM.jsonl`, still used by
+  `manual/sessionN.jsonl`) is resolved as legacy. Don't hardcode `captures/...` paths or
+  re-derive that coupling; use `paths.frames_dir_for` / `paths.capture_for_frames_dir` /
+  `paths.ai_captures()` (`converted_gt_captures()` is kept as a thin alias for old callers)
+  and resolve every `frames.jsonl` `file` (RELATIVE now) through `paths.resolve_frame_path`
+  (accepts legacy absolute too). Layout reorganizations are one-shot idempotent dry-run-default
+  scripts (`migrate_captures_layout.py` 2026-07-02, `migrate_gt_into_gamedir.py` 2026-07-05 —
+  the latter also rewrites `datasets/*/games.json` capture paths).
 - **Train/val split by kyoku, never by frame** — the same physical discard appears in many frames
   of one kyoku; a frame split leaks it and inflates accuracy.
 - **Recording must never break the bridge or the TUI.** `parse_liqi` runs under Akagi's lock on

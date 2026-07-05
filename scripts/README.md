@@ -20,18 +20,19 @@ Legend: 🔴 dev-only / coupled to a sibling repo (`recognize/` never imports th
 | script | role | out |
 |---|---|---|
 | `record_gt.py` 🔴🔁 | inject GT tap, launch **Akagi**; passive capture (观战/人工, autoplay OFF). Runs in the **`akagi`** env. | `captures/raw/manual/sessionN.jsonl` + frames |
-| `autoplay_ai.py` 🔴🔁 | **Mortal-AI autoplay + capture** in one Playwright Chromium (defaults `--dry-run`). A real AI melds/riichis → covers the hard zones. Writes `GTRecord` inline, same format as `record_gt.py` — no separate convert step. | `captures/raw/ai_session/run_N/gameM.jsonl` + `gameM/{liqi.jsonl,frames.jsonl,frames/}` |
+| `autoplay_ai.py` 🔴🔁 | **Mortal-AI autoplay + capture** in one Playwright Chromium (defaults `--dry-run`). A real AI melds/riichis → covers the hard zones. Writes `GTRecord` inline, same format as `record_gt.py` — no separate convert step. | `captures/raw/ai_session/run_N/gameM/{gameM.jsonl,liqi.jsonl,frames.jsonl,frames/}` |
 
 ## `data/` — raw → our GT format, frame fixups, layout infra
 
 | script | role | out |
 |---|---|---|
-| `convert_mjcopilot.py` 🔴 | shared MahjongCopilot raw-liqi-wire → `GTRecord` conversion lib (its own `LiqiProto`→`GameState`; deep-copies events). New captures (`autoplay_ai.py`) write `GTRecord` inline and never call this; it now lives on as (a) the one-time legacy migration path used by `migrate_ai_to_gtrecord.py` and (b) a still-runnable CLI for any old raw-wire capture. | `captures/raw/ai_session/run_N/gameM.jsonl` (via the migration script) |
+| `convert_mjcopilot.py` 🔴 | shared MahjongCopilot raw-liqi-wire → `GTRecord` conversion lib (its own `LiqiProto`→`GameState`; deep-copies events). New captures (`autoplay_ai.py`) write `GTRecord` inline and never call this; it now lives on as (a) the one-time legacy migration path used by `migrate_ai_to_gtrecord.py` and (b) a still-runnable CLI for any old raw-wire capture. | `captures/raw/ai_session/run_N/gameM/gameM.jsonl` (via the migration script) |
 | `ingest_run.py` 🔁 | one-shot orchestrator for a MahjongCopilot run: discover games → `build_dataset` → optional retrain (**subprocess-calls `train/build_dataset`, `train/train_classifier`**). Captures are already `GTRecord`, so there is no convert step. | datasets + model |
 | `crop_game.py` ⚙️🔁 | crop the 16:9 canvas out of non-fullscreen captures (browser chrome / pillarbox). | `captures/intermediate/derived/<name>_16x9/` |
 | `deletterbox_frames.py` ⚙️🔁 | remove black bars from non-16:9 windows, resize back to 1920×1080 (fixes the **data**, not the pipeline). | `captures/intermediate/derived/<name>_fixed/` |
 | `migrate_captures_layout.py` ⚙️ (once) | migrate `captures/` into the role-based layout + rewrite `frames.jsonl` to relative paths (same-volume rename, idempotent). | reorganized `captures/` |
-| `migrate_ai_to_gtrecord.py` ⚙️ (once) | one-time migration of the legacy b64-wire AI captures to the unified `GTRecord` layout (reuses `convert_mjcopilot.convert_game`; dry-run default, idempotent, crash-safe/resumable). | `captures/raw/ai_session/run_N/gameM.jsonl` + `gameM/{liqi.jsonl,frames.jsonl,frames/}` |
+| `migrate_ai_to_gtrecord.py` ⚙️ (once) | one-time migration of the legacy b64-wire AI captures to the unified `GTRecord` layout (reuses `convert_mjcopilot.convert_game`; dry-run default, idempotent, crash-safe/resumable). | `captures/raw/ai_session/run_N/gameM/{gameM.jsonl,liqi.jsonl,frames.jsonl,frames/}` |
+| `migrate_gt_into_gamedir.py` ⚙️ (once) | one-time nesting of the AI GT jsonls into their game dirs (`run_N/gameM.jsonl` → `run_N/gameM/gameM.jsonl`) + rewrite of `datasets/*/games.json` capture paths (dry-run default, idempotent). | nested `captures/raw/` layout |
 
 ## `annotate/` — GT + geometry → labeled boxes (+ calibration)
 

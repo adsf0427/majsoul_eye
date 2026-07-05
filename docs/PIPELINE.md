@@ -4,18 +4,19 @@
 > 只要影响 采集/标注/建库/训练 任何一环，**必须同步更新本文**（维护规约见 §8）。
 > 历史沿革与实测结论见 [STATUS.md](STATUS.md)；设计论证见 [DESIGN.md](DESIGN.md)。
 >
-> 最后更新：2026-07-04（采集统一 AI 路线；`intermediate/gt` 退役；run_13/14 补建；
-> **数据集版本化**：`build_datasets.py` 构建自包含 `datasets/<name>/`，训练可吃多版本；
-> `rebuild_datasets.py` 弃用）。
+> 最后更新：2026-07-05（**GT jsonl 归入对局目录**：`run_N/gameM.jsonl` → `run_N/gameM/gameM.jsonl`，
+> 每局目录自包含；旧"同名兄弟"形态仅作 legacy 兼容读取；迁移脚本
+> `migrate_gt_into_gamedir.py` 已对 captures + datasets/*/games.json 执行）。
+> 前次：2026-07-04（采集统一 AI 路线；`intermediate/gt` 退役；数据集版本化 `build_datasets.py`）。
 
 ## 0. 一图流
 
 ```
 【采集 · 唯一主路径】  scripts/capture/autoplay_ai.py --live [--auto-next] [--overlay]
    (auto 环境: Playwright WS tap + Mortal 决策 + 截图-on-quiet, 实时内联写统一 GTRecord)
-   → captures/raw/ai_session/run_N/gameM.jsonl                 ← GTRecord (GT 真源)
-   → captures/raw/ai_session/run_N/gameM/{frames/*.png, frames.jsonl,
-                                          liqi.jsonl(线流备份), metadata.json(语言)}
+   → captures/raw/ai_session/run_N/gameM/                      ← 每局一个自包含目录
+        {gameM.jsonl ← GTRecord (GT 真源), frames/*.png, frames.jsonl,
+         liqi.jsonl(线流备份), metadata.json(语言)}
         │
         ▼
 【构建 · 一条命令】  scripts/data/build_datasets.py <name> [--sources 根目录...] [--resume|--force]
@@ -48,7 +49,7 @@
 
 | 路径 | 角色 | 可再生? |
 |---|---|---|
-| `captures/raw/ai_session/run_N/` | **原始 GT + 帧（主采集路径产物）**：`gameM.jsonl` = GTRecord；`gameM/` = 帧目录 | ❌ 不可再生，唯一需备份的数据 |
+| `captures/raw/ai_session/run_N/` | **原始 GT + 帧（主采集路径产物）**：每局一个自包含目录 `gameM/`，内含 `gameM.jsonl`（GTRecord）+ 帧/线流/元数据 | ❌ 不可再生，唯一需备份的数据 |
 | `captures/raw/manual/session5,6*` | 手动 F11 局（record_gt 产物，**采集方式已过时**；数据保留，仍进训练集） | ❌ 冻结存档 |
 | `captures/intermediate/derived/` | 修复帧（去黑边 `*_fixed`、裁 16:9）——仅历史遗留局需要 | ✅ 由 raw 重建 |
 | `captures/legacy/` | 归档的逐字节重复（ai_g*/ai_r1） | — 可删 |
@@ -60,7 +61,8 @@
 
 规则：
 - `frames.jsonl` 的 `file` 一律**相对路径**，读取永远经 `paths.resolve_frame_path`；
-  帧目录与 GT 的耦合是 `X.jsonl ↔ X/`（`paths.frames_dir_for`），不要自己重推。
+  帧目录与 GT 的耦合规则只定义在 `paths.frames_dir_for` / `paths.capture_for_frames_dir`：
+  **嵌套（现行）** `X/X.jsonl ↔ X/`，兄弟（legacy，manual 会话仍用）`X.jsonl ↔ X/`——不要自己重推。
 - **数据集/标注/装配全部是衍生物**（gitignored）：标注代码一变，它们就"过期"，用
   `build_datasets.py <name> --force`（或建新版本）重建，不要手工修补/移动——v1 的搬家就击穿过
   detector split 的相对路径（STATUS §1.22）。
@@ -69,9 +71,12 @@
 
 ### 采集（唯一主路径 = AI 自动）
 - `autoplay_ai.py`：单 `auto` 环境。Playwright 抓 liqi WS + Mortal 决策点击 + 事件安静截图，
-  **边打边写统一 GTRecord**（与旧手动格式同构，无任何转换步骤）。默认 dry-run，确认后 `--live`；
-  `--auto-next` 结算续局循环；`--overlay`（连续）/`--overlay-manual --overlay-key`（按键单帧）
-  浏览器内画检测框（验证用）；`--skins` 经 MajsoulMax MITM 换肤/牌背/桌布（训练外观多样性）；小号。
+  **边打边写统一 GTRecord**（与旧手动格式同构，无任何转换步骤）。默认 **OBSERVE**（记录 AI 决策、
+  不点击），确认后 `--live` 真打；`--dry-run` 正交，只观察/试跑而**不落任何盘**（run/game 目录、
+  截图、GT/wire/index/metadata 全不写，settings 进临时目录退出即删）——冒烟测试浏览器/tap/AI 链路用，
+  可与 `--live` 组合以走完整实弹流程而不存数据。`--auto-next` 结算续局循环；`--overlay`（连续）/
+  `--overlay-manual --overlay-key`（按键单帧）浏览器内画检测框（验证用）；`--skins` 经 MajsoulMax
+  MITM 换肤/牌背/桌布（训练外观多样性）；小号。
 - 采集期已内建两类脏帧规避：发牌动画不 arm 截图（ActionMJStart/NewRound）、ROI 稳定确认
   （`capture/roi_diff.py`，防弃牌动画遮挡，实测残留 ~0.4%）。
 - 每局写 `metadata.json`（显示语言 BCP-47，`--lang` > localStorage 探测 > 服务器粗判）。
@@ -117,7 +122,8 @@ $env:PYTHONPATH = "."        # bash: export PYTHONPATH=.
 python scripts/data/build_datasets.py v1 --sources captures/raw/ai_session captures/raw/manual --resume
 # B) 建全新版本（标注代码变更后 / 要干净快照时）：
 python scripts/data/build_datasets.py v2                       # 默认 sources = captures/raw/ai_session
-# （--force 清空重建同名版本；--dry-run 干跑；机器好加 --workers 16 --jobs 12）
+# （--force 清空重建同名版本；--dry-run 干跑；机器好加 -j 12 一把统管两阶段并行，
+#   或分开写 --workers 16 --jobs 12 分别调标注/建库）
 # C) GPU 训练（可吃多个版本；确切命令 build_datasets 收尾已打印）
 python scripts/train/train_classifier.py --dataset datasets/v1 --val "ai_run_8_game1:*" --epochs 20
 python scripts/train/train_detector.py --data datasets/v1/detector/data.yaml
@@ -134,8 +140,9 @@ python scripts/train/train_detector.py --data datasets/v1/detector/data.yaml
 | `scripts/capture/record_gt.py`（+ akagi 环境、Akagi MITM） | **过时的采集方式**。新数据一律 autoplay_ai；脚本保留仅为存档 |
 | `scripts/data/convert_mjcopilot.py` | 降级为**共享转换库**（`convert_game` 被迁移器复用）；不再是管线一环。可独立 CLI 处理任何遗留 b64 线流 |
 | `scripts/data/ingest_run.py` | 遗留便捷入口（发现→建库）。用 §3 的 build_datasets 代替 |
-| `scripts/data/migrate_ai_to_gtrecord.py` | 一次性迁移（18 局 b64 → GTRecord），**已完成**（2026-07-04）。仅新发现遗留线流时再用 |
+| `scripts/data/migrate_ai_to_gtrecord.py` | 一次性迁移（18 局 b64 → GTRecord），**已完成**（2026-07-04）。仅新发现遗留线流时再用（现产出嵌套布局） |
 | `scripts/data/migrate_captures_layout.py` | 一次性布局迁移，已完成（2026-07-02） |
+| `scripts/data/migrate_gt_into_gamedir.py` | 一次性布局迁移（GT jsonl 归入对局目录 + 改写 `datasets/*/games.json`），**已完成**（2026-07-05）。幂等，dry-run 默认 |
 | `scripts/data/purge_deal_frames.py` / `apply_deal_purge.py` / `purge_occlusion_frames.py` | 针对旧数据集的一次性清洗；现由采集期规避 + 建库期丢弃取代。全量重建后无需再跑 |
 | `scripts/data/crop_game.py` / `deletterbox_frames.py` | 仅历史遗留局的帧修复（session5 非全屏 / run_5 信箱）。新采集全屏 1080p 用不到 |
 | `scripts/annotate/spike_topdown.py` | 已归档的可视化 spike，不承重 |

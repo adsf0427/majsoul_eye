@@ -1,7 +1,7 @@
 """One-time migration: legacy b64 AI captures -> unified GTRecord layout (DEV-ONLY).
 
 Old (b64):  run_N/gameM/frames.jsonl (wire) + run_N/gameM/frames/*.png
-New:        run_N/gameM.jsonl        (GTRecord: raw_liqi + mjai)
+New:        run_N/gameM/gameM.jsonl  (GTRecord: raw_liqi + mjai — nested in the game dir)
             run_N/gameM/liqi.jsonl    (raw wire, renamed from frames.jsonl)
             run_N/gameM/frames.jsonl  (screenshot index {seq,file,status})
             run_N/gameM/frames/*.png  (unchanged)
@@ -61,10 +61,9 @@ def plan_targets(game_dir: str) -> dict:
     parent = parts[-2]
     if game.startswith("game"):
         name = f"ai_{parent}_{game}"                 # run_N/gameM -> ai_run_N_gameM
-        gt_path = os.path.join(os.path.dirname(game_dir), f"{game}.jsonl")
     else:
         name = f"ai_{game}"                          # run_1 (single-game) -> ai_run_1
-        gt_path = os.path.join(os.path.dirname(game_dir), f"{game}.jsonl")
+    gt_path = os.path.join(game_dir, f"{game}.jsonl")  # nested: GT INSIDE the game dir
     return {
         "name": name,
         "gt_path": gt_path,

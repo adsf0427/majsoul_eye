@@ -20,7 +20,7 @@ def test_plan_targets_multi_game():
     gd = "captures/raw/ai_session/run_3/game1"
     t = mod.plan_targets(gd)
     assert t["name"] == "ai_run_3_game1"
-    assert t["gt_path"].replace(os.sep, "/").endswith("run_3/game1.jsonl")
+    assert t["gt_path"].replace(os.sep, "/").endswith("run_3/game1/game1.jsonl")
     assert t["wire_dest"].replace(os.sep, "/").endswith("run_3/game1/liqi.jsonl")
     assert t["index_path"].replace(os.sep, "/").endswith("run_3/game1/frames.jsonl")
 
@@ -30,7 +30,7 @@ def test_plan_targets_single_game_run():
     gd = "captures/raw/ai_session/run_1"
     t = mod.plan_targets(gd)
     assert t["name"] == "ai_run_1"
-    assert t["gt_path"].replace(os.sep, "/").endswith("ai_session/run_1.jsonl")
+    assert t["gt_path"].replace(os.sep, "/").endswith("run_1/run_1.jsonl")
     assert t["wire_dest"].replace(os.sep, "/").endswith("run_1/liqi.jsonl")
 
 
@@ -44,7 +44,7 @@ def test_is_migrated_needs_all_three_outputs():
         assert mod.is_migrated(gd) is False
         # partial: wire renamed + GTRecord written, but index (frames.jsonl) missing -> NOT migrated
         os.rename(os.path.join(gd, "frames.jsonl"), os.path.join(gd, "liqi.jsonl"))
-        open(os.path.join(d, "run_3", "game1.jsonl"), "w").close()
+        open(os.path.join(gd, "game1.jsonl"), "w").close()
         assert mod.is_migrated(gd) is False
         # complete: index written too -> migrated
         open(os.path.join(gd, "frames.jsonl"), "w").close()
@@ -124,7 +124,7 @@ def test_migrate_one_resumed_window():
         gd = os.path.join(d, "run_4", "game1")
         os.makedirs(os.path.join(gd, "frames"))
         open(os.path.join(gd, "liqi.jsonl"), "w").close()            # wire already renamed
-        open(os.path.join(d, "run_4", "game1.jsonl"), "w").close()   # partial gt_path
+        open(os.path.join(gd, "game1.jsonl"), "w").close()           # partial gt_path (nested)
         open(os.path.join(gd, "frames", "000002.png"), "w").close()
         assert mod.is_migrated(gd) is False                          # index missing
 

@@ -11,7 +11,7 @@ deal-window seqs, and removes their classifier crops (``crops/<tile>/<seq>_*.png
 rewrites every ``datasets/detector*/{train,val}.txt`` to drop image lines whose file
 no longer exists (so the assembled detector split stays valid).
 
-Capture resolution: ``precise_<name>`` -> ``captures/raw/ai_session/run_N/gameM.jsonl``
+Capture resolution: ``precise_<name>`` -> ``captures/raw/ai_session/run_N/gameM/gameM.jsonl``
 (AI games, via ``paths.ai_captures``) or ``captures/raw/manual/<name>.jsonl`` (manual sessions).
 
 Dry-run by DEFAULT (prints what it WOULD delete); pass ``--apply`` to delete.

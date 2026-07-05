@@ -14,8 +14,8 @@ Seat mapping (screen pos from hero): ai_run_3_game1 hero=3 → self3/right0/acro
 from __future__ import annotations
 
 _AI = "captures/raw/ai_session"
-_G1 = f"{_AI}/run_3/game1.jsonl"      # was ai_run_3_game1 (hero=3)
-_G3 = f"{_AI}/run_3/game3.jsonl"      # was ai_run_3_game3 (hero=1)
+_G1 = f"{_AI}/run_3/game1/game1.jsonl"      # was ai_run_3_game1 (hero=3)
+_G3 = f"{_AI}/run_3/game3/game3.jsonl"      # was ai_run_3_game3 (hero=1)
 
 CASES: dict[str, dict] = {
     "rivers_full":     {"capture": _G1, "seq": 1458, "note": "rivers[13,12,12,13] + melds s0/s1/s2"},
