@@ -139,51 +139,43 @@ RIVER_ZONES: dict[str, NormBox] = {k: px_box(*v) for k, v in RIVER_ZONES_PX.item
 # CALIBRATED (Task 6 of the HUD plan) against real run_3/run_4/run_5/run_8
 # ai_session frames (scripts/inspect/overlay_hud.py) — every box below was found
 # by scanning per-row/per-column ink-brightness (`gray>=INK_THRESH`) profiles
-# inside the center diamond + top-left panel, not eyeballed. Two seeds from the
-# Task-5 seed guess were WRONG (not just loose) and had to move to a different
-# glyph entirely:
-#   - "round_label"/"wall_count" were swapped one row too high: the old
-#     round_label box (y350-385) actually framed score_across's upside-down
-#     digits, and the old wall_count box (y385-415) framed round_label's own
-#     東N局 text. wall_count (余NN) is a further row down (y422-455).
-#   - "seat_wind_self" pointed at empty panel chrome; the real corner wind tag
-#     is BELOW the diamond (y488-540, near score_self), not beside score_left.
-#     Verified via an E3 frame where hero is oya (seat_wind_self='E'): this box
-#     turns solid red exactly like the other seats' oya-highlighted corner tags,
-#     while the neighboring top-left corner tag (some other seat, out of scope —
-#     HUD_NAMES has no seat_wind_left/across/right) does NOT.
-# A SECOND calibration pass (still Task 6, after the first landed) found every
-# numeric seed still touching a bright non-glyph neighbor on >=1 side, verified
-# by re-running ink_snap and checking whether the *raw* (pre-pad) ink bbox sits
-# within 1-2px of the seed edge across dozens of frames/games (a coincidental
-# pad-only touch is fine; a raw-ink touch means real contamination bleeding the
-# box open on that side):
-#   - score_self/left/right/across each sit at one vertex of the center diamond,
-#     which has a decorative glint/highlight (a plain glow normally, an ornate
-#     flame/crown motif when the seat is oya) right at that vertex, OUTSIDE the
-#     digits but INSIDE the old seed — score_self's seed reached down into the
-#     glow below the digits (y0/y1 trimmed 460-500 -> 467-497), score_across's
-#     reached up into the glow/crown above them (y0 pushed 325 -> 353),
-#     score_left's reached into the glow at its own vertex (x0 pushed
-#     850 -> 858), score_right's reached into the glow at its vertex (x1 pulled
-#     in 1068 -> 1063).
-#   - riichi_stick_count/honba_count reached down into the panel's own bottom
-#     trim (a bright ~3px border, full seed width, right above y=180) — trimmed
-#     y1 185 -> 175 for both. honba_count *also* reached right into the panel's
-#     slanted bottom-right corner cut (measured creep-start as far left as
-#     x=302 at the bottom sampled row) — trimmed x1 318 -> 300. Both also
-#     reached left into their own icon glyph (the riichi-stick/honba-dice icon
-#     to the left of "x N" is itself a bright white glyph, not glow) — x0 pulled
-#     in a further 3px (88->85, 225->222) to land in the clean gap between icon
-#     and text instead of flush against the text's own left edge.
-#   - wall_count reached up into round_label's own descender bleed (y0 pushed
-#     422 -> 427) and right into the panel's corner bezel highlight, a smaller
-#     analog of honba_count's corner-cut problem (x1 pulled in 1010 -> 952).
-# score_left/right also had 300%+ contamination risk from the Task-5 pass: their
-# seed height reached up into an unrelated corner wind-tag badge, and
-# score_right's width reached into a same-row bright blob (a per-seat decorative
-# hand/tile graphic that can render beside the score) — both trimmed to the
-# actual digit column measured via cv2.connectedComponentsWithStats.
+# inside the center diamond + top-left panel, not eyeballed. All 9 fields moved
+# from their initial Task-5 seed guess; two major wrong-glyph relocations:
+#   - "round_label" was one row TOO HIGH (y350-385 framed score_across's
+#     upside-down digits, not 東N局). RELOCATED to y384-414 (below
+#     score_across, above wall_count).
+#   - "seat_wind_self" pointed at EMPTY PANEL CHROME beside score_left. RELOCATED
+#     to y488-540 (below the score-diamond, beside score_self, where the
+#     corner wind tag actually is). Verified via an E3 frame where hero is
+#     oya (seat_wind_self='E'): this box turns solid red exactly like the
+#     other seats' oya-highlighted corner tags.
+# All 9 seeds were then calibrated pixel-tight against the center diamond's
+# decorative glint/highlight and the top-left panel's borders by scanning ink
+# with cv2.connectedComponentsWithStats, stripping non-glyph neighbors (verified
+# across ~30 frames per session, run_3 x4 games / run_4 / run_5 game1 / run_7 /
+# run_8 x6 games / run_13 / run_14):
+#   - score_self (900,460,1020,500) → (900,467,1020,497): y0/y1 trimmed clear
+#     of the diamond-vertex glow below the digits.
+#   - score_right (1040,330,1085,460) → (1028,385,1063,462): major relocation:
+#     old y-range (330-460) spanned two unrelated HUD elements; new y-range
+#     (385-462) matches the actual 下家 digit column's vertical span; x0/x1
+#     trimmed clear of glow.
+#   - score_across (900,295,1020,335) → (895,353,1030,383): relocated down
+#     (y0 295→353) into the actual upside-down digit column; x0 pushed inward
+#     (900→895), x1 widened (1020→1030) to include all digits w/ margin.
+#   - score_left (835,330,880,460) → (858,385,900,462): major relocation to
+#     actual 上家 digit column (y0 330→385, aligning with score_right); x0/x1
+#     trimmed clear of the glow at the diamond's left vertex.
+#   - wall_count (925,385,995,415) → (910,427,952,455): RELOCATED one row down
+#     (y0 385→427, y1 415→455) into round_label's old row; x0 pushed inward
+#     (925→910), x1 pulled in tight (995→952) clear of the panel's corner
+#     bezel highlight.
+#   - riichi_stick_count (95,135,175,185) → (85,135,178,175): x0 pulled in
+#     tight (95→85) from the icon's edge; y1 trimmed (185→175) clear of the
+#     panel's bottom trim.
+#   - honba_count (235,135,315,185) → (222,135,300,175): x0 pulled in tight
+#     (235→222) from the icon's edge; x1/y1 trimmed (315→300, 185→175) clear
+#     of the panel's bottom-right corner cut.
 #
 # RESIDUAL / KNOWN LIMITATION (documented, not fixed here — see module docstring
 # "2D HUD does not scale... resolution-dependent"): all of the above is verified
