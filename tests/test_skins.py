@@ -12,11 +12,12 @@ from majsoul_eye.capture import skins  # noqa: E402
 
 
 def test_env_and_path_resolution():
-    d = skins.env_dir("majsoulmax")
-    assert d.name == "majsoulmax" and d.parent.name == "envs"    # sibling env of the running interp
-    assert skins.mitmdump_exe("majsoulmax").endswith(os.path.join("majsoulmax", "Scripts", "mitmdump.exe")
-                                                     if os.name == "nt" else os.path.join("majsoulmax", "bin", "mitmdump"))
-    assert skins.env_python("majsoulmax").endswith("python.exe" if os.name == "nt" else "python")
+    d = skins.env_dir("auto")
+    assert d.name == "auto" and d.parent.name == "envs"          # sibling env of the running interp
+    assert skins.mitmdump_exe("auto").endswith(os.path.join("auto", "Scripts", "mitmdump.exe")
+                                                if os.name == "nt" else os.path.join("auto", "bin", "mitmdump"))
+    assert skins.env_python("auto").endswith("python.exe" if os.name == "nt" else "python")
+    assert skins.DEFAULT_ENV == "auto"
     bs = skins.builder_script()
     assert bs.endswith(os.path.join("scripts", "capture", "build_skin_config.py")) and os.path.exists(bs)
 
@@ -114,7 +115,7 @@ def test_autoplay_ai_exposes_skins_flags():
     defaults = {opts[0]: act.default for opts, act in seen.items()}
     assert defaults["--skins"] is False                          # opt-in
     assert defaults["--skins-port"] == 23410
-    assert defaults["--skins-slots"] == "13,7,6,8"
+    assert defaults["--skins-slots"] == "7,6,8"                   # 牌面(13) excluded by default
 
 
 def test_patcher_roundtrip():
@@ -146,6 +147,97 @@ def test_patcher_roundtrip():
         assert P.ensure_patched(d) is True
         assert open(mp, encoding="utf-8").read() == cur          # apply reproduces the patched file
         assert P.ensure_patched(d) is False                      # idempotent
+
+
+def test_patcher_protobuf7():
+    """MajsoulMax's addon must not use the protobuf<4 `including_default_value_fields` kwarg —
+    under a modern protobuf it throws on every parse (no unlock). ensure_protobuf7 must leave none
+    and be idempotent. Skipped if MajsoulMax isn't checked out locally."""
+    import importlib.util
+    here = os.path.dirname(__file__)
+    mjmax = os.path.join(here, "..", "_external", "MajsoulMax")
+    if not os.path.exists(os.path.join(mjmax, "liqi_new.py")):
+        print("  (skip test_patcher_protobuf7: _external/MajsoulMax absent)")
+        return
+    p_path = os.path.join(here, "..", "scripts", "capture", "patch_majsoulmax.py")
+    spec = importlib.util.spec_from_file_location("patch_majsoulmax_pb7", p_path)
+    P = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(P)
+    P.ensure_protobuf7(mjmax)                                   # make sure it's applied
+    assert P.ensure_protobuf7(mjmax) == []                     # idempotent: second call changes nothing
+    for rel in P.PROTOBUF7_FILES:
+        f = os.path.join(mjmax, rel)
+        if os.path.exists(f):
+            with open(f, encoding="utf-8") as fh:
+                assert P.OLD_KW not in fh.read(), f"{rel} still uses the removed protobuf kwarg"
+
+
+def test_patcher_res_framing():
+    """mod.py's modified-message write-back must preserve the EMPTY method_name block (0a 00).
+    BaseMessage is proto3, so a plain SerializeToString of a rewritten RES silently DROPS field 1
+    (empty string, no presence) — but Majsoul's native frames always carry it, and downstream
+    POSITIONAL parsers (MahjongCopilot liqi.py:157, i.e. our autoplay tap) assert on it. mod.py
+    rewrites the authGame RES unconditionally, so without this patch --skins drops authGame in the
+    tap -> GameState keeps self.seat=0 -> Mortal never reacts (the 2026-07-05 autoplay-dead bug).
+    Skipped if MajsoulMax isn't checked out locally."""
+    import importlib.util
+    import sys
+    here = os.path.dirname(__file__)
+    mjmax = os.path.abspath(os.path.join(here, "..", "_external", "MajsoulMax"))
+    if not os.path.exists(os.path.join(mjmax, "plugin", "mod.py")):
+        print("  (skip test_patcher_res_framing: _external/MajsoulMax absent)")
+        return
+    p_path = os.path.join(here, "..", "scripts", "capture", "patch_majsoulmax.py")
+    spec = importlib.util.spec_from_file_location("patch_majsoulmax_rf", p_path)
+    P = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(P)
+    P.ensure_res_framing(mjmax)                                 # apply if not present
+    assert P.ensure_res_framing(mjmax) is False                # idempotent
+    with open(os.path.join(mjmax, "plugin", "mod.py"), encoding="utf-8") as fh:
+        assert P.RES_FRAMING_MARKER in fh.read()
+
+    # Functional: the framing the patch installs must be byte-identical to Majsoul's native wire.
+    sys.path.insert(0, mjmax)
+    try:
+        try:
+            import liqi_new                                     # noqa: vendored, needs protobuf
+            from proto import basic_pb2
+        except Exception as e:                                  # pragma: no cover - env without protobuf
+            print(f"  (skip res-framing functional check: {type(e).__name__}: {e})")
+            return
+        payload = b"\x08\x01"                                   # arbitrary inner protobuf
+        original = bytes([3, 7, 0]) + liqi_new.toProtobuf(      # RES frame as Majsoul sends it
+            [{"id": 1, "type": "string", "data": b""},
+             {"id": 2, "type": "string", "data": payload}])
+        assert original[3:5] == b"\x0a\x00"                     # empty method_name block present
+        blk = basic_pb2.BaseMessage()
+        blk.ParseFromString(original[3:])
+        assert not blk.SerializeToString().startswith(b"\x0a")  # THE BUG: proto3 drops field 1
+        fixed = original[:3] + liqi_new.toProtobuf(             # what the patched write-back emits
+            [{"id": 1, "type": "string", "data": blk.method_name.encode()},
+             {"id": 2, "type": "string", "data": blk.data}])
+        assert fixed == original                                # byte-identical to native framing
+    finally:
+        sys.path.remove(mjmax)
+
+
+def test_patcher_max_data_idempotent():
+    """ensure_max_data must be idempotent and leave mod.py loading proto/max_data.yaml.
+    Skipped if MajsoulMax isn't checked out locally."""
+    import importlib.util
+    here = os.path.dirname(__file__)
+    mjmax = os.path.join(here, "..", "_external", "MajsoulMax")
+    if not os.path.exists(os.path.join(mjmax, "plugin", "mod.py")):
+        print("  (skip test_patcher_max_data_idempotent: _external/MajsoulMax absent)")
+        return
+    p_path = os.path.join(here, "..", "scripts", "capture", "patch_majsoulmax.py")
+    spec = importlib.util.spec_from_file_location("patch_majsoulmax_md", p_path)
+    P = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(P)
+    P.ensure_max_data(mjmax)                                    # apply if not present
+    assert P.ensure_max_data(mjmax) is False                   # idempotent
+    with open(os.path.join(mjmax, "plugin", "mod.py"), encoding="utf-8") as fh:
+        assert P.MAX_DATA_MARKER in fh.read()
 
 
 if __name__ == "__main__":

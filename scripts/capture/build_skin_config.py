@@ -29,10 +29,13 @@ DECOR_SLOTS = {
     0: "立直棒", 1: "和牌特效", 2: "立直特效", 3: "手", 4: "入场特效", 5: "头像框",
     6: "桌布", 7: "牌背", 8: "场景", 9: "主题BGM", 10: "鸣牌指示", 13: "牌面",
 }
-# Default randomized slots: the ones that change TILE-facing pixels (face/back/table/scene).
-# Transient FX (1/2/4), audio (9) and the 2D HUD frame (5) are excluded by default; slot 5 must
-# never be a random slot anyway (mod.py's authGame reads view['item_id'] for slot 5 -> KeyError).
-DEFAULT_SLOTS = [13, 7, 6, 8]
+# Default randomized slots: background pixels the recognizer must generalize over — 牌背 / 桌布 /
+# 场景. Slot 13 (牌面, the tile FACE) is EXCLUDED by default: it changes the tile symbols themselves,
+# i.e. the recognizer's target, so randomizing it shifts data away from the standard face; opt in
+# with --skins-slots if you want face-style augmentation. Transient FX (1/2/4), audio (9) and the
+# 2D HUD frame (5) are also excluded; slot 5 must never be random anyway (mod.py's authGame reads
+# view['item_id'] for slot 5 -> KeyError).
+DEFAULT_SLOTS = [7, 6, 8]
 FORBIDDEN_SLOTS = {5}
 
 

@@ -106,10 +106,41 @@ def parse_probe_dump(dump):
     return None
 
 
-def write_metadata(game_dir, language):
-    """Write ``<game_dir>/metadata.json`` = ``{"language": language}``. Returns the path.
-    Kept minimal (language only) but JSON so more fields can be added later."""
+def extract_authgame_skins(data):
+    """Pull the ACTUAL per-game skins from a parsed ``.lq.FastTest.authGame`` RES dict (as produced
+    by MahjongCopilot's liqi parser — camelCase keys). Returns
+    ``{"table": {slot: item_id, ...}, "characters": [{account_id, charid, skin, robot}, ...]}``.
+
+    ``table`` = the hero's (``players[0]``) ``views`` decorations — mod.py randomizes only the
+    hero's views, and those render the whole table we capture (牌背=slot 7 / 桌布=6 / 场景=8).
+    ``characters`` = every seat's 立绘 (charid+skin); ``players`` are humans, ``robots`` the AI.
+    Reads the frame AFTER mod.py rewrote it (our WS tap sees what the browser receives), so these
+    are the swapped values actually rendered. Missing/zero fields default to 0."""
+    data = data or {}
+
+    def _seat(p, robot):
+        ch = p.get("character") or {}
+        return {"account_id": p.get("accountId", 0), "charid": ch.get("charid", 0),
+                "skin": ch.get("skin", 0), "robot": robot}
+
+    players_raw = data.get("players") or []
+    characters = [_seat(p, False) for p in players_raw] + \
+                 [_seat(p, True) for p in (data.get("robots") or [])]
+    table = {}
+    if players_raw:
+        for v in (players_raw[0].get("views") or []):
+            if v.get("slot") is not None:
+                table[str(v.get("slot"))] = v.get("itemId", 0)
+    return {"table": table, "characters": characters}
+
+
+def write_metadata(game_dir, language, extra=None):
+    """Write ``<game_dir>/metadata.json`` = ``{"language": language, **extra}``. Returns the path.
+    ``extra`` (e.g. ``{"skins": {...}}``) is merged in for provenance; falsy → language only."""
     path = os.path.join(game_dir, "metadata.json")
+    data = {"language": language}
+    if extra:
+        data.update(extra)
     with open(path, "w", encoding="utf-8") as fh:
-        json.dump({"language": language}, fh, ensure_ascii=False, indent=2)
+        json.dump(data, fh, ensure_ascii=False, indent=2)
     return path

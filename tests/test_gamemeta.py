@@ -71,6 +71,28 @@ def test_parse_probe_dump_conservative():
     assert gm.parse_probe_dump(None) is None
 
 
+def test_extract_authgame_skins():
+    # parsed authGame RES (MahjongCopilot camelCase): hero in players[] with views + skin, AI in robots[].
+    data = {
+        "players": [{"accountId": 123, "avatarId": 400421,
+                     "character": {"charid": 200042, "skin": 400421},
+                     "views": [{"slot": 7, "itemId": 305015}, {"slot": 6, "itemId": 305012},
+                               {"slot": 8, "itemId": 307001}]}],
+        "robots": [{"character": {"charid": 200005, "skin": 400501}},
+                   {"character": {"charid": 200009, "skin": 400901}},
+                   {"accountId": 0, "character": {"charid": 200013, "skin": 401301}}],
+        "seatList": [123, 0, 0, 0],
+    }
+    out = gm.extract_authgame_skins(data)
+    assert out["table"] == {"7": 305015, "6": 305012, "8": 307001}   # hero views = table 牌背/桌布/场景
+    assert out["characters"][0] == {"account_id": 123, "charid": 200042, "skin": 400421, "robot": False}
+    assert [c["charid"] for c in out["characters"]] == [200042, 200005, 200009, 200013]
+    assert [c["robot"] for c in out["characters"]] == [False, True, True, True]
+    # graceful on empties / missing character
+    assert gm.extract_authgame_skins({}) == {"table": {}, "characters": []}
+    assert gm.extract_authgame_skins({"players": [{}]})["characters"][0]["skin"] == 0
+
+
 def test_probe_language_js_is_str():
     js = gm.probe_language_js()
     assert isinstance(js, str)
@@ -84,6 +106,20 @@ def test_write_metadata():
         with open(path, encoding="utf-8") as fh:
             obj = json.load(fh)
         assert obj == {"language": "zh-Hant"}
+
+
+def test_write_metadata_extra():
+    # extra (e.g. skin provenance) is merged alongside language; language stays first / present.
+    with tempfile.TemporaryDirectory() as d:
+        skins = {"enabled": True, "randomize": True, "slots": "7,6,8", "all_seats": False}
+        gm.write_metadata(d, "ja", extra={"skins": skins})
+        with open(os.path.join(d, "metadata.json"), encoding="utf-8") as fh:
+            obj = json.load(fh)
+        assert obj == {"language": "ja", "skins": skins}
+        # falsy extra -> language only (backward compatible)
+        gm.write_metadata(d, "ja", extra=None)
+        with open(os.path.join(d, "metadata.json"), encoding="utf-8") as fh:
+            assert json.load(fh) == {"language": "ja"}
 
 
 def test_autoplay_ai_exposes_lang_flag():

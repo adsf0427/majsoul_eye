@@ -19,13 +19,49 @@ from. Skins change *pixels*, not *which tile / who discarded*. (Verify — see R
 
 ## One-time setup
 
-1. **Isolated env** (MajsoulMax needs `protobuf==3.20.1` + `mitmproxy`, incompatible with our
-   capture env — hence a subprocess in its own env):
+1. **Add mitmproxy to `auto`** (one-time) — the mitmdump subprocess runs in the project's `auto`
+   env:
    ```
-   conda create -n majsoulmax python=3.11 -y
-   conda run -n majsoulmax pip install --no-cache-dir "mitmproxy>=10,<11" "protobuf==3.20.1" requests ruamel.yaml loguru
+   conda run -n auto pip install --no-cache-dir mitmproxy loguru requests ruamel.yaml
    ```
-2. **Trust the CA** — done automatically on first `--skins` run: `SkinProxy` points MajsoulMax's
+   This installs mitmproxy 12 and, because every mitmproxy release caps `cryptography` below
+   `auto`'s former 49, downgrades `cryptography` to 48 — verified harmless (torch 2.11+cu128 /
+   ultralytics / cv2 / numpy all still import & run, CUDA OK). MajsoulMax's protos run under
+   `auto`'s protobuf 7 (its `==3.20.1` pin isn't needed at runtime). Default `--skins-env auto`;
+   override for any other env that has mitmproxy.
+2. **protobuf-7 compat (THE root cause of "unlock doesn't work")** — MajsoulMax was written for
+   `protobuf==3.20.1` and calls `MessageToDict(..., including_default_value_fields=True)`, a kwarg
+   **removed in protobuf 5+**. Under `auto`'s protobuf 7 it throws on *every* message parse, so
+   `res_type` never populates and every unlock response fails the pairing assert → **unlock
+   silently no-ops** (parses fine offline; only breaks on live traffic). `SkinProxy` auto-applies
+   the rename (`→ always_print_fields_with_no_presence`) to `liqi_new.py`/`mod.py` on every launch
+   via `scripts/capture/patch_majsoulmax.py::ensure_protobuf7`. (This — not the liqi version — was
+   the real bug; verified by replaying the failed session's 34 messages: 0→34 parse OK after the
+   rename.)
+3. **Current liqi protocol** — MajsoulMax ships a stale liqi (`v0.11.219.w`); `SkinProxy` also
+   bakes the current files (`liqi.json/.proto/liqi_pb2.py/lqc.lqbin`) from
+   **`_external/autoliqi-asserts/`** into `MajsoulMax/proto/` each launch for max method coverage.
+   MajsoulMax is deprecated (Majsoul web → Unity WebGL); maintained sources are **AutoLiqi**
+   (protocol) + **MajsoulData** (`max_data.yaml` catalog, extracted from the WebGL client). When
+   Majsoul updates and parsing breaks, re-run AutoLiqi and refresh `_external/autoliqi-asserts/`.
+   (Fallback: `offline=False` uses MajsoulMax's deprecated GitHub auto-update.)
+4. **Full unlock catalog** — `load_lqc_lqbin` parses only 488 skins from the WebGL-era `lqc.lqbin`;
+   MajsoulData's `max_data.yaml` has the complete **494**. `SkinProxy` copies
+   **`_external/MajsoulData-asserts/max_data.yaml`** → `proto/max_data.yaml` and
+   `patch_majsoulmax::ensure_max_data` makes mod.py override its parsed catalog with it, so *all*
+   skins/titles/装扮 unlock. Refresh that file (re-run MajsoulData) when new skins ship.
+5. **RES framing (THE root cause of "--skins kills autoplay")** — `BaseMessage` is proto3, so
+   mod.py's write-back for a *modified* non-Notify frame (`buf[:3] + msg_block.SerializeToString()`)
+   drops the **empty `method_name` field** that every native Majsoul RES carries (`0a 00` on the
+   wire). The browser tolerates it, but the autoplay tap parses frames with MahjongCopilot's
+   positional `liqi.py`, which asserts block[0] is the (empty) method name — so the
+   always-rewritten `authGame` RES was dropped (`parse err: AssertionError`), GameState never
+   learned the hero seat (`self.seat` stuck at its default 0; log: `operation seat N !=
+   self.seat 0`) and Mortal never acted. `SkinProxy` auto-applies
+   `patch_majsoulmax::ensure_res_framing`: the write-back re-frames via `liqi_new.toProtobuf`
+   with both blocks explicit — byte-identical to native framing (verified against real captured
+   frames end-to-end through MahjongCopilot's parser; see `tests/test_skins.py`).
+6. **Trust the CA** — done automatically on first `--skins` run: `SkinProxy` points MajsoulMax's
    `mitmdump` at MahjongCopilot's `mitm_config` confdir and calls MahjongCopilot's
    `install_root_cert` (`certutil -addstore Root`, may prompt UAC once). If you've used
    MahjongCopilot's own MITM before, the cert is already trusted and this is a no-op. If the
@@ -60,16 +96,23 @@ Flags: `--skins-port` (23410), `--skins-env` (majsoulmax), `--skins-dir` (`_exte
 | `majsoul_eye/capture/skins.py` — `SkinProxy` | Runs `mitmdump` in the majsoulmax env (cwd=MajsoulMax), seeds offline config, shares MJC's CA, waits for port+cert, tears the subprocess down. Browser-agnostic; cert-install injected as a callable. |
 | `scripts/capture/autoplay_ai.py` `--skins*` | Builds the `ensure_cert` closure (MJC `common.utils`), enters `SkinProxy`, passes `proxy_str` to the existing `browser.start(...)`, stops it in `finally`. |
 | `scripts/capture/build_skin_config.py` | In-env catalog reader: parses `lqc.lqbin` → `random_character.pool` (every character+skin) + `views` random slots → merges into `settings.mod.yaml`. |
-| `scripts/capture/patch_majsoulmax.py` | Tracked, idempotent patcher for `_external`'s **gitignored** `plugin/mod.py` (adds `random_all_seats`). Auto-applied when `--seats all`; recoverable source of that edit. |
+| `scripts/capture/patch_majsoulmax.py` | Tracked, idempotent patcher for `_external`'s **gitignored** MajsoulMax (protobuf-7 kwarg rename, `max_data.yaml` catalog override, RES framing fix, `random_all_seats`). Auto-applied on every `SkinProxy` launch; recoverable source of those edits. |
+
+With `--skins`, each `game<N>/metadata.json` records — next to `language` — both the config and the
+**actual per-game skins** (parsed from the rewritten `authGame` RES the browser receives):
+`"skins": {"enabled", "randomize", "slots", "all_seats", "table": {slot: item_id …}, "characters":
+[{account_id, charid, skin, robot} × seats]}`. `table` = the hero's view decorations that render
+the whole table (`7`=牌背 `6`=桌布 `8`=场景); `characters` = every seat's 立绘. So you can stratify
+the dataset by the exact tile-back / desktop / scene / portraits each game actually used.
 
 ## Decoration slot reference (`ItemDefinitionItem.type` == view slot)
 
 | slot | kind | count | tile-relevant | randomized by default |
 |-----:|------|------:|:---:|:---:|
-| 13 | 牌面 (tile face) | 3 | ★★★ | ✅ |
-| 7 | 牌背 (tile back) | 56 | ★★★ | ✅ |
-| 6 | 桌布 (desktop) | 68 | ★★ | ✅ |
+| 7 | 牌背 (tile back) | 57 | ★★★ | ✅ |
+| 6 | 桌布 (desktop) | 69 | ★★ | ✅ |
 | 8 | 场景 (scene) | 20 | ★ | ✅ |
+| 13 | 牌面 (tile face) | 3 | ★★★ | ❌ opt-in (changes the recognizer's target) |
 | 3 | 手 (hand/paw) | 23 | ~ | opt-in via `--skins-slots` |
 | 0 | 立直棒 | 60 | ~ | opt-in |
 | 5 | 头像框 | 87 | ✗ (HUD) | never (breaks mod.py's slot-5 read) |
