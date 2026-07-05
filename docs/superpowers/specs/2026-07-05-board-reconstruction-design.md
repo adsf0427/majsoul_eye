@@ -75,7 +75,9 @@ BoardRegion(normalize) ────────┘         (几何反查装配) 
     rivers: list[list[ObservedRiverTile]]   # ×4，屏幕相对位序
     melds: list[list[ObservedMeld]]         # ×4
     dora_markers: list[str]                 # 死墙面板左→右
-    concealed_counts: list[Optional[int]]   # 牌背计数（self 位 None）
+    concealed_counts: list[Optional[int]]   # 牌背计数（self 位 None；对手手牌排离桌面
+                                            # 标定区远，装配首期置 None——纯交叉校验字段，
+                                            # 重建不依赖它）
     reach: list[bool]                       # 由 rivers 的 sideways 推导后固化
     # —— 2D HUD（Optional 槽位，55 类+微读取器落地后填充；本期恒 None）——
     scores: Optional[list[int]] = None      # 相对位序
