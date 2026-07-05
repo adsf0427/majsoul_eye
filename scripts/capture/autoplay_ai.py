@@ -106,8 +106,13 @@ def multishot_window(record) -> bool:
     MULTISHOT_MELD_TYPES) or any pending hero op that puts a button on
     screen (`buttons_for_ops` non-empty). `record` may be None (e.g. no GT
     writer / no mjai derived this tick) — no record means no evidence of a
-    window, so no extra shots."""
+    window, so no extra shots. Syncing records (reconnect replays) are stale
+    data — extras should NOT be scheduled for them."""
     if record is None:
+        return False
+    # Syncing records are reconnect replays (stale state); don't arm extra shots
+    # as they would sample animation from a prior board snapshot.
+    if getattr(record, "syncing", False):
         return False
     if any(ev.get("type") in MULTISHOT_MELD_TYPES for ev in (record.mjai or [])):
         return True
@@ -790,6 +795,9 @@ def main() -> None:
                         last_event_t = time.time()
                         if multishot is not None:
                             multishot.arm(seq, last_event_t, multishot_window(gt_rec))
+                    else:                                        # deal-in animation: cancel any live plan
+                        if multishot is not None:
+                            multishot.cancel()
 
                 if reaction:
                     rtype = reaction.get("type")
@@ -816,6 +824,8 @@ def main() -> None:
                         automation.on_end_game()
                     game_state = None
                     drain_mjai = None
+                    if multishot is not None:
+                        multishot.cancel()    # prevent post-game lobby extras in ended game's frames dir
                     if game_wire_fh is not None:
                         game_wire_fh.close()
                         game_wire_fh = None

@@ -5,13 +5,15 @@ rearm cancellation, window=False plans nothing) plus a pin that
 `gtframes.load_frames` already ignores `"extra"`-status lines for both the
 annotator's default filter and build_dataset's `("ok", "timeout")` filter,
 and that the canonical seq->file mapping is unchanged when extra lines are
-interleaved with canonical ones.
+interleaved with canonical ones. Also tests multishot_window() decision logic
+for meld types, operations, and syncing-record semantics.
 
 Plain-script style: PYTHONPATH=. <auto-python> tests/test_multishot.py
 (also pytest-compatible).
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import tempfile
@@ -171,6 +173,179 @@ def test_load_frames_canonical_mapping_unchanged_by_interleaved_extras():
         interleaved = load_frames(d)
         assert interleaved == baseline
         assert set(interleaved) == {1, 2, 3}
+
+
+# --- multishot_window: test the decision logic ---------------------------
+
+def _load_autoplay():
+    """Load autoplay_ai as a module to access multishot_window and related funcs."""
+    path = os.path.join(os.path.dirname(__file__), "..", "scripts", "capture", "autoplay_ai.py")
+    spec = importlib.util.spec_from_file_location("autoplay_ai_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _MockRecord:
+    """Minimal GTRecord-like object for testing."""
+    def __init__(self, mjai=None, raw_liqi=None, syncing=False, seat=0):
+        self.mjai = mjai
+        self.raw_liqi = raw_liqi
+        self.syncing = syncing
+        self.seat = seat
+
+
+def test_multishot_window_none_record():
+    """None record (no GT) → False."""
+    mod = _load_autoplay()
+    assert mod.multishot_window(None) is False
+
+
+def test_multishot_window_mjai_meld_types():
+    """Record with mjai containing meld types (pon, chi, etc.) → True."""
+    mod = _load_autoplay()
+    rec = _MockRecord(mjai=[{"type": "pon", "tile": "5m"}])
+    assert mod.multishot_window(rec) is True
+
+    rec = _MockRecord(mjai=[{"type": "chi", "tiles": ["1m", "2m", "3m"]}])
+    assert mod.multishot_window(rec) is True
+
+    rec = _MockRecord(mjai=[{"type": "daiminkan", "tile": "5p"}])
+    assert mod.multishot_window(rec) is True
+
+    rec = _MockRecord(mjai=[{"type": "ankan", "tile": "2s"}])
+    assert mod.multishot_window(rec) is True
+
+    rec = _MockRecord(mjai=[{"type": "kakan", "tile": "6m"}])
+    assert mod.multishot_window(rec) is True
+
+    rec = _MockRecord(mjai=[{"type": "nukidora"}])
+    assert mod.multishot_window(rec) is True
+
+
+def test_multishot_window_dahai_only_no_buttons():
+    """Record with only dahai (no meld) and no button-offering operation → False."""
+    mod = _load_autoplay()
+    # dahai with no operation
+    rec = _MockRecord(
+        mjai=[{"type": "dahai", "pai": "5m"}],
+        raw_liqi={"data": {"data": {"operation": None}}}
+    )
+    assert mod.multishot_window(rec) is False
+
+
+def test_multishot_window_operation_type_1_dahai():
+    """Record with operation type 1 (dahai, no button) → False."""
+    mod = _load_autoplay()
+    rec = _MockRecord(
+        mjai=[{"type": "dahai", "pai": "5m"}],
+        raw_liqi={
+            "data": {"data": {"operation": {
+                "seat": 0,
+                "operationList": [{"type": 1}]
+            }}}
+        },
+        seat=0
+    )
+    assert mod.multishot_window(rec) is False
+
+
+def test_multishot_window_operation_type_9_ron():
+    """Record with operation type 9 (ron, has button) → True."""
+    mod = _load_autoplay()
+    rec = _MockRecord(
+        mjai=[{"type": "dahai", "pai": "5m"}],
+        raw_liqi={
+            "data": {"data": {"operation": {
+                "seat": 0,
+                "operationList": [{"type": 9}]
+            }}}
+        },
+        seat=0
+    )
+    assert mod.multishot_window(rec) is True
+
+
+def test_multishot_window_operation_mixed_types():
+    """Record with mixed operation types (some have buttons) → True."""
+    mod = _load_autoplay()
+    # Types 1 and 9: dahai + ron; ron is button-worthy
+    rec = _MockRecord(
+        mjai=[{"type": "dahai", "pai": "5m"}],
+        raw_liqi={
+            "data": {"data": {"operation": {
+                "seat": 0,
+                "operationList": [{"type": 1}, {"type": 9}]
+            }}}
+        },
+        seat=0
+    )
+    assert mod.multishot_window(rec) is True
+
+
+def test_multishot_window_syncing_record_with_meld():
+    """Syncing records (reconnect replays) should NOT arm extra shots, even with meld."""
+    mod = _load_autoplay()
+    # Syncing record with a meld event: should return False (stale data, no shot)
+    rec = _MockRecord(
+        mjai=[{"type": "pon", "tile": "5m"}],
+        syncing=True
+    )
+    assert mod.multishot_window(rec) is False
+
+
+def test_multishot_window_syncing_record_with_operation():
+    """Syncing records block extra shots even if there's a button operation."""
+    mod = _load_autoplay()
+    rec = _MockRecord(
+        mjai=[{"type": "dahai", "pai": "5m"}],
+        raw_liqi={
+            "data": {"data": {"operation": {
+                "seat": 0,
+                "operationList": [{"type": 9}]  # ron button
+            }}}
+        },
+        syncing=True,
+        seat=0
+    )
+    assert mod.multishot_window(rec) is False
+
+
+def test_multishot_window_empty_mjai_no_operation():
+    """Record with empty mjai and no operation → False."""
+    mod = _load_autoplay()
+    rec = _MockRecord(mjai=[], raw_liqi={"data": {"data": {}}})
+    assert mod.multishot_window(rec) is False
+
+
+def test_multishot_window_no_mjai():
+    """Record with None mjai and no operation → False."""
+    mod = _load_autoplay()
+    rec = _MockRecord(mjai=None, raw_liqi={"data": {"data": {}}})
+    assert mod.multishot_window(rec) is False
+
+
+def test_multishot_cancel_method():
+    """Test the explicit cancel() method."""
+    ms = MultiShot(offsets=(0.6, 1.2))
+    ms.arm(1, 100.0, True)
+    # Verify it was armed
+    assert ms.due(100.6) == [(1, 600)]
+    # Re-arm and cancel explicitly
+    ms.arm(2, 101.0, True)
+    ms.cancel()
+    # Should fire nothing
+    assert ms.due(200.0) == []
+
+
+def test_multishot_sorted_offsets():
+    """Test that offsets are sorted ascending at init."""
+    # Provide offsets out of order
+    ms = MultiShot(offsets=(2.4, 0.6, 1.2))
+    ms.arm(1, 0.0, True)
+    # due() should return in ascending order
+    result = ms.due(3.0)
+    assert result == [(1, 600), (1, 1200), (1, 2400)]
 
 
 def _main():

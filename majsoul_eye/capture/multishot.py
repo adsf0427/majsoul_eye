@@ -26,7 +26,7 @@ class MultiShot:
     """
 
     def __init__(self, offsets: tuple[float, ...] = (0.6, 1.2, 2.4)):
-        self._offsets = tuple(offsets)
+        self._offsets = tuple(sorted(offsets))   # sorted ascending, promised by due() docstring
         self._seq: int | None = None
         self._event_t: float = 0.0
         self._pending_ms: list[int] = []   # planned offsets (ms), this seq only, not yet fired
@@ -39,6 +39,12 @@ class MultiShot:
         self._seq = seq
         self._event_t = event_t
         self._pending_ms = [round(o * 1000) for o in self._offsets] if window else []
+
+    def cancel(self) -> None:
+        """Explicitly cancel the current plan (clears pending offsets). Safe to call
+        even if no plan is armed. Use this instead of arm(0, ..., False) for readability
+        when the intent is purely to cancel, not to arm a new seq."""
+        self._pending_ms = []
 
     def due(self, now: float) -> list[tuple[int, int]]:
         """`(seq, planned_ms)` pairs whose offset has elapsed since the armed
