@@ -321,8 +321,8 @@ def is_call_pending(s: BoardState) -> bool:
     seat's "float" tile has no on-screen slot the way hero's own ``drawn_tile``
     does, so it is genuinely un-reconstructable from this single frame. Mirrors
     ``is_deal_window``'s role for the very first turn of a kyoku (found via real
-    capture: ~0.1% of oracle-eval frames, all observed as post-pon — see
-    ``scripts/eval/eval_reconstruction.py``).
+    capture: ~2% of oracle-eval frames — 209/10330, of which 11 were outright
+    infeasible — see ``scripts/eval/eval_reconstruction.py``).
     """
     return s is not None and s.in_round and s.awaiting_discard >= 0
 

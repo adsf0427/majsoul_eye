@@ -133,7 +133,7 @@ def run_engine(cap, states, report, engine_cmd, sample):
         taken += 1
         r = reconstruct(observed_from_board(st))
         if not r.ok:
-            report["fail"] += 1
+            report["engine_fail"] += 1
             continue
         a = ask_engine(engine_cmd, [e for e in truth])
         b = ask_engine(engine_cmd, r.events)
@@ -166,7 +166,8 @@ def main():
 
     total = {"ok": 0, "fail": [], "mismatch": [], "skipped_violations": 0,
              "skipped_call_pending": 0, "frames": 0, "rejected": 0,
-             "zone_errors": {}, "agree": 0, "disagree": [], "engine_error": 0}
+             "zone_errors": {}, "agree": 0, "disagree": [], "engine_error": 0,
+             "engine_fail": 0}
     for cap in caps:
         states = build_seq_state(cap)
         if args.level == "oracle":
@@ -191,7 +192,9 @@ def main():
               f"{total['rejected']} rejected; zone errors: {total['zone_errors']}")
     else:
         print(f"[engine] agree {total['agree']}, "
-              f"disagree {len(total['disagree'])}, errors {total['engine_error']}")
+              f"disagree {len(total['disagree'])}, "
+              f"recon-infeasible {total['engine_fail']}, "
+              f"errors {total['engine_error']}")
         for d in total["disagree"][:10]:
             print("  ", d)
     if args.out:
