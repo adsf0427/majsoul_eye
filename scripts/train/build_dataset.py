@@ -7,13 +7,26 @@ run the precise annotator, and emit — from ONE calibration — both:
                                      + dora; perspective-deskewed 96px face crops)
   <out>/yolo/images/<seq>.png        detector images (the RESIZED 1920x1080 frame)
   <out>/yolo/labels/<seq>.txt        detector labels (YOLO: class cx cy w h, axis-
-                                     aligned bbox of each box's original-px quad)
+                                     aligned bbox of each box's original-px quad;
+                                     classes 0-37 = tiles, 38-54 = HUD — see below)
+  <out>/hud/<field>/<seq>.png        HUD micro-reader crops (15% padded, rotated
+                                     upright per majsoul_eye.hud.FIELD_ROT)
+  <out>/hud/labels.jsonl             one {"file","name","text","pad"} row per crop
 
 Only boxes the annotator marks ``reliable`` are emitted (drops unrendered newest
 discards + low-fill/occluded cells). ``sideways`` tiles (riichi discard, called
 meld tile) still go to YOLO but are EXCLUDED from classifier crops — their upright
 glyph orientation is not recoverable from geometry, so an upright-only crop set
 stays clean (runtime classifies both rotations for these).
+
+HUD fields/buttons (``rec["hud_boxes"]``, from ``annotate_frame`` — see
+``majsoul_eye.hud`` for the 17-class taxonomy) are emitted the same way: reliable
+boxes become extra YOLO lines (classes 38-54); boxes that also carry ``text``
+(numeric/round fields, not buttons) additionally get a padded, upright-rotated
+reader crop under ``hud/``. Score-roll/riichi-stick animation frames
+(``is_score_anim_window``) are skipped for HUD entirely — belt-and-suspenders on
+top of Task 8's per-box ``reliable`` flag. Old (pre-HUD) ``--from-annotations``
+records simply lack ``hud_boxes`` and silently emit no HUD labels/crops.
 
 The precise geometry is calibrated at 1920x1080 fullscreen 16:9; frames are
 resized to that. Non-16:9 / letterboxed frames are skipped with a warning (their
@@ -111,6 +124,46 @@ def hbb_label_line(cls, quad, w, h):
     return f"{cls} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}"
 
 
+def hud_emit(rec, frame, w, h, obb):
+    """Reliable hud_boxes -> (yolo label lines, reader crops). Crops are padded
+    15% per side (jitter headroom for the trainer) and rotated upright per
+    hud.FIELD_ROT; buttons contribute a label line only (class IS the label)."""
+    import cv2
+
+    from majsoul_eye.hud import HUD_NAME_TO_ID, FIELD_ROT
+
+    ROT_CODE = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+                270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+    PAD = 0.15
+    lines, crops = [], []
+    for d in rec.get("hud_boxes", []):
+        if not d.get("reliable", True) or d.get("px_box") is None:
+            continue
+        cls = HUD_NAME_TO_ID.get(d["name"])
+        if cls is None:
+            continue
+        x0, y0, x1, y1 = d["px_box"]
+        quad = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+        lines.append(obb_label_line(cls, quad, w, h) if obb
+                     else hbb_label_line(cls, quad, w, h))
+        text = d.get("text")
+        if text is None or frame is None:
+            # frame is None under --reuse-images (label-only, no pixels loaded) — the
+            # YOLO line above still stands, but there's nothing to crop from.
+            continue
+        px, py = int((x1 - x0) * PAD), int((y1 - y0) * PAD)
+        cy0, cy1 = max(0, y0 - py), min(h, y1 + py)
+        cx0, cx1 = max(0, x0 - px), min(w, x1 + px)
+        crop = frame[cy0:cy1, cx0:cx1]
+        rot = FIELD_ROT.get(d["name"], 0)
+        if rot in ROT_CODE:
+            crop = cv2.rotate(crop, ROT_CODE[rot])
+        rel = f"{d['name']}/{rec.get('_seq', 0):06d}.png"
+        crops.append((rel, crop,
+                      {"file": rel, "name": d["name"], "text": text, "pad": PAD}))
+    return lines, crops
+
+
 def main() -> None:
     # Lightweight (numpy-only) import, needed early for the --occ-tau/--occ-max-bad
     # argparse defaults; the heavier cv2/torch imports stay deferred past parse_args().
@@ -161,7 +214,7 @@ def main() -> None:
 
     from majsoul_eye import paths
     from majsoul_eye.tiles import NAME_TO_ID
-    from majsoul_eye.state.replay import check_invariants, is_deal_window
+    from majsoul_eye.state.replay import check_invariants, is_deal_window, is_score_anim_window
     from majsoul_eye.capture.gtframes import build_seq_state, load_frames
     from majsoul_eye.annotate import build_homographies, annotate_frame, iter_tile_boxes, crop_box
 
@@ -198,6 +251,7 @@ def main() -> None:
 
     n_frames = n_crops = n_yolo = n_skip = n_letterbox = n_deal = 0
     n_occ_box = n_occ_frame = 0
+    hud_meta = []
     occ_clf = None
     if args.occlusion_gate:
         from majsoul_eye.recognize.classifier import TileClassifier
@@ -244,6 +298,7 @@ def main() -> None:
                 h, w = 1080, 1920
 
         rec = recs[seq] if args.from_annotations else annotate_frame(frame, seq_state[seq], hom)
+        rec["_seq"] = seq
 
         reliable = [b for b in iter_tile_boxes(rec) if b.reliable]
         skip = set()
@@ -283,6 +338,21 @@ def main() -> None:
                     cv2.imwrite(os.path.join(cdir, f"{seq:06d}_{ci:03d}.png"), crop)
                     ci += 1
                     n_crops += 1
+
+        # HUD fields/buttons -> 55-class YOLO lines + reader crops (hud/<field>/<seq>.png).
+        # belt-and-suspenders with Task 8's per-box `reliable` flag: is_score_anim_window
+        # tolerates state=None (annotations-reuse path can have seqs with missing state).
+        if not is_score_anim_window(state):
+            hlines, hcrops = hud_emit(rec, frame, w, h, args.obb)
+            if not args.no_yolo:
+                yolo_lines += hlines
+            if not args.no_crops:
+                for rel, crop, meta in hcrops:
+                    p = os.path.join(args.out, "hud", rel)
+                    os.makedirs(os.path.dirname(p), exist_ok=True)
+                    cv2.imwrite(p, crop)
+                    hud_meta.append(meta)
+
         if yolo_lines and not args.no_yolo:
             if frame is not None:                                        # reuse-images: image already on disk (symlinked)
                 cv2.imwrite(os.path.join(img_dir, f"{seq:06d}.png"), frame)   # RESIZED frame
@@ -291,9 +361,16 @@ def main() -> None:
             n_yolo += 1
         n_frames += 1
 
+    if hud_meta:
+        import json
+        with open(os.path.join(args.out, "hud", "labels.jsonl"), "w", encoding="utf-8") as f:
+            for meta in hud_meta:
+                f.write(json.dumps(meta, ensure_ascii=False) + "\n")
+
     print(f"frames labeled: {n_frames}  crops: {n_crops}  yolo-imgs: {n_yolo}  "
           f"skipped: {n_skip}  deal-skipped: {n_deal}  letterbox-skipped: {n_letterbox}  "
-          f"occ-box-skipped: {n_occ_box}  occ-frame-dropped: {n_occ_frame}")
+          f"occ-box-skipped: {n_occ_box}  occ-frame-dropped: {n_occ_frame}  "
+          f"hud-crops: {len(hud_meta)}")
     print(f"dataset -> {args.out}")
 
 
