@@ -88,6 +88,10 @@
   `--frames-dir` 用于 derived 修复帧（run_5 game2/3 信箱局）；`--workers` 默认保守 4（RAM 束）。
 - GT 谓词丢弃发牌窗帧（`replay.is_deal_window`：rivers 全空）；hero 摸牌槽经 `replay.drawn_tile`
   正确标注（14 张自摸态不再漏标）。
+- 牌背（`back`）可靠性门是**去皮肤化**的：`pipeline.tile_live_mask`（饱和度或亮度
+  `(S>60)|(V>110)`，任意肤色都判活）判定 dora/副露反面槽是否已渲染（fill 门），与
+  `tile_back_mask`（纯饱和度 `S>70`，供 `snap_meld_strip` 做吸附阶段的 face/back 几何判别）
+  是两个职责分离的 mask，互不影响（STATUS §1.33）。
 
 ### 建库（build_dataset）
 - **标注步不是必须的**：不给 `--from-annotations` 时 build_dataset 走**自足模式**（内部逐帧
