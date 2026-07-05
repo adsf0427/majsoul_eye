@@ -1665,3 +1665,38 @@ autoplay_ai 主循环每 tick 调 `due(time.time())`，对每项 `screenshot_png
       ops_from_record + 事件集合；主循环 due 落盘）+ 回归 test_autoplay_gt/
       test_autoplay_opdelay/test_autoplay_autonext
 - [ ] Step 4: commit `feat(capture): multi-shot extras + relative dt timestamps for uncertain windows`
+
+---
+
+### Task 16: is_call_window 丢帧谓词（2026-07-06 追加；用户已确认这边做）
+
+鸣牌事件→强制舍牌窗口的帧（约 2%）：GT 已更新（河少一张、副露已加）而画面在放
+动画，帧级排除出数据集构建。模式完全照抄 is_deal_window。事件集合与 T15 的
+MULTISHOT_MELD_TYPES 一致。
+
+**后续（归本分支/本 controller 长期负责，本 task 不做）**：等多拍数据积累后，
+做"最佳帧选择器"——对被丢窗口从 status=extra 的补拍里挑动画完成的一张回填数据集。
+
+**Files:**
+- Modify: `majsoul_eye/state/replay.py`（is_deal_window 旁加 is_call_window）
+- Modify: `scripts/train/build_dataset.py`（deal 跳过旁加 call 跳过 + n_call 统计）
+- Modify: `scripts/annotate/annotate_ai_session.py`（同样镜像 deal 跳过处）
+- Modify: `scripts/inspect/qa_hud.py`（skip 集合加 call，与训练数据卫生一致）
+- Test: `tests/test_call_window.py`
+
+```python
+def is_call_window(state) -> bool:
+    """A call event (chi/pon/kan/nukidora) has arrived but the forced follow-up
+    dahai hasn't: the call animation is mid-flight, so GT leads the pixels
+    (river already shrunk, meld already added) — frame-level drop, same policy
+    as is_deal_window. Recovery from multi-shot extras is a planned follow-up."""
+    return getattr(state, "last_event", None) in (
+        "chi", "pon", "daiminkan", "ankan", "kakan", "nukidora")
+```
+
+- [ ] Step 1: tests/test_call_window.py 失败测试（六种事件 True；dahai/tsumo/None/
+      对象无 last_event False；BoardState 真对象 + 鸭子对象都测）
+- [ ] Step 2: 实现 + 四处接线 → 绿；回归 test_replay/test_hud_frame/test_hud_dataset
+- [ ] Step 3: 在一局真 capture 上跑 build_dataset 冒烟，报告 call-skipped 计数占比
+      （应接近 2% 量级）
+- [ ] Step 4: commit `feat(data): is_call_window frame drop (call->forced-dahai animation window)`
