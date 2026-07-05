@@ -143,6 +143,21 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
         rec["dora_boxes"] = db
     except Exception as e:                       # dora strip is best-effort
         rec["flags"].append(f"dora:error:{e}")
+
+    # HUD fields + action buttons (GT text/ops drive labels; see annotate/hud.py)
+    try:
+        from majsoul_eye.annotate import hud as HUD
+        from majsoul_eye.state.replay import is_score_anim_window
+        region = locate_fullscreen(img)
+        boxes = HUD.hud_field_boxes(img, state, region)
+        if is_score_anim_window(state):
+            for b in boxes:
+                b["reliable"] = False
+            rec["flags"].append("hud:score_anim")
+        rec["hud_boxes"] = boxes + HUD.button_boxes(img, state, region)
+    except Exception as e:                       # HUD is best-effort like dora
+        rec["flags"].append(f"hud:error:{e}")
+        rec["hud_boxes"] = []
     return rec
 
 
@@ -202,3 +217,21 @@ def crop_box(img: np.ndarray, box: AnnBox, size: int = 64) -> np.ndarray:
         return crop_quad(img, box.poly_original, size)
     x1, y1, x2, y2 = box.px_box
     return cv2.resize(img[y1:y2, x1:x2], (size, size))
+
+
+@dataclass
+class HudBox:
+    """One HUD box from an annotate_frame record. `text` is the exact string a
+    micro-reader must output (None for buttons — class IS the label)."""
+    name: str
+    px_box: list
+    text: Optional[str]
+    reliable: bool
+
+
+def iter_hud_boxes(rec: dict) -> Iterator[HudBox]:
+    for d in rec.get("hud_boxes", []):
+        if d.get("px_box") is None:
+            continue
+        yield HudBox(d["name"], list(d["px_box"]), d.get("text"),
+                     bool(d.get("reliable", True)))
