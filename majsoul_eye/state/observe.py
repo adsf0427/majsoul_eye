@@ -112,3 +112,51 @@ def check_observed(o: ObservedState) -> list[str]:
             if m.type == "chi" and m.from_rel != 3:
                 v.append(f"seat {r} chi from_rel {m.from_rel} != 3 (kamicha only)")
     return v
+
+
+WINDS = ["E", "S", "W", "N"]
+
+
+def observed_from_board(state, include_hud: bool = True) -> ObservedState:
+    """Project a replayed BoardState to what the SCREEN shows (eval oracle).
+
+    Relative seats: rel r == abs (hero+r)%4. reach[] is derived from the
+    VISIBLE sideways tile, not state.reach — a riichi whose declaration tile was
+    called away with no later discard is invisible in a single frame, and the
+    projection must be fair to the vision side (known static limitation).
+    Lazy-imports annotate.pipeline for river_sideways_index (keeps this module
+    cv2-free unless projecting).
+    """
+    from majsoul_eye.annotate.pipeline import river_sideways_index
+
+    hero = state.hero_seat
+    o = ObservedState()
+    o.drawn_tile = state.drawn_tile
+    hand = list(state.hero_hand)
+    if state.drawn_tile:
+        if state.drawn_tile in hand:
+            hand.remove(state.drawn_tile)
+        elif red_to_normal(state.drawn_tile) in hand:
+            hand.remove(red_to_normal(state.drawn_tile))
+    o.hero_hand = hand
+    o.dora_markers = list(state.dora_markers)
+    for r in range(4):
+        a = (hero + r) % 4
+        vis = state.visible_river(a)
+        side = river_sideways_index(
+            [{"riichi": t.riichi, "called": t.called} for t in state.rivers[a]])
+        o.rivers[r] = [ObservedRiverTile(t.pai, sideways=(i == side))
+                       for i, t in enumerate(vis)]
+        o.melds[r] = [ObservedMeld(m.type, list(m.tiles), m.called_pai, m.added_pai,
+                                   from_rel=((m.from_seat - a) % 4))
+                      for m in state.melds[a] if m.type != "nukidora"]
+        o.reach[r] = any(t.sideways for t in o.rivers[r])
+        o.concealed_counts[r] = None if r == 0 else state.concealed_counts[a]
+    if include_hud:
+        o.scores = [state.scores[(hero + r) % 4] for r in range(4)]
+        o.bakaze, o.kyoku = state.bakaze, state.kyoku
+        o.honba, o.kyotaku = state.honba, state.kyotaku
+        o.left_tile_count = state.left_tile_count
+        if state.oya >= 0 and hero >= 0:
+            o.seat_wind_self = WINDS[(hero - state.oya) % 4]
+    return o

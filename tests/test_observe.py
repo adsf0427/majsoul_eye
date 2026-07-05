@@ -69,6 +69,66 @@ def test_concealed_counts_cross_check():
     assert check_observed(o2) == []                            # 13 - 3*1 == 10 (or 11 mid-draw)
 
 
+def _played_state():
+    from majsoul_eye.state.replay import Replayer
+    rp = Replayer()
+    for ev in [
+        {"type": "start_game", "id": 1},
+        {"type": "start_kyoku", "bakaze": "E", "dora_marker": "1m", "honba": 1,
+         "kyoku": 2, "kyotaku": 0, "oya": 1,
+         "scores": [25000, 25000, 25000, 25000],
+         "tehais": [["?"] * 13,
+                    ["1m", "2m", "3m", "2p", "2p", "5p", "6p", "7p", "9p", "1s", "2s", "3s", "9s"],
+                    ["?"] * 13, ["?"] * 13]},
+        {"type": "tsumo", "actor": 1, "pai": "4p"},
+        {"type": "dahai", "actor": 1, "pai": "9s", "tsumogiri": False},
+        {"type": "tsumo", "actor": 2, "pai": "?"},
+        {"type": "dahai", "actor": 2, "pai": "2p", "tsumogiri": True},
+        {"type": "pon", "actor": 1, "target": 2, "pai": "2p", "consumed": ["2p", "2p"]},
+        {"type": "dahai", "actor": 1, "pai": "9p", "tsumogiri": False},
+        {"type": "tsumo", "actor": 3, "pai": "?"},
+        {"type": "reach", "actor": 3},
+        {"type": "dahai", "actor": 3, "pai": "W", "tsumogiri": True},
+        {"type": "reach_accepted", "actor": 3},
+        {"type": "tsumo", "actor": 0, "pai": "?"},
+        {"type": "dahai", "actor": 0, "pai": "E", "tsumogiri": True},
+        {"type": "tsumo", "actor": 1, "pai": "8p"},
+    ]:
+        rp.apply(ev)
+    return rp.state
+
+
+def test_projection_relative_seats_and_zones():
+    from majsoul_eye.state.observe import observed_from_board
+    s = _played_state()                       # hero = abs seat 1
+    o = observed_from_board(s)
+    assert check_observed(o) == []
+    # hero (rel 0): river [9s, 9p]; pon from rel target: target abs2 = hero+1 -> from_rel 1
+    assert [t.pai for t in o.rivers[0]] == ["9s", "9p"]
+    assert o.melds[0][0].type == "pon" and o.melds[0][0].from_rel == 1
+    # abs2 = rel1: river had 2p but it was called away -> visible []
+    assert o.rivers[1] == []
+    # abs3 = rel2: riichi discard W is sideways; reach flag on
+    assert [t.pai for t in o.rivers[2]] == ["W"] and o.rivers[2][0].sideways
+    assert o.reach == [False, False, True, False]
+    # abs0 = rel3
+    assert [t.pai for t in o.rivers[3]] == ["E"]
+    # hero hand excludes the fresh 8p draw
+    assert o.drawn_tile == "8p" and "8p" not in o.hero_hand and len(o.hero_hand) == 10
+    # HUD projection (include_hud default True): relative score order
+    # rel order = [abs1, abs2, abs3, abs0]; abs3 paid 1000 for riichi
+    assert o.scores == [25000, 25000, 24000, 25000]
+    assert o.bakaze == "E" and o.kyoku == 2 and o.honba == 1 and o.kyotaku == 1
+    assert o.seat_wind_self == "E"            # hero IS oya (kyoku 2, oya=1=hero)
+
+
+def test_projection_without_hud():
+    from majsoul_eye.state.observe import observed_from_board
+    o = observed_from_board(_played_state(), include_hud=False)
+    assert o.scores is None and o.bakaze is None and o.kyoku is None
+    assert o.dora_markers == ["1m"]           # dora strip is detectable, not an HUD slot
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
