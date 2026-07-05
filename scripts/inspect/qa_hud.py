@@ -2,7 +2,7 @@
 -> assemble_hud, compared field-by-field to the replayed BoardState.
 
 Iterates every 'ok' frame of one capture (skips `is_deal_window` /
-`is_score_anim_window` seqs -- same drop policy build_dataset/annotate_frame use
+`is_score_anim_window` / `is_call_window` seqs -- same drop policy build_dataset/annotate_frame use
 for HUD, see state/replay.py), runs the 55-class tile+HUD detector, keeps only
 the HUD detections (ids 38-54, `hud.DET_NAMES`), assembles them via
 `recognize.hudstate.assemble_hud`, and compares field-by-field against GT
@@ -41,7 +41,7 @@ from majsoul_eye.annotate.hud import field_texts
 from majsoul_eye.capture.gtframes import build_seq_state, load_frames
 from majsoul_eye.hud import NUMERIC_FIELDS, buttons_for_ops
 from majsoul_eye.recognize.hudstate import _to_int, assemble_hud
-from majsoul_eye.state.replay import is_deal_window, is_score_anim_window
+from majsoul_eye.state.replay import is_deal_window, is_score_anim_window, is_call_window
 from majsoul_eye.tiles import NUM_CLASSES
 
 DEFAULT_WEIGHTS = "majsoul_eye/recognize/tile_detector.pt"
@@ -200,7 +200,7 @@ def run(capture: str, frames_dir: str, detector, reader, limit: int | None = Non
     frames = load_frames(frames_dir)
     seqs = sorted(s for s in seq_state if s in frames)
 
-    n_deal = n_score_anim = n_imread_fail = n_eval = 0
+    n_deal = n_score_anim = n_call = n_imread_fail = n_eval = 0
     field_hit = {f: 0 for f in FIELDS}
     field_total = {f: 0 for f in FIELDS}
     btn_exact_hit = btn_exact_total = 0
@@ -216,6 +216,9 @@ def run(capture: str, frames_dir: str, detector, reader, limit: int | None = Non
             continue
         if is_score_anim_window(state):
             n_score_anim += 1
+            continue
+        if is_call_window(state):
+            n_call += 1
             continue
         frame = cv2.imread(frames[seq])
         if frame is None:
@@ -257,7 +260,7 @@ def run(capture: str, frames_dir: str, detector, reader, limit: int | None = Non
             frame_hit += 1
 
     return {
-        "n_seqs": len(seqs), "n_deal": n_deal, "n_score_anim": n_score_anim,
+        "n_seqs": len(seqs), "n_deal": n_deal, "n_score_anim": n_score_anim, "n_call": n_call,
         "n_imread_fail": n_imread_fail, "n_eval": n_eval,
         "field_hit": field_hit, "field_total": field_total,
         "btn_exact_hit": btn_exact_hit, "btn_exact_total": btn_exact_total,
@@ -272,7 +275,7 @@ def _rate(hit: int, total: int) -> str:
 
 def print_report(r: dict) -> None:
     print(f"seqs: {r['n_seqs']} board-changing | skipped: deal-window={r['n_deal']} "
-          f"score-anim={r['n_score_anim']} imread-fail={r['n_imread_fail']} "
+          f"score-anim={r['n_score_anim']} call-window={r['n_call']} imread-fail={r['n_imread_fail']} "
           f"| evaluated={r['n_eval']}")
     print("\nper-field exact-match rate:")
     for f in FIELDS:

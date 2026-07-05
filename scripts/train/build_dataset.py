@@ -214,7 +214,7 @@ def main() -> None:
 
     from majsoul_eye import paths
     from majsoul_eye.tiles import NAME_TO_ID
-    from majsoul_eye.state.replay import check_invariants, is_deal_window, is_score_anim_window
+    from majsoul_eye.state.replay import check_invariants, is_deal_window, is_call_window, is_score_anim_window
     from majsoul_eye.capture.gtframes import build_seq_state, load_frames
     from majsoul_eye.annotate import build_homographies, annotate_frame, iter_tile_boxes, crop_box
 
@@ -249,7 +249,7 @@ def main() -> None:
     for d in (crops_dir, img_dir, lbl_dir):
         os.makedirs(d, exist_ok=True)
 
-    n_frames = n_crops = n_yolo = n_skip = n_letterbox = n_deal = 0
+    n_frames = n_crops = n_yolo = n_skip = n_letterbox = n_deal = n_call = 0
     n_occ_box = n_occ_frame = 0
     hud_meta = []
     occ_clf = None
@@ -265,6 +265,11 @@ def main() -> None:
         # the pixels) — drop from crops AND YOLO. See state.replay.is_deal_window.
         if is_deal_window(state):
             n_deal += 1
+            continue
+        # Call-window frame (meld animation mid-flight, GT updated but pixels lag)
+        # — drop from crops AND YOLO. See state.replay.is_call_window.
+        if is_call_window(state):
+            n_call += 1
             continue
         if args.drop_violations:
             if state is None or check_invariants(state):
@@ -368,7 +373,7 @@ def main() -> None:
                 f.write(json.dumps(meta, ensure_ascii=False) + "\n")
 
     print(f"frames labeled: {n_frames}  crops: {n_crops}  yolo-imgs: {n_yolo}  "
-          f"skipped: {n_skip}  deal-skipped: {n_deal}  letterbox-skipped: {n_letterbox}  "
+          f"skipped: {n_skip}  deal-skipped: {n_deal}  call-skipped: {n_call}  letterbox-skipped: {n_letterbox}  "
           f"occ-box-skipped: {n_occ_box}  occ-frame-dropped: {n_occ_frame}  "
           f"hud-crops: {len(hud_meta)}")
     print(f"dataset -> {args.out}")

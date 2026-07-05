@@ -48,7 +48,7 @@ from majsoul_eye.annotate import pipeline as P
 from majsoul_eye import paths
 from majsoul_eye.annotate.frame import annotate_frame, crop_quad
 from majsoul_eye.capture.gtframes import build_seq_state, load_frames
-from majsoul_eye.state.replay import is_deal_window
+from majsoul_eye.state.replay import is_deal_window, is_call_window
 
 
 def render_overlay(img: np.ndarray, rec: dict, path: str) -> None:
@@ -104,14 +104,13 @@ def _process_capture(cap, cfg):
     hom = P.build_homographies(1920, 1080)
 
     try:
-        # Drop the deal-in animation frames (start_kyoku .. first discard): the hero
-        # hand is still dealing/sorting, so GT boxes don't match the pixels. rivers-
-        # empty (state.replay.is_deal_window) is the robust GT signal — it supersedes
-        # the old ordinal "first 2 seqs" heuristic, which tainted the good first-
-        # discard frame AND missed the deal frame (start_kyoku+tsumo bundle into one
-        # record, so last_event reads 'tsumo').
+        # Drop deal-in and call-animation frames: deal window (start_kyoku .. first
+        # discard) shows hero hand still dealing/sorting, so GT boxes don't match
+        # the pixels. Call window (meld animation mid-flight) shows GT updated but
+        # pixels lag. rivers-empty (state.replay.is_deal_window) and last_event in
+        # {chi,pon,kan,...} (state.replay.is_call_window) are the robust GT signals.
         all_board = [s for s in sorted(seq_state) if s in frames]
-        seqs = [s for s in all_board if not is_deal_window(seq_state[s])]
+        seqs = [s for s in all_board if not is_deal_window(seq_state[s]) and not is_call_window(seq_state[s])]
         stats = defaultdict(float)
         stats["deal_dropped"] = len(all_board) - len(seqs)
         qa = defaultdict(lambda: [0, 0])         # zone -> [n, correct]

@@ -303,6 +303,15 @@ def is_deal_window(s: BoardState) -> bool:
     return s is not None and s.in_round and sum(len(r) for r in s.rivers) == 0
 
 
+def is_call_window(state) -> bool:
+    """A call event (chi/pon/kan/nukidora) has arrived but the forced follow-up
+    dahai hasn't: the call animation is mid-flight, so GT leads the pixels
+    (river already shrunk, meld already added) — frame-level drop, same policy
+    as is_deal_window. Recovery from multi-shot extras is a planned follow-up."""
+    return getattr(state, "last_event", None) in (
+        "chi", "pon", "daiminkan", "ankan", "kakan", "nukidora")
+
+
 def is_score_anim_window(state) -> bool:
     """Riichi declaration/stick animation + score-roll window: HUD numeric
     fields on screen lag/animate right after a reach event, so HUD labels from
