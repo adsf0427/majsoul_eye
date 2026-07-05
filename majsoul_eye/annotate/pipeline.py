@@ -609,6 +609,18 @@ def tile_back_mask(fullwarp_bgr: np.ndarray) -> np.ndarray:
     return ((h >= 8) & (h <= 32) & (s > 110) & (v > 110)).astype(np.uint8)
 
 
+def tile_live_mask(fullwarp_bgr: np.ndarray) -> np.ndarray:
+    """Skin-agnostic 'a tile is rendered here' mask: colored OR bright pixels.
+
+    Used ONLY to judge liveness of a slot/cell GT already labels 'back' (drop the
+    rare frames where GT leads the client render and the slot is still empty/black).
+    Not for face/back discrimination — it lights up faces too (that is tile_back_mask's
+    job). Colored-or-bright hedges both desaturated (grey) and dark skin backs.
+    """
+    hsv = cv2.cvtColor(fullwarp_bgr, cv2.COLOR_BGR2HSV)
+    return ((hsv[..., 1] > 60) | (hsv[..., 2] > 110)).astype(np.uint8)
+
+
 def _profile(mask: np.ndarray, x1: float, y1: float, x2: float, y2: float,
              axis: str) -> np.ndarray | None:
     """Mean-mask 1D profile over a window; indexed by x (axis='x') or y."""
