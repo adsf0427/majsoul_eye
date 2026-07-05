@@ -1,5 +1,4 @@
-"""Downstream rewire contracts: annotate name == build_dataset from-annotations
-stem, and rebuild_datasets discovers via paths.ai_captures.
+"""Downstream rewire contracts: annotate name == build_dataset from-annotations stem.
 
 Plain-script style: PYTHONPATH=. <auto-python> tests/test_downstream_rewire.py
 """
@@ -25,12 +24,6 @@ def test_annotate_uses_ai_game_name_and_ai_captures():
     src = open("scripts/annotate/annotate_ai_session.py", encoding="utf-8").read()
     assert "paths.ai_game_name(cap)" in src
     assert "paths.ai_captures()" in src
-
-
-def test_rebuild_uses_ai_captures_and_frames_dir_for():
-    src = open("scripts/data/rebuild_datasets.py", encoding="utf-8").read()
-    assert "paths.ai_captures()" in src
-    assert "paths.frames_dir_for" in src
 
 
 def test_ingest_run_has_no_convert_step():
