@@ -84,6 +84,9 @@ class BoardState:
     # bookkeeping
     last_actor: int = -1
     last_event: Optional[str] = None
+    # liqi op types offered to the hero by the LATEST applied record (None if the
+    # latest record carries no offer) — drives button auto-labels; see state/ops.py.
+    pending_ops: Optional[list[int]] = None
     in_round: bool = False
     ended: bool = False
 
@@ -97,6 +100,7 @@ class BoardState:
         s.nukidora = list(self.nukidora)
         s.concealed_counts = list(self.concealed_counts)
         s.hero_hand = list(self.hero_hand)
+        s.pending_ops = list(self.pending_ops) if self.pending_ops else None
         return s
 
     def visible_river(self, seat: int) -> list[RiverTile]:
@@ -131,6 +135,12 @@ class Replayer:
                     self.state.left_tile_count = ltc
         for ev in (getattr(record, "mjai", None) or []):
             self.apply(ev)
+        # Set pending_ops at the end: start_kyoku replaces self.state with a fresh
+        # BoardState, so setting it at the start would be silently dropped. Setting
+        # it here (after all MJAI events) ensures it survives the replacement and
+        # captures the "latest record offering" semantics.
+        from majsoul_eye.state.ops import ops_from_record
+        self.state.pending_ops = ops_from_record(record)
 
     def apply(self, ev: dict) -> None:
         etype = ev.get("type")
