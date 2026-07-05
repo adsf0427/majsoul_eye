@@ -125,8 +125,8 @@ def main() -> None:
     ap.add_argument("--dataset", default=None,
                     help="datasets/<v>: read its games.json for the exact game set + val "
                          "(overrides --sources)")
-    ap.add_argument("--val", default="ai_run_8_game1",
-                    help="held-out game name counted as val (default ai_run_8_game1)")
+    ap.add_argument("--val", default="ai_session_run_8_game1",
+                    help="held-out game name counted as val (default ai_session_run_8_game1)")
     ap.add_argument("--min-glow", type=int, default=20,
                     help="flag classes whose glow count is below this (default 20)")
     ap.add_argument("--limit", type=int, default=0,
