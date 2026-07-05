@@ -157,6 +157,30 @@ def auto_next_flow(*, button_guard, main_menu_visible, click_at, delay_step,
     state["active"] = False
 
 
+def mjc_settings(op_delay: tuple[float, float] = (0.5, 1.0), *, url: str = SERVERS["jp"],
+                 width: int = 1280, height: int = 720, model: str = "v4_js_09260526.pth",
+                 live: bool = False, randomize: int = 2, autojoin: bool = False) -> dict:
+    """The MahjongCopilot settings-file seed dict (`Settings()` loads this so no "use
+    default value" warning spam). Pure/testable — extracted so `--op-delay` (the random
+    hesitation between the AI receiving an operation offer and clicking) has a unit-testable
+    home; every other key matches the pre-extraction inline literal byte-for-byte."""
+    lo, hi = op_delay
+    return {
+        "update_url": "https://update.mjcopilot.com", "auto_launch_browser": False, "gui_set_dpi": True,
+        "browser_width": width, "browser_height": height, "ms_url": url,
+        "enable_chrome_ext": False, "mitm_port": 10999, "upstream_proxy": "", "enable_proxinject": False,
+        "inject_process_name": "jantama_mahjongsoul", "language": "ZHS", "enable_overlay": False,
+        "model_type": "Local", "model_file": model, "model_file_3p": "",
+        "akagi_ot_url": "", "akagi_ot_apikey": "", "mjapi_url": "https://mjai.7xcnnw11phu.eu.org",
+        "mjapi_user": "", "mjapi_secret": "", "mjapi_models": [], "mjapi_model_select": "baseline",
+        "enable_automation": bool(live), "auto_idle_move": False, "auto_random_move": True,
+        "auto_reply_emoji_rate": 0.0, "auto_emoji_intervel": 5.0, "auto_dahai_drag": False,
+        "game_end_reminder": False, "ai_randomize_choice": max(0, min(5, randomize)),
+        "delay_random_lower": lo, "delay_random_upper": hi, "auto_retry_interval": 1.5,
+        "auto_join_game": bool(autojoin), "auto_join_level": 1, "auto_join_mode": "4E",
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Real-Mortal-AI Majsoul autoplay + capture (single env).")
     ap.add_argument("--server", choices=list(SERVERS), default="jp",
@@ -172,6 +196,12 @@ def main() -> None:
                     help="Write NOTHING to disk: no run/game dirs, no screenshots, no GT/wire/index/metadata "
                          "(the settings file goes to a temp dir, removed on exit). Orthogonal to --live — "
                          "combine them to exercise the full live flow without saving any data.")
+    ap.add_argument("--op-delay", nargs=2, type=float, default=(0.5, 1.0), metavar=("LO", "HI"),
+                    help="Random hesitation (seconds) between the AI receiving an operation offer and "
+                         "clicking; overrides MahjongCopilot's delay_random_lower/upper (default 0.5 1.0). "
+                         "Widen for button-frame harvest runs (e.g. --op-delay 1.5 2.5) so the FrameSyncer's "
+                         "quiet capture (default 0.30s) fires while the action buttons are still on screen. "
+                         "LO must be <= HI.")
     ap.add_argument("--randomize", type=int, default=2, help="ai_randomize_choice 0-5 (discard diversity).")
     ap.add_argument("--autojoin", action="store_true", help="Auto-join ranked + rejoin (lobby template; may need recalibration).")
     ap.add_argument("--auto-next", action="store_true",
@@ -216,6 +246,8 @@ def main() -> None:
                     help="Randomize EVERY seat's 立绘 (incl. AI opponents), not just the hero. "
                          "Confirm opponents render injected skins first (see docs).")
     args = ap.parse_args()
+    if args.op_delay[0] > args.op_delay[1]:
+        ap.error(f"--op-delay LO must be <= HI (got {args.op_delay[0]} {args.op_delay[1]})")
     url = args.url or SERVERS[args.server]
     if args.skins and not os.path.isabs(args.skins_dir):
         args.skins_dir = os.path.join(_ORIG_CWD, args.skins_dir)   # survive the chdir into MJC (like --out)
@@ -270,20 +302,8 @@ def main() -> None:
     #     goes to a throwaway temp dir removed in the finally. ---
     dry_tmp = tempfile.mkdtemp(prefix="autoplay_ai_dry_") if args.dry_run else None
     settings_path = os.path.join(dry_tmp if dry_tmp else out_dir, "ai_settings.json")
-    seed = {
-        "update_url": "https://update.mjcopilot.com", "auto_launch_browser": False, "gui_set_dpi": True,
-        "browser_width": args.width, "browser_height": args.height, "ms_url": url,
-        "enable_chrome_ext": False, "mitm_port": 10999, "upstream_proxy": "", "enable_proxinject": False,
-        "inject_process_name": "jantama_mahjongsoul", "language": "ZHS", "enable_overlay": False,
-        "model_type": "Local", "model_file": args.model, "model_file_3p": "",
-        "akagi_ot_url": "", "akagi_ot_apikey": "", "mjapi_url": "https://mjai.7xcnnw11phu.eu.org",
-        "mjapi_user": "", "mjapi_secret": "", "mjapi_models": [], "mjapi_model_select": "baseline",
-        "enable_automation": bool(args.live), "auto_idle_move": False, "auto_random_move": True,
-        "auto_reply_emoji_rate": 0.0, "auto_emoji_intervel": 5.0, "auto_dahai_drag": False,
-        "game_end_reminder": False, "ai_randomize_choice": max(0, min(5, args.randomize)),
-        "delay_random_lower": 0.5, "delay_random_upper": 1.0, "auto_retry_interval": 1.5,
-        "auto_join_game": bool(args.autojoin), "auto_join_level": 1, "auto_join_mode": "4E",
-    }
+    seed = mjc_settings(tuple(args.op_delay), url=url, width=args.width, height=args.height,
+                        model=args.model, live=args.live, randomize=args.randomize, autojoin=args.autojoin)
     with open(settings_path, "w", encoding="utf-8") as fh:
         json.dump(seed, fh, indent=2)
     st = Settings(settings_path)
