@@ -85,6 +85,38 @@ def red_to_normal(name: str) -> str:
     return name
 
 
+# --- dora progression -------------------------------------------------------
+# A dora indicator points at the NEXT tile in its cyclic group: suited
+# 1->2->...->9->1 within the suit; winds E->S->W->N->E; dragons P->F->C->P
+# (白->發->中->白). A red-five indicator counts as its plain five. Used to decide
+# which tiles carry Majsoul's dora glow (see scripts/inspect/count_dora_glow.py).
+_WIND_CYCLE: list[str] = ["E", "S", "W", "N"]
+_DRAGON_CYCLE: list[str] = ["P", "F", "C"]
+
+
+def next_of(indicator: str) -> str:
+    """Canonical dora tile pointed at by a dora *indicator*.
+
+    Tolerates MJAI or canonical, red or not (``'0m'``/``'5mr'`` -> ``'6m'``,
+    ``'1z'`` -> ``'S'``). Suits wrap within their suit (``9m`` -> ``1m``); winds
+    cycle E->S->W->N->E; dragons cycle P->F->C->P. Returns a canonical, non-red
+    tile name.
+    """
+    name = red_to_normal(from_mjai(indicator))     # '0m'/'5mr' -> '5m'; '1z' -> 'E'
+    if name in _WIND_CYCLE:
+        return _WIND_CYCLE[(_WIND_CYCLE.index(name) + 1) % len(_WIND_CYCLE)]
+    if name in _DRAGON_CYCLE:
+        return _DRAGON_CYCLE[(_DRAGON_CYCLE.index(name) + 1) % len(_DRAGON_CYCLE)]
+    num, suit = int(name[0]), name[1]              # suited 'Xm'/'Xp'/'Xs'
+    return f"{1 if num == 9 else num + 1}{suit}"
+
+
+def dora_names(indicators) -> set[str]:
+    """Set of canonical dora tile names for an iterable of dora indicators
+    (each MJAI or canonical, red or not)."""
+    return {next_of(i) for i in indicators}
+
+
 def name_of(class_id: int) -> str:
     return TILE_NAMES[class_id]
 
