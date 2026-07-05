@@ -60,6 +60,55 @@ def test_river_hole_flags_violation():
     assert viol
 
 
+def _meld_dets(seat, melds_gt):
+    boxes = P.generate_meld_boxes_v2(seat, melds_gt, H["H_full_inv"])
+    return [_det_from_poly(b["poly_original"], b["tile"]) for b in boxes]
+
+
+def _gt(type_, tiles, called="", added="", from_seat_rel=0, seat=0):
+    return {"type": type_, "tiles": tiles, "called_pai": called,
+            "added_pai": added, "from_seat": (seat + from_seat_rel) % 4}
+
+
+def test_meld_parse_all_kinds_all_seats():
+    from majsoul_eye.recognize.assemble import _fw_points, _parse_melds
+    for seat in range(4):
+        gt = [_gt("pon", ["P", "P", "P"], called="P", from_seat_rel=2, seat=seat),
+              _gt("chi", ["4s", "5s", "6s"], called="5s", from_seat_rel=3, seat=seat)]
+        items = [(d, _fw_points(d, REGION, H["H_full"])) for d in _meld_dets(seat, gt)]
+        melds, viol = _parse_melds(seat, items)
+        assert viol == []
+        assert [(m.type, m.from_rel, m.called_pai) for m in melds] == \
+               [("pon", 2, "P"), ("chi", 3, "5s")]
+        assert sorted(melds[0].tiles) == ["P", "P", "P"]
+
+
+def test_meld_parse_kans():
+    from majsoul_eye.recognize.assemble import _fw_points, _parse_melds
+    seat = 1
+    gt = [_gt("ankan", ["5m", "5m", "5m", "5mr"], seat=seat),
+          _gt("daiminkan", ["C", "C", "C", "C"], called="C", from_seat_rel=1, seat=seat),
+          _gt("kakan", ["W", "W", "W", "W"], called="W", added="W",
+              from_seat_rel=2, seat=seat)]
+    items = [(d, _fw_points(d, REGION, H["H_full"])) for d in _meld_dets(seat, gt)]
+    melds, viol = _parse_melds(seat, items)
+    assert viol == []
+    assert [m.type for m in melds] == ["ankan", "daiminkan", "kakan"]
+    # ankan of fives MUST contain the red (only 4 copies exist incl. the red)
+    assert sorted(melds[0].tiles) == ["5m", "5m", "5m", "5mr"]
+    assert melds[1].from_rel == 1
+    assert melds[2].from_rel == 2 and melds[2].added_pai == "W"
+
+
+def test_meld_parse_flags_garbage():
+    from majsoul_eye.recognize.assemble import _fw_points, _parse_melds
+    gt = [_gt("pon", ["P", "P", "P"], called="P", from_seat_rel=2, seat=0)]
+    dets = _meld_dets(0, gt)[:-1]                     # drop one tile -> unparsable
+    items = [(d, _fw_points(d, REGION, H["H_full"])) for d in dets]
+    _, viol = _parse_melds(0, items)
+    assert viol
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
