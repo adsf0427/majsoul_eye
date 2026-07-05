@@ -408,6 +408,22 @@ def main() -> None:
     print(f"  captured language = {game_language} "
           f"(server={args.server} probe={_probe_lang} override={args.lang})", flush=True)
 
+    # Clip the capture to the emulated viewport's top-left region. Playwright pins the
+    # layout viewport (and thus Majsoul's fixed WebGL canvas) at browser_width x
+    # browser_height CSS px, top-left. At launch it also sizes the page's RENDER SURFACE to
+    # exactly that viewport, so Page.captureScreenshot returns a clean browser_dims*DPR image
+    # (e.g. 1280x720 @1.5 -> 1920x1080) even though the visible Chromium window is a bit
+    # bigger (chrome/padding you SEE but that isn't captured). The bug: any window RESIZE
+    # after launch — a manual drag, opening maximized, or a larger size restored from the
+    # persistent user_data_dir profile — makes Chromium resize the render surface to the
+    # window while the layout viewport stays pinned, so captureScreenshot then grabs the
+    # enlarged surface with black right/bottom padding. clip (scale=1, native DPR passes
+    # through) always returns the top-left viewport region, making the frame invariant to
+    # window/surface size. Playwright repro: fresh launch captured 1920x1080 clean, but a
+    # 1400x900-resized window captured 2079x1209 (padding) while clip stayed 1920x1080.
+    # (ai_session2/run_5 was captured before this fix and its frames were cropped offline.)
+    _shot_clip = {"x": 0, "y": 0, "width": st.browser_width, "height": st.browser_height, "scale": 1}
+
     def screenshot_png():
         cdp = cdp_holder[0]
         if cdp is None:
@@ -419,7 +435,8 @@ def main() -> None:
                 if cid:
                     browser.page.evaluate(overlay_mod.hide_canvas_js(cid))
                 try:
-                    res = cdp.send("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False})
+                    res = cdp.send("Page.captureScreenshot",
+                                   {"format": "png", "captureBeyondViewport": False, "clip": _shot_clip})
                     data = base64.b64decode(res["data"])
                 finally:
                     if cid:
