@@ -161,6 +161,7 @@ python scripts/train/train_detector.py --data datasets/v1/detector/data.yaml
 | `scripts/annotate/spike_topdown.py` | 已归档的可视化 spike，不承重 |
 | `captures/intermediate/gt/` | **已退役删除**（AI 采集直接写 GTRecord，无转换产物） |
 | `label/`（`autolabel.py`） | 仅剩 hero 手牌+dora 框供 `annotate_frame` 调用；river/meld 旧几何已删 |
+| `scripts/eval/eval_reconstruction.py` | **QA 工具**（非管线环节，局面复原验收）：三层评测——oracle（GT `BoardState` → `ObservedState` → `reconstruct` → `Replayer` 往返一致性，无 GPU 依赖）/ assemble（真实帧 → `TileDetector` → `assemble` 装配 vs GT 投影，按 zone 报错）/ engine（真实 mjai 前缀 vs 复原序列各喂 `--engine-cmd` 指定的任意 mjai bot，比较最终决策，stdin/stdout JSON lines 契约）。oracle 在全量 `captures/raw/ai_session` 上验收 ≥99%（实测见 STATUS §1.30）。spec: `docs/superpowers/specs/2026-07-05-board-reconstruction-design.md` |
 
 ## 5. 数据与权重现状快照（2026-07-04）
 
