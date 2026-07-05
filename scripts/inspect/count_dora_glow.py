@@ -11,8 +11,11 @@ current dora (``tiles.next_of(indicator)``). Only glow-eligible zones (hero
 hand / river / meld) are counted; the dora-indicator strip and face-down 'back'
 tiles are a different visual population and are excluded. Counts are per-frame
 labeled-box instances (= training crops), NOT de-duplicated physical tiles —
-that is the right denominator for "does the model see enough glowing X". Split
-train/val by whole game (val default ai_run_8_game1).
+that is the right denominator for "does the model see enough glowing X". Meld
+tiles are counted by their true identity from Meld.tiles; the on-screen
+annotator renders some kan cells as 'back'/duplicated, so kan-meld per-class
+counts are a slight approximation (kan is rare — negligible for a coarse
+coverage read). Split train/val by whole game (val default ai_run_8_game1).
 
     PYTHONPATH=. python scripts/inspect/count_dora_glow.py
     PYTHONPATH=. python scripts/inspect/count_dora_glow.py \
@@ -97,6 +100,8 @@ def print_table(title, tally, min_glow):
     print("-" * 38)
     starved, tot_all, glow_all = [], 0, 0
     for name in TILE_NAMES:
+        if name == "back":
+            continue                 # never in glow-eligible zones; always total=0
         t, g = tally[name]
         tot_all += t
         glow_all += g
