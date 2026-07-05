@@ -151,7 +151,8 @@ def test_parse_result_hbb_and_obb():
     dets = _parse_result(SimpleNamespace(boxes=[b]))
     assert len(dets) == 1
     d = dets[0]
-    assert d.cls == 5 and d.tile == TILE_NAMES[5] and d.xyxy == (1., 2., 3., 4.)
+    assert d.cls == 5 and d.tile == TILE_NAMES[5] and d.name == TILE_NAMES[5]
+    assert d.xyxy == (1., 2., 3., 4.)
     assert d.score == 0.9 and d.poly is None
 
     # OBB model: detections live in res.obb; xyxy = enclosing bbox, poly = 4 corners
@@ -161,11 +162,61 @@ def test_parse_result_hbb_and_obb():
     dets = _parse_result(SimpleNamespace(obb=[o], boxes=None))
     assert len(dets) == 1
     d = dets[0]
-    assert d.cls == 7 and d.tile == TILE_NAMES[7] and d.xyxy == (8., 10., 30., 40.)
+    assert d.cls == 7 and d.tile == TILE_NAMES[7] and d.name == TILE_NAMES[7]
+    assert d.xyxy == (8., 10., 30., 40.)
     assert d.poly == ((10., 10.), (30., 12.), (28., 40.), (8., 38.))
 
     # OBB model with zero detections must NOT fall through to boxes=None (would crash)
     assert _parse_result(SimpleNamespace(obb=[], boxes=None)) == []
+
+
+def test_parse_result_hud_classes_and_out_of_range_ids():
+    """55-class detector head regression (majsoul_eye.hud.DET_NAMES = 38 tiles +
+    17 HUD classes, ids 38-54): a HUD-class detection must NOT raise IndexError
+    (the historical bug -- `.tile = TILE_NAMES[cls]` unconditionally) and must
+    carry `tile=None` + a valid `.name`; a cls id past the end of DET_NAMES
+    (unknown/future class) must be skipped, not crash or invent a name."""
+    import numpy as np
+    from types import SimpleNamespace
+
+    from majsoul_eye.recognize.detector import _parse_result
+
+    assert len(DET_NAMES) == 55
+    tile_cls, hud_cls, oor_cls = 5, 40, 99   # 40 is a HUD id; 99 >= len(DET_NAMES)
+
+    def _box(cls, xyxy, conf):
+        return SimpleNamespace(cls=np.array([float(cls)]), xyxy=np.array([list(xyxy)]),
+                               conf=np.array([conf]))
+
+    res = SimpleNamespace(boxes=[
+        _box(tile_cls, (1., 2., 3., 4.), 0.9),
+        _box(hud_cls, (5., 6., 7., 8.), 0.8),
+        _box(oor_cls, (9., 10., 11., 12.), 0.5),
+    ])
+    dets = _parse_result(res)
+
+    assert len(dets) == 2, "the out-of-range cls must be skipped, not crash or appear"
+    tile_det, hud_det = dets
+    assert tile_det.cls == tile_cls and tile_det.tile == TILE_NAMES[tile_cls]
+    assert tile_det.name == TILE_NAMES[tile_cls]
+
+    assert hud_det.cls == hud_cls and hud_det.tile is None      # the historical crash site
+    assert hud_det.name == DET_NAMES[hud_cls]
+    assert all(d.cls != oor_cls for d in dets)
+
+    # same behavior on the OBB path
+    def _obb(cls, xyxy, conf):
+        return SimpleNamespace(cls=np.array([float(cls)]), conf=np.array([conf]),
+                               xyxy=np.array([list(xyxy)]),
+                               xyxyxyxy=np.array([[[0., 0.], [1., 0.], [1., 1.], [0., 1.]]]))
+
+    res_obb = SimpleNamespace(boxes=None, obb=[
+        _obb(hud_cls, (5., 6., 7., 8.), 0.8),
+        _obb(oor_cls, (9., 10., 11., 12.), 0.5),
+    ])
+    dets_obb = _parse_result(res_obb)
+    assert len(dets_obb) == 1
+    assert dets_obb[0].tile is None and dets_obb[0].name == DET_NAMES[hud_cls]
 
 
 def test_detector_obb_wrapper_smoke():

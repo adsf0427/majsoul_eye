@@ -22,18 +22,23 @@ TRIGGER_INSTALLED = "__majsoul_eye_trigger_installed"  # idempotent-install guar
 
 def detections_to_ops(dets: list) -> list:
     """One draw-op per Detection. OBB (``poly`` set) -> a polygon op; HBB -> a rect op.
-    Coordinates are the detector's screenshot pixels, passed through as floats."""
+    Coordinates are the detector's screenshot pixels, passed through as floats.
+
+    Label prefers ``name`` (valid for all 55 classes, tile or HUD) over ``tile``
+    (None for HUD-class detections — see ``recognize.detector.Detection``), falling
+    back to ``tile`` for callers/fakes that only set the older field."""
     ops = []
     for d in dets:
+        label = getattr(d, "name", None) or d.tile
         if getattr(d, "poly", None) is not None:
             ops.append({"kind": "poly",
                         "pts": [[float(x), float(y)] for x, y in d.poly],
-                        "label": d.tile, "score": float(d.score)})
+                        "label": label, "score": float(d.score)})
         else:
             x0, y0, x1, y1 = d.xyxy
             ops.append({"kind": "rect",
                         "xyxy": [float(x0), float(y0), float(x1), float(y1)],
-                        "label": d.tile, "score": float(d.score)})
+                        "label": label, "score": float(d.score)})
     return ops
 
 

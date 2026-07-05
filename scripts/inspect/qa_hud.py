@@ -21,18 +21,11 @@ trained weights; see _FakeDetector/_FakeReader below):
   PYTHONPATH=. python scripts/inspect/qa_hud.py \
       captures/raw/ai_session/run_13/game1/game1.jsonl --selftest --limit 200
 
-⚠️ KNOWN GAP (found while writing this script, out of this task's file scope --
-Files: majsoul_eye/recognize/hudstate.py + this script only): a real
-`TileDetector.predict()` builds a `Detection` for every box via `_parse_result`,
-which sets `.tile = TILE_NAMES[cls]` UNCONDITIONALLY. `TILE_NAMES` only has 38
-entries, so any HUD-class box (cls 38-54 -- i.e. the entire point of the v2
-model) raises `IndexError` INSIDE `predict()`, before this script ever sees a
-detection list. This script never reads `.tile` (it maps names via
-`hud.DET_NAMES[d.cls]`, see `det_to_hud_pairs` below), so it is otherwise ready,
-but `detector.py`'s `_parse_result` needs a one-line fix (stop unconditionally
-computing `.tile` for cls >= tiles.NUM_CLASSES) before Step 6's [USER RUN] can
-run against real v2 weights. --selftest sidesteps it entirely by constructing
-`Detection` objects directly (bypassing `_parse_result`).
+(Previously a real `TileDetector.predict()` crashed with `IndexError` on any
+HUD-class box, since `_parse_result` set `.tile = TILE_NAMES[cls]`
+unconditionally. Fixed: `Detection` now carries `.name` (valid for all 55
+classes) alongside `.tile` (None for HUD-class ids). This script reads `.name`
+via `det_to_hud_pairs` below, never `.tile`.)
 """
 from __future__ import annotations
 
@@ -46,8 +39,8 @@ import cv2
 from majsoul_eye import paths
 from majsoul_eye.annotate.hud import field_texts
 from majsoul_eye.capture.gtframes import build_seq_state, load_frames
-from majsoul_eye.hud import DET_NAMES, NUMERIC_FIELDS, buttons_for_ops
-from majsoul_eye.recognize.hudstate import assemble_hud
+from majsoul_eye.hud import NUMERIC_FIELDS, buttons_for_ops
+from majsoul_eye.recognize.hudstate import _to_int, assemble_hud
 from majsoul_eye.state.replay import is_deal_window, is_score_anim_window
 from majsoul_eye.tiles import NUM_CLASSES
 
@@ -61,17 +54,11 @@ FIELDS = ["score_self", "score_right", "score_across", "score_left",
           "seat_wind_self"]
 _PREFIX = {"wall_count": "余", "riichi_stick_count": "x", "honba_count": "x"}
 
-
-def _to_int(s: str, strip: str = ""):
-    """Mirrors majsoul_eye.recognize.hudstate._to_int exactly -- used here to
-    normalize the GT side (field_texts emits reader-target strings like '余64'/
-    'x1') into the same int shape assemble_hud's parsed output uses, so the two
-    sides of the comparison are like-for-like (brief requirement)."""
-    s = s.lstrip(strip)
-    try:
-        return int(s)
-    except ValueError:
-        return None
+# _to_int is imported from majsoul_eye.recognize.hudstate (not re-implemented here)
+# so this GT-side normalization can never drift from assemble_hud's own parsing --
+# used to fold the GT side (field_texts emits reader-target strings like '余64'/
+# 'x1') into the same int shape assemble_hud's parsed output uses, so the two
+# sides of the comparison are like-for-like (brief requirement).
 
 
 def gt_fields(state) -> dict:
@@ -99,14 +86,14 @@ def flat_from_hud(hud: dict) -> dict:
 
 def det_to_hud_pairs(dets) -> list:
     """Detector output -> assemble_hud's `dets` arg: (cls_name, px_box) pairs,
-    HUD classes only (id >= tiles.NUM_CLASSES). Deliberately keys off `.cls`
-    (int) + `hud.DET_NAMES`, NOT `.tile` -- see the module docstring's KNOWN GAP
-    note on why `.tile` cannot be trusted for HUD ids on a real Detection."""
+    HUD classes only (id >= tiles.NUM_CLASSES). Uses `.name` (valid for all 55
+    classes, incl. HUD ids), NOT `.tile` (None for HUD-class detections --
+    see `recognize.detector.Detection`)."""
     out = []
     for d in dets:
         if d.cls < NUM_CLASSES:
             continue
-        out.append((DET_NAMES[d.cls], tuple(int(v) for v in d.xyxy)))
+        out.append((d.name, tuple(int(v) for v in d.xyxy)))
     return out
 
 
@@ -163,17 +150,20 @@ class _FakeDetector:
 
         texts = field_texts(self._state)
         self.reader.answers = dict(texts)      # oracle "sees" this frame's GT
-        dets = [Detection(xyxy=(100, 900, 190, 1050), tile="1m", cls=0, score=0.99)]
+        # name=/tile= mirror a real Detection (recognize.detector.Detection): tile
+        # ids carry tile==name, HUD ids carry tile=None (see det_to_hud_pairs, which
+        # must key off .name, not .tile).
+        dets = [Detection(xyxy=(100, 900, 190, 1050), name="1m", tile="1m", cls=0, score=0.99)]
         for name in texts:
             if self.rng.random() < self.drop_rate:
                 continue
             x0, y0, x1, y1 = (int(v) for v in self._region.norm_to_px(HUD_SEEDS[name]))
-            dets.append(Detection(xyxy=(x0, y0, x1, y1), tile=name,
+            dets.append(Detection(xyxy=(x0, y0, x1, y1), name=name, tile=None,
                                   cls=HUD_NAME_TO_ID[name], score=0.99))
         for name in buttons_for_ops(self._state.pending_ops or []):
             if self.rng.random() < self.drop_rate:
                 continue
-            dets.append(Detection(xyxy=(1200, 740, 1360, 790), tile=name,
+            dets.append(Detection(xyxy=(1200, 740, 1360, 790), name=name, tile=None,
                                   cls=HUD_NAME_TO_ID[name], score=0.9))
         return dets
 
