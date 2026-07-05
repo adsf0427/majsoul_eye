@@ -114,9 +114,8 @@ def button_boxes(img, state, region) -> list[dict]:
     cands = locate_button_candidates(img, region)
     ordered = expected if BTN_ORDER_LTR else expected[::-1]
     if len(cands) != len(expected):
-        return [{"name": n, "px_box": list(c) if i < len(cands) else None,
+        return [{"name": n,
+                 "px_box": list(cands[i]) if i < len(cands) else None,
                  "reliable": False, "flag": "count_mismatch"}
-                for i, (n, c) in enumerate(
-                    zip(ordered, list(cands) + [None] * len(expected)))
-                if n][:len(expected)]
+                for i, n in enumerate(ordered)]
     return [{"name": n, "px_box": list(c)} for n, c in zip(ordered, cands)]
