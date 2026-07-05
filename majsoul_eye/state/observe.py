@@ -102,7 +102,8 @@ def check_observed(o: ObservedState) -> list[str]:
         if c is None:
             continue
         expect = 13 - 3 * len(o.melds[r])
-        if c not in (expect, expect + 1):      # +1: that seat may be mid-draw
+        if c not in (expect, expect + 1):      # +1: mid-draw, or just chi/pon'd and
+                                                # hasn't discarded yet (state.is_call_pending)
             v.append(f"seat {r} concealed {c} != {expect}(+1) for {len(o.melds[r])} melds")
 
     for r in range(4):
