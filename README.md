@@ -172,7 +172,7 @@ python scripts/inspect/inspect_capture.py <cap.jsonl> <frames_dir> --step 120   
 python scripts/inspect/overlay_labels.py <cap.jsonl> <frames_dir> --out out/overlay.png --step 120
 python scripts/inspect/visualize_failures.py --crops datasets/precise_…/crops --out fails/…
 python scripts/annotate/annotate_ai_session.py --captures <cap> --qa-classifier  # 分类器一致率抽查
-python scripts/inspect/fiftyone_view.py                    # FiftyOne GUI 审查检测集（docs/dataset_review.md）
+python scripts/inspect/fiftyone_view.py --data datasets/v3/detector/data.yaml    # FiftyOne GUI 审查检测集（docs/dataset_review.md）
 python scripts/inspect/cvat_export.py --game precise_ai_run_1 --out cvat_pkg --zip   # CVAT 修框往返
 ```
 

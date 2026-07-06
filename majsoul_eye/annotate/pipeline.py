@@ -221,7 +221,13 @@ def warp_to_square(image: np.ndarray, H_square: np.ndarray) -> np.ndarray:
 
 
 def warp_to_full(image: np.ndarray, H_full: np.ndarray, full_size: Tuple[int, int]) -> np.ndarray:
-    # OpenCV dsize is (width, height).
+    # OpenCV dsize is (width, height). INTER_CUBIC is LOAD-BEARING despite being
+    # ~60% of annotate_frame time: an INTER_LINEAR AB (2026-07-07, 976 frames)
+    # left river fills unchanged (0 flips / 27.5k slots) but broke the meld snap
+    # on the far seat — softer edges push crevice/edge contrast under the
+    # MIN_CREVICE_CONTRAST / MIN_EDGE_GRAD thresholds (calibrated on cubic-sharp
+    # profiles), flipping the candidate lock by 30px and dropping meld QA
+    # agreement 1.0 -> 0.63. Don't downgrade without recalibrating the snap.
     return cv2.warpPerspective(image, H_full, full_size, flags=cv2.INTER_CUBIC)
 
 # =============================================================================
@@ -596,13 +602,17 @@ def meld_strip_len(seat: int, melds: list) -> float:
 NADIR_X = 1536.0
 
 
-def tile_face_mask(fullwarp_bgr: np.ndarray) -> np.ndarray:
-    """White tile-face (+skirt) mask."""
-    hsv = cv2.cvtColor(fullwarp_bgr, cv2.COLOR_BGR2HSV)
+def tile_face_mask(fullwarp_bgr: np.ndarray | None = None, *,
+                   hsv: np.ndarray | None = None) -> np.ndarray:
+    """White tile-face (+skirt) mask. Pass ``hsv`` (a precomputed BGR2HSV of the
+    same image) when several masks share one frame — the conversion dominates."""
+    if hsv is None:
+        hsv = cv2.cvtColor(fullwarp_bgr, cv2.COLOR_BGR2HSV)
     return ((hsv[..., 1] < 70) & (hsv[..., 2] > 165)).astype(np.uint8)
 
 
-def tile_back_mask(fullwarp_bgr: np.ndarray) -> np.ndarray:
+def tile_back_mask(fullwarp_bgr: np.ndarray | None = None, *,
+                   hsv: np.ndarray | None = None) -> np.ndarray:
     """Colored tile-back mask for snap face/back discrimination (any skin).
 
     Saturation-based so it captures orange (default) AND skinned colored backs while
@@ -610,11 +620,13 @@ def tile_back_mask(fullwarp_bgr: np.ndarray) -> np.ndarray:
     from face cells. A near-white/grey skin back is (correctly) indistinguishable from
     a face here; its labeling reliability comes from tile_live_mask, not this mask.
     """
-    hsv = cv2.cvtColor(fullwarp_bgr, cv2.COLOR_BGR2HSV)
+    if hsv is None:
+        hsv = cv2.cvtColor(fullwarp_bgr, cv2.COLOR_BGR2HSV)
     return (hsv[..., 1] > 70).astype(np.uint8)
 
 
-def tile_live_mask(fullwarp_bgr: np.ndarray) -> np.ndarray:
+def tile_live_mask(fullwarp_bgr: np.ndarray | None = None, *,
+                   hsv: np.ndarray | None = None) -> np.ndarray:
     """Skin-agnostic 'a tile is rendered here' mask: colored OR bright pixels.
 
     Used ONLY to judge liveness of a slot/cell GT already labels 'back' (drop the
@@ -622,7 +634,8 @@ def tile_live_mask(fullwarp_bgr: np.ndarray) -> np.ndarray:
     Not for face/back discrimination — it lights up faces too (that is tile_back_mask's
     job). Colored-or-bright hedges both desaturated (grey) and dark skin backs.
     """
-    hsv = cv2.cvtColor(fullwarp_bgr, cv2.COLOR_BGR2HSV)
+    if hsv is None:
+        hsv = cv2.cvtColor(fullwarp_bgr, cv2.COLOR_BGR2HSV)
     return ((hsv[..., 1] > 60) | (hsv[..., 2] > 110)).astype(np.uint8)
 
 
