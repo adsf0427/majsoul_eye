@@ -205,6 +205,21 @@ _HUD_SEEDS_PX: dict[str, tuple[int, int, int, int]] = {
 HUD_SEEDS: dict[str, NormBox] = {k: px_box(*v) for k, v in _HUD_SEEDS_PX.items()}
 
 
-# Action-button strip (bottom, above the hand). Wide on purpose — the locator
-# contours inside it; only containment matters.  # CALIBRATE (Task 7 Step 5)
-BTN_ZONE = NormBox(0.30, 0.66, 0.98, 0.82)
+# Action-button strip (bottom, above the hand).
+# CALIBRATED (Task 7 Step 5) against 22 real button frames in
+# captures/raw/ai_session3/run_1/game1 (chi x12, pon x8, kan x3, ron x2,
+# riichi x1). The Task-5 seed guess (0.30, 0.66, 0.98, 0.82 = px 576,713,1882,886
+# @1920x1080) contained every real banner but ALSO two fixed HUD elements that
+# sit in the same row and are bright enough to pass BTN_THRESH:
+#   - a "<seat count> +20" turn/bonus indicator at px x~1502-1711 (present on
+#     EVERY frame regardless of buttons) — caused every one of the 22 frames to
+#     over-count by +1 candidate (100% count_mismatch before this fix).
+#   - a small sakura-petal "callable tile" badge that floats above the discard
+#     row at px y~713-747 (2 of 22 frames) — a separate, disconnected blob from
+#     the button banner's own text glyph.
+# Real button banners (chi/pon/kan/riichi/ron/skip) all sit within px
+# x 663-1389, y 779-850 (skip is widest, up to x1=1389). Zone tightened to
+# x1=0.74 (1420 px, well short of the 1502 px turn-indicator) and y0=0.705
+# (761 px, below the 747 px badge, above the 779 px banner tops) — comfortable
+# margin on both sides, verified 0 count_mismatch across all 22 real frames.
+BTN_ZONE = NormBox(0.30, 0.705, 0.74, 0.82)

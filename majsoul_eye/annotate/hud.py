@@ -82,10 +82,22 @@ def hud_field_boxes(img: np.ndarray, state, region) -> list[dict]:
     return out
 
 
-BTN_MIN_AREA = 2500    # px² @1080p; banners are ~160x50   # CALIBRATE
-BTN_THRESH = 140       # banner glow vs table              # CALIBRATE
-BTN_ORDER_LTR = True   # display order left->right == buttons_for_ops order
-                       # (empirical; flip after eyeballing harvest frames)
+# CALIBRATED (Task 7 Step 5) on 22 real button frames (chi x12, pon x8, kan x3,
+# ron x2, riichi x1; captures/raw/ai_session3/run_1/game1). Majsoul's PC button
+# banners are colored translucent parallelograms (green/blue/magenta/orange/
+# red/gray per action) whose FILL is only mid-bright (gray ~40-95, barely above
+# the ~40-60 table) — thresholding on brightness alone does NOT hug the whole
+# banner shape, it isolates the bright white/gold calligraphy TEXT inside it
+# (gray 150-230). That text-glyph box turned out to be a perfectly usable,
+# consistent proxy for the button's location (measured area 5170-21008 px²,
+# always w>h), so BTN_THRESH/BTN_MIN_AREA needed NO change from the Task-7
+# seed guess — the only real bug was BTN_ZONE being too wide (see coords.py).
+BTN_MIN_AREA = 2500    # px² @1080p; real banners measured 5170-21008 px²
+BTN_THRESH = 140       # banner glyph glow vs table; verified across all 22 frames
+BTN_ORDER_LTR = True   # display order left->right == buttons_for_ops order —
+                       # VERIFIED on all 22 real frames (incl. 3-button pon+kan
+                       # and chi+ron frames): on-screen L->R order exactly
+                       # matches buttons_for_ops's HUD_NAMES-order output.
 
 
 def locate_button_candidates(img, region) -> list[tuple[int, int, int, int]]:

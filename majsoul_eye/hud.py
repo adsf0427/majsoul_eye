@@ -38,9 +38,11 @@ OP_TO_BTN: dict[int, str] = {
 def buttons_for_ops(op_types: list[int]) -> list[str]:
     """Pending liqi op types -> button classes expected on screen (dapai-only -> []).
     Order = HUD_NAMES order (stable); on-screen ordering is assigned by x-sort at
-    annotation time, not here. btn_skip accompanies any other button — verify
-    empirically at button calibration (Task 7) and adjust if own-turn-only
-    options (riichi/ankan/tsumo) turn out to render without a skip button."""
+    annotation time, not here. btn_skip accompanies any other button —
+    VERIFIED (Task 7 Step 5) on a real own-turn riichi offer (seq 302,
+    captures/raw/ai_session3/run_1/game1, ops=[1(dapai), 7(riichi)]): the frame
+    shows BOTH a 立直 banner AND a スキップ banner, so own-turn-only offers do
+    NOT drop the skip button — no change needed here."""
     btns = [b for b in HUD_NAMES if b in {OP_TO_BTN.get(t) for t in op_types}]
     if btns:
         btns.append("btn_skip")
