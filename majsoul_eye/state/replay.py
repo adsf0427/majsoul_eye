@@ -327,7 +327,12 @@ def is_call_window(state) -> bool:
     record (e.g. [pon, dora]), which overwrites last_event to "dora" and would
     false-negative — check last_event_types (the full set applied by the latest
     record) first, falling back to last_event for duck-typed states that don't
-    carry it. Recovery from multi-shot extras is a planned follow-up."""
+    carry it. ⚠️ Residual: the falsy check can't tell "field absent" from "latest
+    record applied zero events", so the fallback may consult a STALE last_event
+    in the latter case — harmless today because every production consumer
+    (gtframes.build_seq_state) only snapshots records with non-empty mjai, but a
+    future per-tick live consumer must not rely on it. Recovery from multi-shot
+    extras is a planned follow-up."""
     types = getattr(state, "last_event_types", None) or frozenset()
     if types & frozenset(_CALL_EVENT_TYPES):
         return True
@@ -343,8 +348,9 @@ def is_score_anim_window(state) -> bool:
     last_event to "dahai"/"tsumo" and making the old last_event-only check
     false-negative on every real reach frame — check last_event_types (the
     full set applied by the latest record) first, falling back to last_event
-    for duck-typed states that don't carry it. Spec'd out of recognition scope
-    by the user."""
+    for duck-typed states that don't carry it (same stale-fallback residual as
+    is_call_window — see its docstring). Spec'd out of recognition scope by the
+    user."""
     types = getattr(state, "last_event_types", None) or frozenset()
     if types & frozenset(_REACH_EVENT_TYPES):
         return True
