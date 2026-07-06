@@ -62,7 +62,7 @@ Legend: ★ current pipeline step · 🔁 recurring tool · ⚙️ one-off / inf
 | `train_classifier.py` 🔁 | train the 38-class `TileNet`, **kyoku-level split** (never by frame). `--dataset` expands a version's `games.json` (crops). | `majsoul_eye/recognize/tile_classifier.pt` |
 | `train_detector.py` 🔁 | train the YOLO detector (HBB or OBB) from a `data.yaml`; explicit augmentation CLI. | `<out>.pt` |
 | `launch_classifier.sh` ★ | **classifier launcher**: single-card wrapper over `train_classifier.py`. `--dataset v2 --gpu ID`; auto-reads `games.json`'s `val` list so the holdout matches the detector; `--dry-run` previews. | `recognize/tile_classifier.pt` |
-| `launch_detector.sh` ★ | **detector launcher**: multi-GPU DDP wrapper over `train_detector.py`. `{hbb\|obb} --dataset v2 --gpus IDS`; picks split/seed/output/run-dir per mode. | `recognize/tile_detector.pt` (HBB) / `weights/detector/tile_detector_obb.pt` (OBB) |
+| `launch_detector.sh` ★ | **detector launcher**: multi-GPU DDP wrapper over `train_detector.py`. `{hbb\|obb} --dataset v2 --gpus IDS`; picks split/seed/output/run-dir per mode. Each run keeps a versioned `weights/detector/tile_detector_<mode>_<name>.pt`; OBB also refreshes the shipped default. | `weights/detector/tile_detector_{hbb,obb}_<ts>.pt`; OBB **also** → `recognize/tile_detector.pt` (runtime default) |
 
 ## `inspect/` — QA / eval / diagnostics
 

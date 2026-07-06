@@ -18,13 +18,19 @@ USAGE
   Run from the repo root in the `majsoul_eye` conda env, e.g.
     PY=/hszhao-f1/h3011050/anaconda3/envs/majsoul_eye/bin/python
 
-MODES  (pick detector split + default seed + output weight + run dir)
+MODES  (pick detector split + default seed + output weights + run dir)
   hbb   axis-aligned boxes   <dataset>/detector/data.yaml
-        seed weights/pretrained/yolov8s.pt      -> majsoul_eye/recognize/tile_detector.pt
+        seed weights/pretrained/yolov8s.pt      -> weights/detector/tile_detector_hbb_<name>.pt
         runs/hbb/<timestamp>/
   obb   oriented boxes       <dataset>/detector_obb/data.yaml
-        seed weights/pretrained/yolov8s-obb.pt  -> weights/detector/tile_detector_obb.pt
+        seed weights/pretrained/yolov8s-obb.pt  -> weights/detector/tile_detector_obb_<name>.pt
+                                                   (+ majsoul_eye/recognize/tile_detector.pt,
+                                                    the SHIPPED default — OBB is the runtime pick)
         runs/obb/<timestamp>/
+
+  Every run keeps a versioned copy weights/detector/tile_detector_<mode>_<name>.pt
+  (<name> = the run subdir, a timestamp by default), so runs never clobber each other;
+  OBB additionally refreshes the single shipped weight recognize/tile_detector.pt.
 
   <dataset> is a VERSIONED build dir from build_datasets.py (datasets/<name>,
   e.g. datasets/v2); choose it with --dataset [v2]. The mode picks the split
@@ -49,7 +55,8 @@ OPTIONS  (forwarded to train_detector.py; per-variant defaults in [brackets])
                  a value with a '/' is used as the dir as-is, a '*.yaml' is used
                  verbatim as the data.yaml (escape hatch for the flat regen layout) [v2]
   --model PATH   base seed weights [per-variant default below]
-  --name NAME    run subdir under runs/<mode>/ [<timestamp>, e.g. 20260704_153012]
+  --name NAME    run subdir under runs/<mode>/ AND the <name> tag on the versioned
+                 output weight [<timestamp>, e.g. 20260704_153012]
   --project DIR  run dir parent [runs/<mode>]
   -h, --help     this help
   --             everything after -- is forwarded verbatim to train_detector.py
@@ -97,11 +104,12 @@ if [ $# -lt 1 ]; then
   exit 2
 fi
 MODE="$1"; shift
-# The mode fixes the split SUBDIR + seed + output; the DATA path is resolved after the
-# option loop, once --dataset (the versioned build dir) is known.
+# The mode fixes the split SUBDIR + seed; the DATA path is resolved after the option
+# loop (once --dataset is known) and the OUT weights after --name is resolved (the
+# versioned filename is tagged with the run name).
 case "$MODE" in
-  hbb) SUBDIR=detector;     DEF_MODEL=weights/pretrained/yolov8s.pt;     OUT=majsoul_eye/recognize/tile_detector.pt ;;
-  obb) SUBDIR=detector_obb; DEF_MODEL=weights/pretrained/yolov8s-obb.pt; OUT=weights/detector/tile_detector_obb.pt ;;
+  hbb) SUBDIR=detector;     DEF_MODEL=weights/pretrained/yolov8s.pt ;;
+  obb) SUBDIR=detector_obb; DEF_MODEL=weights/pretrained/yolov8s-obb.pt ;;
   *) echo "mode must be hbb|obb (got: $MODE) — try --help" >&2; exit 2 ;;
 esac
 
@@ -151,10 +159,21 @@ esac
 PROJECT="${PROJECT:-runs/$MODE}"
 NAME="${NAME:-$(date +%Y%m%d_%H%M%S)}"
 
+# best.pt homes: a per-run VERSIONED copy tagged by mode + run name (runs never clobber
+# each other), plus — for OBB, the shipped runtime default — the single production weight
+# recognize/tile_detector.pt (passed to train_detector.py as an extra --also-out dest).
+OUT="weights/detector/tile_detector_${MODE}_${NAME}.pt"
+ALSO_OUT=()
+ALSO_DESC=""
+if [ "$MODE" = obb ]; then
+  ALSO_OUT=(--also-out majsoul_eye/recognize/tile_detector.pt)
+  ALSO_DESC="  (+ majsoul_eye/recognize/tile_detector.pt)"
+fi
+
 echo ">>> [$MODE] device=$DEVICE (physical ids) batch=$BATCH imgsz=$IMGSZ epochs=$EPOCHS"
 echo "    dataset: $DATA"
-echo "    run dir: $PROJECT/$NAME/   best -> $OUT"
+echo "    run dir: $PROJECT/$NAME/   best -> $OUT$ALSO_DESC"
 exec env PYTHONPATH=. "$PY" scripts/train/train_detector.py \
-  --data "$DATA" --model "${MODEL:-$DEF_MODEL}" --out "$OUT" \
+  --data "$DATA" --model "${MODEL:-$DEF_MODEL}" --out "$OUT" "${ALSO_OUT[@]}" \
   --imgsz "$IMGSZ" --epochs "$EPOCHS" --batch "$BATCH" \
   --device "$DEVICE" --project "$PROJECT" --name "$NAME" "${PASSTHRU[@]}"

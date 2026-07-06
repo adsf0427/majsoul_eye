@@ -36,7 +36,8 @@
    scripts/train/launch_classifier.sh --dataset v2 --gpu 0            # 单卡；自动读 games.json val
        → majsoul_eye/recognize/tile_classifier.pt   （38类, 正式）
    scripts/train/launch_detector.sh {hbb|obb} --dataset v2 --gpus IDS # 多卡 DDP
-       → recognize/tile_detector.pt(HBB) / weights/detector/tile_detector_obb.pt(OBB)
+       → weights/detector/tile_detector_<mode>_<ts>.pt（每 run 版本化，不互相覆盖）
+       → OBB 另复制一份到 recognize/tile_detector.pt（现役运行时默认）
    # 直调底层：train_classifier.py --dataset datasets/v2 [...] / train_detector.py --data <ds>/detector/data.yaml
    # 跨版本合并检测集：build_detector_dataset.py --dataset datasets/v2 --dataset datasets/v3 ...
         │
@@ -149,8 +150,10 @@
   - `scripts/train/launch_detector.sh {hbb|obb} --dataset <name> --gpus IDS` —— `train_detector.py`
     的单次训练包装：`--dataset` 选**版本化**构建目录（裸名→`datasets/<name>`，默认 `v2`；含
     `/` 直接当目录用；`*.yaml` 逐字当 data.yaml——兼容扁平 regen 布局），变体决定 split 子目录
-    （HBB→`<ds>/detector`、OBB→`<ds>/detector_obb`）、基座与输出（HBB→`majsoul_eye/recognize/
-    tile_detector.pt`、OBB→`weights/detector/tile_detector_obb.pt`）与 run 目录 `runs/<mode>/<ts>/`。
+    （HBB→`<ds>/detector`、OBB→`<ds>/detector_obb`）、基座与输出与 run 目录 `runs/<mode>/<ts>/`。
+    输出为**版本化** `weights/detector/tile_detector_<mode>_<name>.pt`（`<name>`＝run 子目录，
+    默认时间戳，各 run 不互相覆盖）；**OBB 是现役默认**，故额外把 best 复制到
+    `majsoul_eye/recognize/tile_detector.pt`（运行时加载的那份，无需手动 promote）。
     卡用 `--gpus` 挑**物理 id**（`4,5,6,7`；单卡 `2,`；裸数 `N`＝卡 0..N-1）——**别用
     `CUDA_VISIBLE_DEVICES`**：ultralytics `select_device` 会用 `--device` 串覆写它。`--batch` 为
     跨卡全局 batch；默认 batch64/epochs60/imgsz1280，`--` 后透传。

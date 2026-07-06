@@ -18,9 +18,11 @@ weights/
   pretrained/    # base models used as training start points (ultralytics downloads)
     yolov8s.pt   # default --model for train_detector.py (AABB detector seed)
     yolo26n.pt
-  detector/      # optional TRAINED tile-detector variants, kept side by side
-    <e.g.> tile_detector_aabb.pt   # axis-aligned boxes (standard YOLO detect)
-    <e.g.> tile_detector_obb.pt    # oriented boxes (YOLO-OBB, tilted 3D-table tiles)
+  detector/      # TRAINED tile-detector variants, one VERSIONED file per run
+    tile_detector_hbb_<name>.pt    # axis-aligned boxes (standard YOLO detect)
+    tile_detector_obb_<name>.pt    # oriented boxes (YOLO-OBB, tilted 3D-table tiles)
+    #   <name> = the launch_detector.sh run subdir (a timestamp by default), so runs
+    #   never clobber each other; OBB additionally copies to recognize/tile_detector.pt.
 ```
 
 ## pretrained/ — training seeds
@@ -42,8 +44,10 @@ first time; move it here afterwards to keep the folder tidy):
 
 ## detector/ — optional variants (AABB vs OBB)
 
-Store alternative trained detectors here as swap-in options — e.g. an **AABB** model
-(standard axis-aligned boxes) vs an **OBB** model (oriented boxes, a better fit for the
-perspective-tilted 河/副露 tiles). None of these is loaded automatically; point the
-runtime `TileDetector(weights=...)` at whichever variant you want to evaluate, and
-promote the winner to `majsoul_eye/recognize/tile_detector.pt` when it's the new default.
+`launch_detector.sh` drops every run's `best.pt` here as a versioned
+`tile_detector_<mode>_<name>.pt`, so **AABB** (`hbb`, standard axis-aligned boxes) and
+**OBB** (`obb`, oriented boxes, a better fit for the perspective-tilted 河/副露 tiles)
+runs accumulate side by side without clobbering. **OBB is the shipped default**: an `obb`
+run additionally copies its `best.pt` to `majsoul_eye/recognize/tile_detector.pt` (the
+weight the runtime loads), so no manual promotion is needed. To evaluate an HBB variant
+or an older run, point the runtime `TileDetector(weights=...)` at that versioned file.

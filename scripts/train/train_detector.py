@@ -8,8 +8,9 @@ image lists, split by kyoku/game) comes from ``build_detector_dataset.py``.
 Small tiles are the whole story: river tiles are ~40-60px in a 1920-wide frame, so
 ``imgsz>=1280`` is the main recall lever (the YOLO-default 640 shrinks them to
 ~15px). Ultralytics saves ``best.pt`` at the best-mAP epoch; we copy it to ``--out``
-(default ``recognize/tile_detector.pt``), alongside the classifier weight, keeping
-``recognize/`` the single home for shipped models.
+(a versioned ``weights/detector/tile_detector_<mode>_<name>.pt`` from the launcher) and
+to every ``--also-out`` (the launcher points OBB at the shipped default
+``recognize/tile_detector.pt``), keeping one best.pt fanned out to all its homes.
 """
 from __future__ import annotations
 
@@ -61,6 +62,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--project", default="", help="run dir parent (default: ultralytics runs/detect)")
     ap.add_argument("--name", default="tile_detector")
     ap.add_argument("--out", default="majsoul_eye/recognize/tile_detector.pt")
+    ap.add_argument("--also-out", action="append", metavar="PATH",
+                    help="extra destination(s) to ALSO copy best.pt to (repeatable); e.g. the "
+                         "launcher points OBB at the shipped default recognize/tile_detector.pt")
     # --- augmentation (explicit; ultralytics detect defaults EXCEPT fliplr/hsv_v) ---
     # fliplr defaults to 0.0 (NOT ultralytics' 0.5): mahjong tiles are directional, so
     # a horizontal flip fabricates mirror tiles that never occur in reality. hsv_v is
@@ -124,9 +128,13 @@ def main() -> None:
 
     best = getattr(getattr(model, "trainer", None), "best", None)
     if best and os.path.exists(str(best)):
-        os.makedirs(os.path.dirname(args.out), exist_ok=True)
-        shutil.copy(str(best), args.out)
-        print(f"\nbest weights {best} -> {args.out}")
+        print(flush=True)
+        for dest in [args.out, *(args.also_out or [])]:
+            d = os.path.dirname(dest)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            shutil.copy(str(best), dest)
+            print(f"best weights {best} -> {dest}", flush=True)
     else:
         print(f"\nWARNING: best.pt not found (trainer.best={best}); "
               f"look under {args.project}/{args.name}/weights/")

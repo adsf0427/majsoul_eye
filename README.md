@@ -88,10 +88,10 @@ docs/PIPELINE.md    # ★ 权威管线   docs/STATUS.md  # 进度史(中文)   d
 `--hbb --obb` 一次出双格式（`detector/` + `detector_obb/`），held-out **两整局**
 `ai_session_run_8_game1` + 换肤 `ai_session2_run_21_game1`。
 
-- 检测器（2026-07-06，v2 重训，held-out 2 局含 1 换肤局）：HBB 正式
-  `recognize/tile_detector.pt` = **mAP50 0.992 / mAP50-95 0.957**；OBB 变体
-  `weights/detector/tile_detector_obb.pt` = **0.994 / 0.981**（rotated-IoU）。val 现含换肤局，
-  数字略低于此前非换肤 val——是更诚实的泛化测。
+- 检测器（2026-07-06，v2 重训，held-out 2 局含 1 换肤局）：现役正式
+  `recognize/tile_detector.pt` = **OBB mAP50 0.994 / mAP50-95 0.981**（rotated-IoU，
+  run `runs/obb/20260706_014911`）；HBB 变体 `weights/detector/tile_detector_hbb_<ts>.pt`
+  = **mAP50 0.992 / mAP50-95 0.957**。val 现含换肤局，数字略低于此前非换肤 val——是更诚实的泛化测。
 - 分类器 `tile_classifier.pt`：**尚未在 v2 重训**，仍是 07-03 dealfix 权重（held-out val_acc
   0.9991）。重训一条命令：`bash scripts/train/launch_classifier.sh --dataset v2 --gpu 0`。
 - 轨迹（分类器）：93.5 → 95.3(P1 清洗) → 96.0(P2 erode) → 97.6(+AI) → 99.78(16 局精确) → **99.91**(dealfix)。
@@ -157,8 +157,8 @@ python scripts/train/build_detector_dataset.py --dataset datasets/v2 --dataset d
 bash scripts/train/launch_classifier.sh --dataset v2 --gpu 0        # -> recognize/tile_classifier.pt
 # 检测器：--gpus 选物理卡做 DDP（**别用 CUDA_VISIBLE_DEVICES**——ultralytics select_device 会覆写它）；
 #   --batch 是跨卡全局 batch。默认 batch 64 / epochs 60 / imgsz 1280；run 目录 runs/<mode>/<ts>/。
-bash scripts/train/launch_detector.sh hbb --dataset v2 --gpus 0,1,2,3   # -> recognize/tile_detector.pt
-bash scripts/train/launch_detector.sh obb --dataset v2 --gpus 4,5,6,7   # -> weights/detector/tile_detector_obb.pt
+bash scripts/train/launch_detector.sh hbb --dataset v2 --gpus 0,1,2,3   # -> weights/detector/tile_detector_hbb_<ts>.pt
+bash scripts/train/launch_detector.sh obb --dataset v2 --gpus 4,5,6,7   # -> weights/detector/tile_detector_obb_<ts>.pt (+ recognize/tile_detector.pt，现役默认)
 #   `--` 之后原样透传底层脚本（如 -- --patience 30 --lr0 0.001）。换骨架：--model weights/pretrained/yolo11m.pt。
 ```
 ### 可视化
