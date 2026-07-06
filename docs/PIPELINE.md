@@ -77,6 +77,11 @@
   可与 `--live` 组合以走完整实弹流程而不存数据。`--auto-next` 结算续局循环；`--overlay`（连续）/
   `--overlay-manual --overlay-key`（按键单帧）浏览器内画检测框（验证用）；`--skins` 经 MajsoulMax
   MITM 换肤/牌背/桌布（训练外观多样性）；小号。
+- 截图经 CDP `Page.captureScreenshot` **clip 到 `browser_width×browser_height` 左上区域**
+  （scale=1，native DPR 直出，如 1280×720@1.5→1920×1080）。Playwright 把布局视口/游戏 canvas
+  钉死在该尺寸左上角，但 captureScreenshot 默认抓整个 OS 窗口 surface——窗口被拖大（且经
+  persistent `user_data_dir` 记忆、后续启动复原为大窗）时右/下会多出纯黑边。clip 使截图与窗口尺寸
+  无关。（此 fix 前的 `ai_session2/run_5` 已离线裁回 1920×1080。）
 - 采集期已内建两类脏帧规避：发牌动画不 arm 截图（ActionMJStart/NewRound）、ROI 稳定确认
   （`capture/roi_diff.py`，防弃牌动画遮挡，实测残留 ~0.4%）。
 - 每局写 `metadata.json`（显示语言 BCP-47，`--lang` > localStorage 探测 > 服务器粗判）。
