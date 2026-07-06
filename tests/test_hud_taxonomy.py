@@ -1,19 +1,15 @@
 """HUD taxonomy: ids append after the frozen 38 tiles; op->button mapping dedupes."""
 from majsoul_eye.tiles import TILE_NAMES
 from majsoul_eye.hud import (HUD_NAMES, DET_NAMES, HUD_NAME_TO_ID, OP_TO_BTN,
-                             REACH_STICK_NAMES, buttons_for_ops, CTC_CHARSET, NUMERIC_FIELDS)
+                             REACH_STICK_SLOTS, buttons_for_ops, CTC_CHARSET, NUMERIC_FIELDS)
 
-assert len(HUD_NAMES) == 21
-assert DET_NAMES[:38] == TILE_NAMES and len(DET_NAMES) == 59
+assert len(HUD_NAMES) == 18
+assert DET_NAMES[:38] == TILE_NAMES and len(DET_NAMES) == 56
 assert HUD_NAME_TO_ID["score_self"] == 38 and HUD_NAME_TO_ID["btn_skip"] == 54  # skip unchanged
-assert len(set(DET_NAMES)) == 59
-# reach sticks appended at the tail, ids 55-58
-assert REACH_STICK_NAMES == ["reach_stick_self", "reach_stick_right",
-                              "reach_stick_across", "reach_stick_left"]
-assert HUD_NAME_TO_ID["reach_stick_self"] == 55
-assert HUD_NAME_TO_ID["reach_stick_right"] == 56
-assert HUD_NAME_TO_ID["reach_stick_across"] == 57
-assert HUD_NAME_TO_ID["reach_stick_left"] == 58
+assert len(set(DET_NAMES)) == 56
+# reach stick: single class appended after btn_skip (spec §10, revised to 1 class)
+assert HUD_NAME_TO_ID["reach_stick"] == 55
+assert REACH_STICK_SLOTS == ("self", "right", "across", "left")
 # an/dai/ka kan share one button; dapai(1)/babei(11) have none
 assert OP_TO_BTN[4] == OP_TO_BTN[5] == OP_TO_BTN[6] == "btn_kan"
 assert 1 not in OP_TO_BTN and 11 not in OP_TO_BTN

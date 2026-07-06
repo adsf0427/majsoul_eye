@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 
 from majsoul_eye.coords import HUD_SEEDS, BTN_ZONE, REACH_STICK_SEEDS
-from majsoul_eye.hud import NUMERIC_FIELDS, REACH_STICK_NAMES, buttons_for_ops
+from majsoul_eye.hud import NUMERIC_FIELDS, REACH_STICK_SLOTS, buttons_for_ops
 
 # CALIBRATED (Task 6): 150 only caught the brightest anti-aliased crest of the
 # round_label/wall_count glyphs (cyan text tops out at gray~171 under BGR2GRAY,
@@ -89,10 +89,17 @@ REACH_FILL_OK = 0.05  # CALIBRATE (T17b)
 
 
 def reach_stick_boxes(img: np.ndarray, state, region) -> list[dict]:
-    """One box per seat currently in riichi (spec §10). Label-only, like
-    buttons — no text, the class itself is the label — so this does not go
-    through ink_snap/NUMERIC_FIELDS at all; `fill` is a coarse lit/unlit render
-    check (fraction of gray>=150 pixels in the seed slot), used only to flag
+    """One box per seat currently in riichi (spec §10). Single detector class
+    `reach_stick` — the object is center-symmetric so per-seat classes would be
+    appearance-degenerate inside the detected box (see hud.py's
+    REACH_STICK_SLOTS docstring); `slot` here is QA/debug metadata only (which
+    hero-relative slot lit up), NOT part of the YOLO label — build_dataset.py's
+    hud_emit keys off `name` alone, and seat attribution at inference time is
+    recovered from detection-relative geometry (recognize/hudstate.py), not
+    from this annotation-time slot. Label-only like buttons — no text, the
+    class itself is the label — so this does not go through
+    ink_snap/NUMERIC_FIELDS at all; `fill` is a coarse lit/unlit render check
+    (fraction of gray>=150 pixels in the seed slot), used only to flag
     `reliable=False` when the stick hasn't rendered yet (GT (`state.reach`)
     flips at `reach_accepted` a beat before the client draws the stick — same
     GT-leads-render race as every other zone in this module)."""
@@ -100,15 +107,15 @@ def reach_stick_boxes(img: np.ndarray, state, region) -> list[dict]:
     if hero < 0 or not state.reach:
         return []
     out: list[dict] = []
-    for i, name in enumerate(REACH_STICK_NAMES):
+    for i, slot in enumerate(REACH_STICK_SLOTS):
         if not state.reach[(hero + i) % 4]:
             continue
-        x0, y0, x1, y1 = (int(v) for v in region.norm_to_px(REACH_STICK_SEEDS[name]))
+        x0, y0, x1, y1 = (int(v) for v in region.norm_to_px(REACH_STICK_SEEDS[slot]))
         fill = 0.0
         roi = img[y0:y1, x0:x1]
         if roi.size:
             fill = float((cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) >= 150).mean())
-        d = {"name": name, "px_box": [x0, y0, x1, y1], "fill": round(fill, 3)}
+        d = {"name": "reach_stick", "slot": slot, "px_box": [x0, y0, x1, y1], "fill": round(fill, 3)}
         if fill < REACH_FILL_OK:
             d["reliable"] = False
         out.append(d)

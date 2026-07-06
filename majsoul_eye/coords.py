@@ -230,7 +230,7 @@ HUD_SEEDS: dict[str, NormBox] = {k: px_box(*v) for k, v in _HUD_SEEDS_PX.items()
 BTN_ZONE = NormBox(0.30, 0.705, 0.74, 0.82)
 
 
-# --- reach-stick (立直棒) slots, one per seat (Task 17a; spec §10) -----------
+# --- reach-stick (立直棒) slots, one per seat (Task 17a/17c; spec §10) -------
 # CALIBRATE (T17b): rough seed guess only, not yet verified against a real
 # reach-accepted frame. Derived from the _HUD_SEEDS_PX center-panel fields
 # above: the panel's occupied footprint spans roughly x 793 (seat_wind_self
@@ -242,10 +242,18 @@ BTN_ZONE = NormBox(0.30, 0.705, 0.74, 0.82)
 # rendered ±90°) sit beside the panel's left/right edges. Sizes are guesses
 # (thin bar, ~100-120 px along the panel edge, ~20 px across) — T17b will
 # ink/fill-calibrate real boxes + REACH_FILL_OK against actual capture frames.
+#
+# Keyed by SLOT (self/right/across/left, hud.REACH_STICK_SLOTS), not by
+# detector class — the stick is a single symmetric `reach_stick` class (spec
+# §10 revision); these four boxes are WHERE each slot is on screen, used both
+# to render/ink-check the annotator's per-slot box (annotate/hud.py) and, at
+# calibration time, as the geometric reference the detection-relative seat
+# attribution (recognize/hudstate.py) is expected to reproduce. Values are
+# unchanged from the original per-class seeds, only the keys changed.
 _REACH_STICK_SEEDS_PX: dict[str, tuple[int, int, int, int]] = {
-    "reach_stick_self":   (910, 507, 1015, 528),   # horizontal bar, just below the panel
-    "reach_stick_across": (905, 278, 1010, 299),   # horizontal bar, just above the panel
-    "reach_stick_left":   (828, 350, 853, 445),    # vertical bar, just left of the panel
-    "reach_stick_right":  (1067, 350, 1092, 445),  # vertical bar, just right of the panel
+    "self":   (910, 507, 1015, 528),   # horizontal bar, just below the panel
+    "across": (905, 278, 1010, 299),   # horizontal bar, just above the panel
+    "left":   (828, 350, 853, 445),    # vertical bar, just left of the panel
+    "right":  (1067, 350, 1092, 445),  # vertical bar, just right of the panel
 }
 REACH_STICK_SEEDS: dict[str, NormBox] = {k: px_box(*v) for k, v in _REACH_STICK_SEEDS_PX.items()}

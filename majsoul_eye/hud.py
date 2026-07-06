@@ -1,6 +1,6 @@
-"""HUD-element detector taxonomy — the 21 classes appended after the frozen 38
-tile classes (ids 38-58; spec docs/superpowers/specs/2026-07-04-hud-detection-design.md §3,
-reach sticks added in §10).
+"""HUD-element detector taxonomy — the 18 classes appended after the frozen 38
+tile classes (ids 38-55; spec docs/superpowers/specs/2026-07-04-hud-detection-design.md §3,
+reach stick added in §10, then revised same day to a single class).
 
 Pure data (no cv2/numpy) so every component can import it. Button classes are
 SEMANTIC — CN/JP/TW glyphs are all training samples of the same class.
@@ -9,17 +9,28 @@ from __future__ import annotations
 
 from majsoul_eye.tiles import TILE_NAMES
 
-# Reach-stick slots (ids 55-58; spec §10, 2026-07-06): four center-panel-edge
-# slots, one per seat, lit up while that seat is in riichi. LABEL-ONLY like the
-# buttons below — no text to read, so these are deliberately absent from
-# FIELD_ROT / NUMERIC_FIELDS (there is nothing to rotate-and-CTC-read; the
-# detected class IS the label). Distinct from `riichi_stick_count` (the
-# top-left kyotaku/供托 pot counter, a NUMERIC_FIELD): that one counts how many
-# 1000-point sticks are in the pot; these four say WHICH seat(s) contributed
-# one, i.e. "this player is currently in riichi".
-REACH_STICK_NAMES: list[str] = [
-    "reach_stick_self", "reach_stick_right", "reach_stick_across", "reach_stick_left",
-]
+# Reach stick (立直棒, id 55; spec §10): ONE detector class, not four. The stick
+# is a center-symmetric object -- the left/right slots are left-right mirror
+# images of each other, and the self/across slots are 180-degree rotations of
+# each other, so a per-seat class would be appearance-DEGENERATE inside the
+# detected box: the model could only tell them apart by memorizing absolute
+# screen position or panel context, which does not generalize (unlike
+# score_self/_right/_across/_left, where the digits themselves carry
+# orientation, so a per-seat class is legitimately separable). So there is a
+# single symmetric `reach_stick` class below, appended right after btn_skip;
+# WHICH seat lit up is recovered at HUD-assembly time from detection-relative
+# geometry (majsoul_eye.recognize.hudstate.assemble_hud), not baked into the
+# class. `REACH_STICK_SLOTS` is that seat-slot vocabulary (WHERE/attribution),
+# used as debug/QA metadata (annotate/hud.py's "slot" field) and as the
+# attribution output's keys (hudstate.py) -- it is NOT a list of detector
+# classes. LABEL-ONLY like the buttons below — no text to read, so
+# `reach_stick` is deliberately absent from FIELD_ROT / NUMERIC_FIELDS (there
+# is nothing to rotate-and-CTC-read; the detected class IS the label).
+# Distinct from `riichi_stick_count` (the top-left kyotaku/供托 pot counter, a
+# NUMERIC_FIELD): that one counts how many 1000-point sticks are in the pot;
+# `reach_stick` detections say WHICH seat(s) contributed one, i.e. "this
+# player is currently in riichi".
+REACH_STICK_SLOTS = ("self", "right", "across", "left")
 
 HUD_NAMES: list[str] = [
     # center info panel (center-anchored; identical on PC/mobile)
@@ -30,11 +41,13 @@ HUD_NAMES: list[str] = [
     # action buttons (semantic; glyph varies per server language)
     "btn_chi", "btn_pon", "btn_kan", "btn_riichi",
     "btn_tsumo", "btn_ron", "btn_kyushu", "btn_skip",
-] + REACH_STICK_NAMES                                  # ids 55-58 (spec §10)
-DET_NAMES: list[str] = TILE_NAMES + HUD_NAMES          # 59-class detector head
+    # symmetric riichi stick (single class -- see REACH_STICK_SLOTS above)
+    "reach_stick",                                      # id 55 (spec §10)
+]
+DET_NAMES: list[str] = TILE_NAMES + HUD_NAMES          # 56-class detector head
 HUD_NAME_TO_ID: dict[str, int] = {n: len(TILE_NAMES) + i for i, n in enumerate(HUD_NAMES)}
 NUM_DET_CLASSES: int = len(DET_NAMES)
-assert NUM_DET_CLASSES == 59, NUM_DET_CLASSES
+assert NUM_DET_CLASSES == 56, NUM_DET_CLASSES
 
 # liqi operation type -> button class. Wire shape verified on run_13/game1:
 # raw_liqi.data.data.operation = {seat, operationList:[{type, combination,...}], ...}.

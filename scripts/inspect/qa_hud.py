@@ -3,15 +3,16 @@
 
 Iterates every 'ok' frame of one capture (skips `is_deal_window` /
 `is_score_anim_window` / `is_call_window` seqs -- same drop policy build_dataset/annotate_frame use
-for HUD, see state/replay.py), runs the 59-class tile+HUD detector, keeps only
-the HUD detections (ids 38-58, `hud.DET_NAMES`), assembles them via
+for HUD, see state/replay.py), runs the 56-class tile+HUD detector, keeps only
+the HUD detections (ids 38-55, `hud.DET_NAMES`), assembles them via
 `recognize.hudstate.assemble_hud`, and compares field-by-field against GT
 derived from the replayed BoardState (`annotate.hud.field_texts` for the
 numeric/round/wind fields, `hud.buttons_for_ops` for the button set,
-`state.reach` for the per-seat reach-stick fields -- Task 17a). Prints
-per-field exact-match rates + the whole-frame all-fields-correct rate (one
-wrong field/button = the whole frame is wrong; spec
-docs/superpowers/specs/2026-07-04-hud-detection-design.md §6, §10).
+`state.reach` for the per-seat reach-stick fields, attributed to a seat via
+detection-relative geometry off a single symmetric `reach_stick` class --
+Task 17a/17c). Prints per-field exact-match rates + the whole-frame
+all-fields-correct rate (one wrong field/button = the whole frame is wrong;
+spec docs/superpowers/specs/2026-07-04-hud-detection-design.md §6, §10).
 
 Usage (real weights, once v2 exists):
   PYTHONPATH=. python scripts/inspect/qa_hud.py \
@@ -24,7 +25,7 @@ trained weights; see _FakeDetector/_FakeReader below):
 
 (Previously a real `TileDetector.predict()` crashed with `IndexError` on any
 HUD-class box, since `_parse_result` set `.tile = TILE_NAMES[cls]`
-unconditionally. Fixed: `Detection` now carries `.name` (valid for all 55
+unconditionally. Fixed: `Detection` now carries `.name` (valid for all 56
 classes) alongside `.tile` (None for HUD-class ids). This script reads `.name`
 via `det_to_hud_pairs` below, never `.tile`.)
 """
@@ -151,10 +152,14 @@ class _FakeReader:
 class _FakeDetector:
     """Oracle detector: for the CURRENT frame (set_frame), emits one Detection
     per GT-known field (real on-frame px boxes from HUD_SEEDS, so crops are
-    non-empty) + one per expected button + one per seat currently in riichi
-    (Task 17a, real px boxes from REACH_STICK_SEEDS), each dropped with
-    probability drop_rate (simulates a missed detection), plus one bogus tile
-    detection (id < NUM_CLASSES) to prove det_to_hud_pairs filters tiles out."""
+    non-empty) + one per expected button + one single-class `reach_stick`
+    detection per seat currently in riichi (Task 17a/17c, real px boxes from
+    REACH_STICK_SEEDS -- these are seeded at genuinely slot-plausible offsets
+    from the round_label anchor, see coords.py, so emitting them with NO
+    per-seat name actually exercises assemble_hud's detection-relative seat
+    attribution rather than bypassing it), each dropped with probability
+    drop_rate (simulates a missed detection), plus one bogus tile detection
+    (id < NUM_CLASSES) to prove det_to_hud_pairs filters tiles out."""
 
     def __init__(self, reader: _FakeReader, drop_rate: float = 0.05, seed: int = 1):
         self.reader = reader
@@ -192,10 +197,13 @@ class _FakeDetector:
         for seat, is_reach in gt_riichi(self._state).items():
             if not is_reach or self.rng.random() < self.drop_rate:
                 continue
-            name = f"reach_stick_{seat}"
-            x0, y0, x1, y1 = (int(v) for v in self._region.norm_to_px(REACH_STICK_SEEDS[name]))
-            dets.append(Detection(xyxy=(x0, y0, x1, y1), name=name, tile=None,
-                                  cls=HUD_NAME_TO_ID[name], score=0.9))
+            # `seat` is hero-relative (self/right/across/left), the same slot
+            # vocabulary REACH_STICK_SEEDS is keyed by -- but the emitted
+            # Detection carries the single symmetric class name, NOT the seat,
+            # so assemble_hud must recover it from geometry alone.
+            x0, y0, x1, y1 = (int(v) for v in self._region.norm_to_px(REACH_STICK_SEEDS[seat]))
+            dets.append(Detection(xyxy=(x0, y0, x1, y1), name="reach_stick", tile=None,
+                                  cls=HUD_NAME_TO_ID["reach_stick"], score=0.9))
         return dets
 
 

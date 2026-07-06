@@ -33,13 +33,14 @@ def _parse_names(yaml_text):
 
 def test_data_yaml_names_match_frozen_taxonomy():
     # Task 9: the detector head grew from the frozen 38 tile classes to the full
-    # 59-class hud.DET_NAMES (38 tiles + 17 HUD elements + 4 reach sticks, Task
-    # 17a); v1 (pre-HUD) label files only ever used ids 0-37, so the tile
+    # 56-class hud.DET_NAMES (38 tiles + 17 HUD elements + 1 reach_stick, Task
+    # 17a/17c -- reach stick revised to a single symmetric class, spec §10);
+    # v1 (pre-HUD) label files only ever used ids 0-37, so the tile
     # prefix/order must stay frozen.
     txt = bdd.build_data_yaml_text("datasets/detector")
     assert f"nc: {len(DET_NAMES)}" in txt
     names = _parse_names(txt)
-    assert len(names) == len(DET_NAMES) == 59
+    assert len(names) == len(DET_NAMES) == 56
     assert [names[i] for i in range(len(DET_NAMES))] == list(DET_NAMES)
     # tile prefix (ids 0..37) MUST match tiles.TILE_NAMES (== NAME_TO_ID used at
     # label export) — this is what keeps old 38-class labels valid under the
@@ -197,8 +198,8 @@ def test_parse_result_hbb_and_obb():
 
 
 def test_parse_result_hud_classes_and_out_of_range_ids():
-    """59-class detector head regression (majsoul_eye.hud.DET_NAMES = 38 tiles +
-    21 HUD classes, ids 38-58): a HUD-class detection must NOT raise IndexError
+    """56-class detector head regression (majsoul_eye.hud.DET_NAMES = 38 tiles +
+    18 HUD classes, ids 38-55): a HUD-class detection must NOT raise IndexError
     (the historical bug -- `.tile = TILE_NAMES[cls]` unconditionally) and must
     carry `tile=None` + a valid `.name`; a cls id past the end of DET_NAMES
     (unknown/future class) must be skipped, not crash or invent a name."""
@@ -207,7 +208,7 @@ def test_parse_result_hud_classes_and_out_of_range_ids():
 
     from majsoul_eye.recognize.detector import _parse_result
 
-    assert len(DET_NAMES) == 59
+    assert len(DET_NAMES) == 56
     tile_cls, hud_cls, oor_cls = 5, 40, 99   # 40 is a HUD id; 99 >= len(DET_NAMES)
 
     def _box(cls, xyxy, conf):
