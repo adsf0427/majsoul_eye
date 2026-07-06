@@ -84,6 +84,13 @@ class BoardState:
     # bookkeeping
     last_actor: int = -1
     last_event: Optional[str] = None
+    # The full set of MJAI event types applied by the LATEST record (empty if the
+    # latest record applied none). Real records can BUNDLE several events (e.g. a
+    # riichi declaration ships as [reach, dahai] in one record) — last_event only
+    # keeps the final one, silently losing the earlier ones. last_event_types
+    # keeps the whole set so window predicates below can't false-negative on a
+    # bundled record. frozenset is immutable, so copy() can share it by reference.
+    last_event_types: frozenset = frozenset()
     # liqi op types offered to the hero by the LATEST applied record (None if the
     # latest record carries no offer) — drives button auto-labels; see state/ops.py.
     pending_ops: Optional[list[int]] = None
@@ -133,14 +140,19 @@ class Replayer:
                 ltc = inner.get("leftTileCount", inner.get("left_tile_count"))
                 if ltc is not None:
                     self.state.left_tile_count = ltc
+        applied_types = set()
         for ev in (getattr(record, "mjai", None) or []):
             self.apply(ev)
-        # Set pending_ops at the end: start_kyoku replaces self.state with a fresh
-        # BoardState, so setting it at the start would be silently dropped. Setting
-        # it here (after all MJAI events) ensures it survives the replacement and
-        # captures the "latest record offering" semantics.
+            applied_types.add(ev.get("type"))
+        # Set pending_ops/last_event_types at the end: start_kyoku replaces self.state
+        # with a fresh BoardState, so setting it at the start would be silently
+        # dropped. Setting it here (after all MJAI events) ensures it survives the
+        # replacement and captures the "latest record" semantics (bundling-proof:
+        # a [reach, dahai] record's last_event_types == {"reach", "dahai"}, not
+        # just whichever type happened to apply last).
         from majsoul_eye.state.ops import ops_from_record
         self.state.pending_ops = ops_from_record(record)
+        self.state.last_event_types = frozenset(applied_types)
 
     def apply(self, ev: dict) -> None:
         etype = ev.get("type")
@@ -303,21 +315,40 @@ def is_deal_window(s: BoardState) -> bool:
     return s is not None and s.in_round and sum(len(r) for r in s.rivers) == 0
 
 
+_CALL_EVENT_TYPES = ("chi", "pon", "daiminkan", "ankan", "kakan", "nukidora")
+_REACH_EVENT_TYPES = ("reach", "reach_accepted")
+
+
 def is_call_window(state) -> bool:
     """A call event (chi/pon/kan/nukidora) has arrived but the forced follow-up
     dahai hasn't: the call animation is mid-flight, so GT leads the pixels
     (river already shrunk, meld already added) — frame-level drop, same policy
-    as is_deal_window. Recovery from multi-shot extras is a planned follow-up."""
-    return getattr(state, "last_event", None) in (
-        "chi", "pon", "daiminkan", "ankan", "kakan", "nukidora")
+    as is_deal_window. Real records can BUNDLE a call with another event in one
+    record (e.g. [pon, dora]), which overwrites last_event to "dora" and would
+    false-negative — check last_event_types (the full set applied by the latest
+    record) first, falling back to last_event for duck-typed states that don't
+    carry it. Recovery from multi-shot extras is a planned follow-up."""
+    types = getattr(state, "last_event_types", None) or frozenset()
+    if types & frozenset(_CALL_EVENT_TYPES):
+        return True
+    return getattr(state, "last_event", None) in _CALL_EVENT_TYPES
 
 
 def is_score_anim_window(state) -> bool:
     """Riichi declaration/stick animation + score-roll window: HUD numeric
     fields on screen lag/animate right after a reach event, so HUD labels from
-    these frames are unreliable (tile labels are unaffected). Spec'd out of
-    recognition scope by the user."""
-    return getattr(state, "last_event", None) in ("reach", "reach_accepted")
+    these frames are unreliable (tile labels are unaffected). Real records
+    BUNDLE a riichi declaration with its forced dahai ([reach, dahai]) — or
+    reach_accepted with the next actor's tsumo — into ONE record, overwriting
+    last_event to "dahai"/"tsumo" and making the old last_event-only check
+    false-negative on every real reach frame — check last_event_types (the
+    full set applied by the latest record) first, falling back to last_event
+    for duck-typed states that don't carry it. Spec'd out of recognition scope
+    by the user."""
+    types = getattr(state, "last_event_types", None) or frozenset()
+    if types & frozenset(_REACH_EVENT_TYPES):
+        return True
+    return getattr(state, "last_event", None) in _REACH_EVENT_TYPES
 
 
 # --- invariants -------------------------------------------------------------

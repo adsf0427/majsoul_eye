@@ -44,7 +44,7 @@ def test_data_yaml_names_match_frozen_taxonomy():
     assert [names[i] for i in range(len(DET_NAMES))] == list(DET_NAMES)
     # tile prefix (ids 0..37) MUST match tiles.TILE_NAMES (== NAME_TO_ID used at
     # label export) — this is what keeps old 38-class labels valid under the
-    # 59-class head.
+    # 56-class head.
     assert [names[i] for i in range(NUM_CLASSES)] == list(TILE_NAMES)
 
 

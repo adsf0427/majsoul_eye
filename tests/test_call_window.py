@@ -56,6 +56,21 @@ def test_is_call_window_false_duck_typed_non_call():
     assert is_call_window(s) is False
 
 
+def test_is_call_window_true_on_bundled_record():
+    """Regression: a real record can bundle a call with another event (e.g.
+    [pon, dora]) — last_event is overwritten to "dora" but last_event_types
+    still carries "pon", so the window must still be flagged True."""
+    s = BoardState(last_event="dora", last_event_types=frozenset({"pon", "dora"}), in_round=True)
+    assert is_call_window(s) is True
+
+
+def test_is_call_window_false_when_types_and_last_event_both_empty():
+    """No event applied at all this record: last_event_types empty, last_event
+    None -> False (not just "falls through by accident")."""
+    s = BoardState(last_event=None, last_event_types=frozenset(), in_round=True)
+    assert is_call_window(s) is False
+
+
 if __name__ == "__main__":
     test_is_call_window_true_on_call_events()
     test_is_call_window_false_on_non_call_events()
@@ -63,4 +78,6 @@ if __name__ == "__main__":
     test_is_call_window_false_no_last_event_attr()
     test_is_call_window_with_duck_typed_object()
     test_is_call_window_false_duck_typed_non_call()
+    test_is_call_window_true_on_bundled_record()
+    test_is_call_window_false_when_types_and_last_event_both_empty()
     print("All tests passed!")

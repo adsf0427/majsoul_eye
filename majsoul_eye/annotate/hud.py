@@ -107,13 +107,15 @@ def hud_field_boxes(img: np.ndarray, state, region) -> list[dict]:
 # the confirmed self/across hand-slam lag frames above, i.e. mislabel a
 # not-yet-rendered frame as reliable, which this policy exists to prevent).
 # ⚠️ Also NOTE: `state.replay.is_score_anim_window` (checked as a second,
-# frame-level gate in annotate/frame.py) turns out to NEVER fire for these
-# exact reach_accepted frames in this capture set — Majsoul bundles
-# reach_accepted with the next actor's immediate tsumo in one record, so
-# `state.last_event` is always overwritten to "tsumo" by the time the frame is
-# snapshotted (verified across all 6 reach_accepted seqs sampled). This
-# per-box fill check is therefore not a redundant safety net here — it is the
-# only mechanism that actually catches these frames.
+# frame-level gate in annotate/frame.py) used to NEVER fire for these exact
+# reach_accepted frames in this capture set — Majsoul bundles reach_accepted
+# with the next actor's immediate tsumo in one record, so `state.last_event`
+# was always overwritten to "tsumo" by the time the frame is snapshotted
+# (verified across all 6 reach_accepted seqs sampled). FIXED (Task 18) via
+# `BoardState.last_event_types` (the full set of event types the bundled
+# record applied, not just the last one) — the frame-level gate now fires
+# correctly too, but this per-box fill check remains as the finer-grained,
+# per-seat safety net.
 REACH_FILL_OK = 0.35
 
 
