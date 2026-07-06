@@ -1700,3 +1700,23 @@ def is_call_window(state) -> bool:
 - [ ] Step 3: 在一局真 capture 上跑 build_dataset 冒烟，报告 call-skipped 计数占比
       （应接近 2% 量级）
 - [ ] Step 4: commit `feat(data): is_call_window frame drop (call->forced-dahai animation window)`
+
+---
+
+### Task 17: 立直棒 4 类（2026-07-06 追加；spec §10）
+
+**T17a（代码+合成测试）Files:** `majsoul_eye/hud.py`（REACH_STICK_NAMES 追加进 HUD_NAMES
+尾部，id 55–58，NUM_DET_CLASSES 断言 59）、`majsoul_eye/coords.py`（REACH_STICK_SEEDS 4 框，
+CALIBRATE 种子）、`majsoul_eye/annotate/hud.py`（`reach_stick_boxes(img,state,region)`：
+reach[(hero+i)%4] 为 True 产框 {name,px_box,fill,reliable}，fill=槽内亮度占比，
+低于阈值置 unreliable）、`majsoul_eye/annotate/frame.py`（并入 hud 块的 score-anim 门内）、
+`majsoul_eye/recognize/hudstate.py`（riichi dict 组装）、`scripts/inspect/qa_hud.py`
+（对照 state.reach）+ 测试更新：test_hud_taxonomy(59)/test_detector(59)/新 test_reach_stick.py/
+test_hudstate（riichi 断言）。hud_emit 无需改（无 text → label-only 路径同按钮）。
+
+**T17b（真帧标定，人眼）**：overlay_hud.py 画 reach_stick 框；从 run_3/game1（88 帧 seat0）
+等抽四座位各≥5 帧标定 REACH_STICK_SEEDS + fill 阈值；确认 reach_accepted 后首帧的渲染
+滞后被 unreliable 正确覆盖；controller 复核 overlay。
+
+commit: `feat(hud): reach-stick detection (4 classes, 59-class head)` + 标定 commit + docs 一并
+（PIPELINE 55→59 处、CLAUDE 一句话、STATUS §1.41 补一行）。

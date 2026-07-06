@@ -222,3 +222,20 @@ bangzi/benchang ROI 作种子，`coords.py` 已有）。
   一旦检出任何 HUD 类 id（38–54）就会 `IndexError`，原设计完全没考虑消费者怎么读 HUD 类的
   检测结果。修复：`Detection` 新增 `.name`（55 类全有效，来自 `hud.DET_NAMES`），`.tile` 对
   HUD id 显式设为 `None`；两条解析路径（OBB/HBB）都对 `cls >= 55` 的未知类防御性跳过而非崩溃。
+
+## 10. 追加：立直状态识别（reach stick，2026-07-06 用户需求）
+
+四家立直状态 = 中央信息面板四边各一个**立直棒槽位**（白棒红点，中心锚定、随面板缩放，
+PC/移动一致）。方法与 §3 同构：4 个检测类 `reach_stick_self/right/across/left`
+（id 55–58，总数 **59**；self/across 横置、left/right 竖置——外观随座位不同，按
+score_* 先例拆 4 类）。
+
+- WHERE：`coords.REACH_STICK_SEEDS` 4 个定尺寸种子框（真帧标定）+ 逐帧渲染检查
+  （亮度 fill，未渲染→unreliable——GT 在 `reach_accepted` 置位而动画在放，
+  与 `is_score_anim_window` 门共同兜底）。
+- WHAT：`BoardState.reach[(hero+i)%4]`（重放器现成）为 True 才产框；无文本，
+  类别即语义（同按钮）。**与 `riichi_stick_count`（左上供托计数）语义不同勿混**：
+  计数是奖池棒数，棒位是"该家本局立直中"。
+- 组装：`assemble_hud` 增 `"riichi": {self,right,across,left: bool}`；qa_hud 对照
+  `state.reach` 座位映射。
+- 数据充足：7 局抽样 482 帧 reach-true，四座位均有。55 类权重未训，扩到 59 零重训成本。
