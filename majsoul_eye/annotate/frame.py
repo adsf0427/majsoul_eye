@@ -43,9 +43,9 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
     Hinv = hom["H_full_inv"]
     full = P.warp_to_full(img, hom["H_full"], hom["full_size"])
     mw = P.tile_face_mask(full)
-    mb = P.tile_back_mask(full)
+    mb = P.tile_back_mask(full)                 # face/back discrimination for snap
     ii_w = cv2.integral(mw)
-    ii_b = cv2.integral(mb)
+    ii_l = cv2.integral(P.tile_live_mask(full)) # skin-agnostic liveness for back-cell fill
 
     rec = {"hero_seat": state.hero_seat,
            "kyoku": f"{state.bakaze}{state.kyoku}",
@@ -77,7 +77,7 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
                 dc = float(np.clip(dc, -SNAP_MAX_CROSS, SNAP_MAX_CROSS))
                 boxes = P.shift_boxes(boxes, pos, da, dc, Hinv)
             for b in boxes:
-                ii = ii_b if b["tile"] == "back" else ii_w
+                ii = ii_l if b["tile"] == "back" else ii_w
                 f = _fill(ii, b["poly_fullwarp"])
                 b["fill"] = round(f, 3)
                 b["snap"] = (round(da, 1), round(dc, 1))
@@ -117,7 +117,7 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
     # slots are REVEALED (face-up, GT tile class); the rest are face-DOWN backs
     # (tile="back", flagged `back`). Kan-dora reveal left→right, so a revealed slot
     # turns from back to face as the game progresses. `fill` = white-face coverage
-    # for revealed / orange-back coverage for backs; a rendered slot reads high, a
+    # for revealed / skin-agnostic content coverage for backs; a rendered slot reads high, a
     # not-yet-rendered one (GT leads the client) is flagged not-reliable.
     try:
         region = locate_fullscreen(img)
@@ -129,11 +129,10 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
             x1, y1, x2, y2 = region.norm_to_px(dora_slot(i))
             f = 0.0
             if x2 > x1 and y2 > y1:
-                hsv = cv2.cvtColor(img[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
-                if is_back:                          # orange tile-back
-                    f = float(((hsv[..., 0] >= 8) & (hsv[..., 0] <= 28) &
-                               (hsv[..., 1] > 80) & (hsv[..., 2] > 110)).mean())
+                if is_back:                          # skin-agnostic: any rendered tile back
+                    f = float(P.tile_live_mask(img[y1:y2, x1:x2]).mean())
                 else:                                # white tile-face
+                    hsv = cv2.cvtColor(img[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
                     f = float(((hsv[..., 1] < 70) & (hsv[..., 2] > 165)).mean())
             d = {"tile": tile, "px_box": [x1, y1, x2, y2], "fill": round(f, 3), "back": is_back}
             if f < FILL_OK:

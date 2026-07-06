@@ -1,5 +1,10 @@
 # majsoul_eye — 无人值守数据采集方案（浏览器 autoplay + 进程内 WS 抓包）
 
+> **⚠️ 历史设计文档（已被实现取代，非当前管线）。** 这是无人值守采集的**原始调研/设计方案**
+> ——当时设想 `RandomBot` 随机出牌 + `label/{river,meld}` 旧几何。实际落地为 **Mortal 决策
+> autoplay + `annotate/` 精确标注**（`label/` 现只剩 `autolabel.py` 供 hand+dora）。数据流以
+> **[`PIPELINE.md`](PIPELINE.md)** 为唯一权威；本文仅存决策论证与 License/封号分析的历史记录。
+
 > 目的：消除数据管线里**唯一**还需人工的环节——产生截图。把"人工驾驶浏览器对局"
 > 换成**浏览器自动对局**，截图与 GT 顺着同一条 WebSocket 搭车采集。
 > 参考实现：`D:\code\phoenix\MahjongCopilot`（latorc/MahjongCopilot，**GPLv3**，
@@ -24,7 +29,7 @@ ONE headed Playwright Chromium (launch_persistent_context)
             → liqi.parse(bytes) → liqi→MJAI
   GT      : MJAI → 本仓库 state/replay.py:Replayer → 四家 BoardState
   SYNC    : capture/sync.py:FrameSyncer（保留）→ page.screenshot()，按全局 seq 命名
-  LABEL   : label/{autolabel,river,meld}.py + coords.py（不变）
+  LABEL   : label/autolabel.py（hand+dora）+ annotate/ 精确几何（river/meld；旧 label/{river,meld} 已删）
 ```
 
 ## 2. 复用 / 改写 / 新建 / 删除

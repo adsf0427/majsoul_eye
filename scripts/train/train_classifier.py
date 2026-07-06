@@ -13,6 +13,9 @@ the honest generalization test. With ≥2 games, a cross-session val is stronges
 
     # pure cross-game: train session5, validate ALL of session6:
         --val session6:*
+
+    # --val is repeatable — hold out two whole games at once:
+        --val session6:* --val session7:*
 """
 
 from __future__ import annotations
@@ -72,6 +75,21 @@ class CropDS(Dataset):
         return preprocess(img), y
 
 
+def parse_val_specs(specs) -> dict:
+    """``['g1:*', 'g2:k1,k2', ...]`` -> ``{name: val_set}``. ``val_set`` is ``"*"``
+    (whole session held out) or a set of ``"{bakaze}{kyoku}.{honba}"`` kyoku ids; a bare
+    ``NAME`` (or trailing ``:``) -> empty set. ``'' / None`` -> ``{}``. Repeatable
+    ``--val`` accumulates, so several whole games can be held out at once. (Duplicated
+    from build_detector_dataset.py on purpose — scripts stay free of inter-script imports.)"""
+    val_map = {}
+    for spec in (specs or []):
+        if not spec:
+            continue
+        name, kyoku = (spec.split(":", 1) + [""])[:2]
+        val_map[name] = "*" if kyoku == "*" else (set(kyoku.split(",")) if kyoku else set())
+    return val_map
+
+
 def dataset_data_specs(ds_dir: str, sub: str) -> list:
     """Expand a versioned dataset's ``games.json`` (scripts/data/build_datasets.py)
     into ``(name, <ds_dir>/<game dir>/<sub>, capture)`` tuples (sub = 'crops'/'yolo').
@@ -93,7 +111,9 @@ def main():
                     help="versioned dataset dir with games.json (scripts/data/build_datasets.py); "
                          "repeatable — expands to one --data entry per game (crops). Duplicate "
                          "NAMEs: the later spec (and any explicit --data) wins.")
-    ap.add_argument("--val", default="", help="VAL spec 'NAME:k1,k2' or 'NAME:*' (whole session)")
+    ap.add_argument("--val", action="append", default=None,
+                    help="VAL spec 'NAME:k1,k2' or 'NAME:*' (whole session); repeatable — pass "
+                         "--val twice to hold out two whole games at once.")
     ap.add_argument("--out", default="majsoul_eye/recognize/tile_classifier.pt")
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--batch", type=int, default=128)
@@ -116,19 +136,20 @@ def main():
         if name in sources:
             print(f"note: duplicate game {name!r} — keeping the later spec ({crops})")
         sources[name] = (crops, capture)
-    val_name, val_kyoku = (args.val.split(":", 1) + [""])[:2] if args.val else ("", "")
-    val_set = "*" if val_kyoku == "*" else set(val_kyoku.split(",")) if val_kyoku else set()
+    val_map = parse_val_specs(args.val)
 
     train, val = [], []
     for name, (crops, capture) in sources.items():
-        sk = seq_to_kyoku(capture)
+        v = val_map.get(name)
+        # only replay a val game's kyoku map when a kyoku-level holdout needs it
+        sk = seq_to_kyoku(capture) if (name in val_map and v != "*") else {}
         for cls in os.listdir(crops):
             if cls not in NAME_TO_ID:
                 continue
             y = NAME_TO_ID[cls]
             for p in glob.glob(os.path.join(crops, cls, "*.png")):
                 seq = int(os.path.basename(p).split("_")[0])
-                is_val = name == val_name and (val_set == "*" or sk.get(seq) in val_set)
+                is_val = name in val_map and (v == "*" or sk.get(seq) in v)
                 (val if is_val else train).append((p, y))
     random.seed(0); random.shuffle(train)
     print(f"sources={list(sources)}  val={args.val or '(none)'}")

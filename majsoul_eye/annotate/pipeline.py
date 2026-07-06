@@ -274,7 +274,7 @@ def discard_face_poly(poly_fullwarp: Iterable[Iterable[float]], seat: int) -> np
 # GENERATES discard + meld boxes for a whole board from ground truth (river tile
 # lists, riichi index, meld list) using a fixed-camera calibration in fullwarp
 # space, so every case_frame can be auto-annotated with GT labels (WHAT) placed at
-# geometry (WHERE). Calibrated on the AB case_frames (1920x1080, ai_run_3_game1/ai_run_3_game3).
+# geometry (WHERE). Calibrated on the AB case_frames (1920x1080, ai_session_run_3_game1/ai_session_run_3_game3).
 #
 # Relative seat = screen position: 0=self(bottom) 1=shimocha(right)
 # 2=toimen(top) 3=kamicha(left). Each seat's discard grid is one 90deg rotation.
@@ -603,10 +603,27 @@ def tile_face_mask(fullwarp_bgr: np.ndarray) -> np.ndarray:
 
 
 def tile_back_mask(fullwarp_bgr: np.ndarray) -> np.ndarray:
-    """Orange tile-back mask (ankan end tiles, walls)."""
+    """Colored tile-back mask for snap face/back discrimination (any skin).
+
+    Saturation-based so it captures orange (default) AND skinned colored backs while
+    staying disjoint from the white face mask (S<70) — snap needs to tell back cells
+    from face cells. A near-white/grey skin back is (correctly) indistinguishable from
+    a face here; its labeling reliability comes from tile_live_mask, not this mask.
+    """
     hsv = cv2.cvtColor(fullwarp_bgr, cv2.COLOR_BGR2HSV)
-    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
-    return ((h >= 8) & (h <= 32) & (s > 110) & (v > 110)).astype(np.uint8)
+    return (hsv[..., 1] > 70).astype(np.uint8)
+
+
+def tile_live_mask(fullwarp_bgr: np.ndarray) -> np.ndarray:
+    """Skin-agnostic 'a tile is rendered here' mask: colored OR bright pixels.
+
+    Used ONLY to judge liveness of a slot/cell GT already labels 'back' (drop the
+    rare frames where GT leads the client render and the slot is still empty/black).
+    Not for face/back discrimination — it lights up faces too (that is tile_back_mask's
+    job). Colored-or-bright hedges both desaturated (grey) and dark skin backs.
+    """
+    hsv = cv2.cvtColor(fullwarp_bgr, cv2.COLOR_BGR2HSV)
+    return ((hsv[..., 1] > 60) | (hsv[..., 2] > 110)).astype(np.uint8)
 
 
 def _profile(mask: np.ndarray, x1: float, y1: float, x2: float, y2: float,

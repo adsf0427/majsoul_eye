@@ -27,11 +27,12 @@ Run (conda `auto` env, repo root):
 
 By default the frames dir is derived from the capture path (nested X/X.jsonl -> X/,
 legacy sibling X.jsonl -> X/, via majsoul_eye.paths.frames_dir_for). Pass
---frames-dir to point one capture at a different frames folder (e.g. de-letterboxed
-frames from deletterbox_frames.py) while keeping the GT + output name of the
-original capture:
+--frames-dir to point one capture at a different frames folder (e.g. a corrected
+copy of the frames) while keeping the GT + output name of the original capture:
   PYTHONPATH=. $PY scripts/annotate/annotate_ai_session.py --captures captures/raw/ai_session/run_5/game2/game2.jsonl \
-      --frames-dir captures/intermediate/derived/ai_run_5_game2_fixed --qa-classifier
+      --frames-dir /path/to/alternate/frames --qa-classifier
+(The run_5 game2/game3 letterbox was fixed in place 2026-07-05, so those games no
+longer need a --frames-dir; deletterbox_frames.py --inplace corrects new ones.)
 """
 from __future__ import annotations
 

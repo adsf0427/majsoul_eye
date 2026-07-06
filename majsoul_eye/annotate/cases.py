@@ -8,14 +8,14 @@ Relocated here from ``scripts/annotate/spike_topdown.py`` so both the top-down
 visualization spike and ``scripts/annotate/build_case_annotations.py`` share one
 fixture instead of one script importing it from another.
 
-Seat mapping (screen pos from hero): ai_run_3_game1 hero=3 → self3/right0/across1/left2;
-                                     ai_run_3_game3 hero=1 → self1/right2/across3/left0.
+Seat mapping (screen pos from hero): ai_session_run_3_game1 hero=3 → self3/right0/across1/left2;
+                                     ai_session_run_3_game3 hero=1 → self1/right2/across3/left0.
 """
 from __future__ import annotations
 
 _AI = "captures/raw/ai_session"
-_G1 = f"{_AI}/run_3/game1/game1.jsonl"      # was ai_run_3_game1 (hero=3)
-_G3 = f"{_AI}/run_3/game3/game3.jsonl"      # was ai_run_3_game3 (hero=1)
+_G1 = f"{_AI}/run_3/game1/game1.jsonl"      # ai_session_run_3_game1 (hero=3)
+_G3 = f"{_AI}/run_3/game3/game3.jsonl"      # ai_session_run_3_game3 (hero=1)
 
 CASES: dict[str, dict] = {
     "rivers_full":     {"capture": _G1, "seq": 1458, "note": "rivers[13,12,12,13] + melds s0/s1/s2"},

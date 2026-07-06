@@ -9,15 +9,14 @@
 #                                             (rsync from local; any manual frame deletions —
 #                                             e.g. run_4's disconnect tail — just carry over,
 #                                             build_dataset skips missing PNGs)
-#   captures/intermediate/derived/…_fixed/    ONLY for the letterboxed games (ai_run_5_game2/3):
-#                                             their de-letterboxed frames + frames.jsonl (see
-#                                             deletterbox_frames.py / build_datasets FRAMES_OVERRIDE).
-#                                             Discovery applies the override automatically.
+#   (run_5 game2/3 were letterboxed; de-letterboxed IN PLACE 2026-07-05 via
+#    deletterbox_frames.py --inplace, so their raw frames are already clean 1920x1080 —
+#    no derived dir, no override to rsync)
 #   this repo at the fix commit               (replay.drawn_tile + autolabel tsumo slot)
 #
-# Game discovery + names + frames-dir (incl. the letterbox override) are shared with the
-# versioned builder — this reuses scripts/data/build_datasets.discover_games, so the game
-# set and split match `build_datasets.py`. AI games only (manual session*.jsonl are skipped).
+# Game discovery + names + frames-dir are shared with the versioned builder — this reuses
+# scripts/data/build_datasets.discover_games, so the game set and split match
+# `build_datasets.py`. AI games only (manual session*.jsonl are skipped).
 # Override the scanned roots with env SOURCES="captures/raw/ai_session captures/raw/ai_session2".
 #
 # OUTPUTS (regenerated, overwriting any stale copies):
@@ -47,9 +46,9 @@
 set -euo pipefail
 PY=${PY:-python}
 ANN=out/ai_session_annotations
-VAL_GAME=ai_run_8_game1                       # held-out cross-game val (unchanged split)
+VAL_GAME=ai_session_run_8_game1               # held-out cross-game val (source-root-qualified name; STATUS §1.32)
 SOURCES=${SOURCES:-captures/raw/ai_session}   # capture roots to scan (space-separated); AI games only
-ANN_WORKERS=${ANN_WORKERS:-32}                # step-1 annotate workers for the batched (non-override) games
+ANN_WORKERS=${ANN_WORKERS:-32}                # step-1 annotate workers for all games (RAM-bound)
 
 # --- flags -------------------------------------------------------------------
 DO_OBB=0
@@ -73,28 +72,26 @@ fi
 
 # --- discover the AI training games from the nested raw layout ---------------
 # Reuse build_datasets.discover_games so game NAMES (ai_run_N_gameM), capture jsonl paths,
-# and frames dirs (incl. the letterbox FRAMES_OVERRIDE -> de-letterboxed derived frames)
-# match the versioned builder exactly. TSV: name<TAB>capture<TAB>frames_dir<TAB>override(0/1).
-declare -A GT_OF FR_OF OV_OF                  # name -> capture jsonl / frames dir / is-letterbox-override
+# and frames dirs match the versioned builder exactly. TSV: name<TAB>capture<TAB>frames_dir.
+declare -A GT_OF FR_OF                         # name -> capture jsonl / frames dir
 GAMES=(); DROPPED=()
-while IFS=$'\t' read -r name cap fr ov; do
+while IFS=$'\t' read -r name cap fr; do
   [ -n "$name" ] || continue
-  ov="${ov%$'\r'}"                            # strip a trailing CR (Python emits CRLF on Windows; no-op on Linux)
-  if [ ! -d "$fr" ]; then                     # frames dir absent — usually a letterbox game whose de-letterboxed
-    DROPPED+=("$name")                        # derived frames weren't rsync'd. Drop it LOUDLY, don't crash mid-build.
+  fr="${fr%$'\r'}"                            # strip a trailing CR (Python emits CRLF on Windows; no-op on Linux)
+  if [ ! -d "$fr" ]; then                     # frames dir absent (frames not rsync'd for this game) —
+    DROPPED+=("$name")                        # drop it LOUDLY, don't crash mid-build.
     echo "  DROP $name: frames dir missing ($fr)" >&2
     continue
   fi
-  GAMES+=("$name"); GT_OF["$name"]="$cap"; FR_OF["$name"]="$fr"; OV_OF["$name"]="$ov"
+  GAMES+=("$name"); GT_OF["$name"]="$cap"; FR_OF["$name"]="$fr"
 done < <(PYTHONPATH=. "$PY" - $SOURCES <<'PY'
 import sys
 sys.path.insert(0, "scripts/data")
-from build_datasets import discover_games, FRAMES_OVERRIDE
+from build_datasets import discover_games
 for g in discover_games(sys.argv[1:] or ["captures/raw/ai_session"]):
     if g["kind"] != "ai":                     # manual sessions are out of scope for regen
         continue
-    print(g["name"], g["capture"], g["frames_dir"],
-          "1" if g["name"] in FRAMES_OVERRIDE else "0", sep="\t")
+    print(g["name"], g["capture"], g["frames_dir"], sep="\t")
 PY
 )
 [ "${#GAMES[@]}" -gt 0 ] || { echo "no AI games discovered under: $SOURCES" >&2; exit 1; }
@@ -112,23 +109,14 @@ if [ "$SKIP_ANNOTATE" = 1 ]; then
   [ "$miss" = 1 ] && { echo "annotations incomplete — rerun WITHOUT --skip-annotate" >&2; exit 1; }
 else
   echo "=== 1/3 annotate all games -> $ANN (shared by HBB + OBB) ==="
-  # Batch the non-letterbox games in one call; each letterbox-override game gets its own
-  # --frames-dir call against the de-letterboxed derived frames (mirrors build_datasets).
-  BATCH=(); OVR=()
-  for g in "${GAMES[@]}"; do
-    if [ "${OV_OF[$g]}" = 1 ]; then OVR+=("$g"); else BATCH+=("${GT_OF[$g]}"); fi
-  done
-  if [ "${#BATCH[@]}" -gt 0 ]; then
-    # RAM-bound (each worker holds full-frame + homography buffers). --workers is ANN_WORKERS
-    # (default 32 for a big server; lower it on a small box).
-    PYTHONPATH=. "$PY" scripts/annotate/annotate_ai_session.py \
-      --captures "${BATCH[@]}" --out "$ANN" --overlay-every 0 --workers "$ANN_WORKERS"
-  fi
-  for g in "${OVR[@]}"; do
-    echo "  (letterbox) $g <- ${FR_OF[$g]}"
-    PYTHONPATH=. "$PY" scripts/annotate/annotate_ai_session.py \
-      --captures "${GT_OF[$g]}" --frames-dir "${FR_OF[$g]}" --out "$ANN" --overlay-every 0 --workers 1
-  done
+  # Every game uses its own nested frames dir now (run_5 letterbox fixed in place), so
+  # annotate them all in one batched call.
+  BATCH=()
+  for g in "${GAMES[@]}"; do BATCH+=("${GT_OF[$g]}"); done
+  # RAM-bound (each worker holds full-frame + homography buffers). --workers is ANN_WORKERS
+  # (default 32 for a big server; lower it on a small box).
+  PYTHONPATH=. "$PY" scripts/annotate/annotate_ai_session.py \
+    --captures "${BATCH[@]}" --out "$ANN" --overlay-every 0 --workers "$ANN_WORKERS"
 fi
 
 # --- 2/3 per-game YOLO labels — parallel across ALL (variant × game) builds ---
@@ -166,14 +154,24 @@ build_one() {                                 # tag pfx extra game
   fi
 }
 
+build_game_chain() {                          # all variants of ONE game, in order (HBB first)
+  # Variants of the SAME game must run sequentially: the OBB build's reuse check
+  # (compgen on hbb images) passes as soon as the HBB build has written its FIRST
+  # png, then emits labels only for the frames present at that instant — a
+  # concurrent HBB build truncated 8 large games' OBB labels (1092 frames) on
+  # 2026-07-05, silently capping OBB val mAP50 at ~0.79. Games stay parallel.
+  local g="$1" v tag pfx extra _outds
+  for v in "${VARIANTS[@]}"; do
+    IFS='|' read -r tag pfx extra _outds <<<"$v"
+    build_one "$tag" "$pfx" "$extra" "$g"
+  done
+}
+
 n_builds=$(( ${#VARIANTS[@]} * ${#GAMES[@]} ))
 echo "=== 2/3 per-game YOLO labels — ${#VARIANTS[@]} variant(s) × ${#GAMES[@]} games = ${n_builds} builds, JOBS=${JOBS} ==="
-for v in "${VARIANTS[@]}"; do
-  IFS='|' read -r tag pfx extra _outds <<<"$v"
-  for g in "${GAMES[@]}"; do
-    build_one "$tag" "$pfx" "$extra" "$g" &
-    while (( $(jobs -rp | wc -l) >= JOBS )); do wait -n; done   # throttle to JOBS in flight
-  done
+for g in "${GAMES[@]}"; do
+  build_game_chain "$g" &
+  while (( $(jobs -rp | wc -l) >= JOBS )); do wait -n; done   # throttle to JOBS chains in flight
 done
 wait
 if [ -s "$FAILS" ]; then
