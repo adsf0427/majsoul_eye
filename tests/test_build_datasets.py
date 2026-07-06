@@ -29,29 +29,35 @@ def test_discover_games_shapes_and_kinds():
         _touch(os.path.join(root, "session9.jsonl"))
         games = bds.discover_games([root])
         by_name = {g["name"]: g for g in games}
-        assert set(by_name) == {"ai_run_1", "ai_run_2_game1", "session9"}, by_name
-        assert by_name["ai_run_1"]["kind"] == "ai"
-        assert by_name["ai_run_2_game1"]["kind"] == "ai"
+        assert set(by_name) == {"ai_session_run_1", "ai_session_run_2_game1", "session9"}, by_name
+        assert by_name["ai_session_run_1"]["kind"] == "ai"
+        assert by_name["ai_session_run_2_game1"]["kind"] == "ai"
         assert by_name["session9"]["kind"] == "manual"
         # frames dir = capture with .jsonl stripped, POSIX-slashed
-        assert by_name["ai_run_2_game1"]["frames_dir"].endswith("run_2/game1")
-        assert "\\" not in by_name["ai_run_2_game1"]["frames_dir"]
+        assert by_name["ai_session_run_2_game1"]["frames_dir"].endswith("run_2/game1")
+        assert "\\" not in by_name["ai_session_run_2_game1"]["frames_dir"]
         # dir defaults to the game name (no prefix)
-        assert by_name["ai_run_1"]["dir"] == "ai_run_1"
+        assert by_name["ai_session_run_1"]["dir"] == "ai_session_run_1"
 
 
-def test_discover_games_collision_and_empty():
-    """Same run numbering in two roots must abort; an empty root must abort."""
+def test_discover_games_source_qualified_and_empty():
+    """Same run number in two roots must NOT collide now (names are source-root
+    qualified); the SAME root listed twice is a real duplicate and aborts; an empty
+    root aborts."""
     with tempfile.TemporaryDirectory() as td:
         r1 = os.path.join(td, "ai_session")
-        r2 = os.path.join(td, "ai_session_2")
+        r2 = os.path.join(td, "ai_session2")
         _touch(os.path.join(r1, "run_1", "game1", "game1.jsonl"))
         _touch(os.path.join(r2, "run_1", "game1", "game1.jsonl"))
+        names = {g["name"] for g in bds.discover_games([r1, r2])}
+        assert names == {"ai_session_run_1_game1", "ai_session2_run_1_game1"}, names
+        # same root passed twice -> genuine duplicate -> abort
         try:
-            bds.discover_games([r1, r2])
-            raise AssertionError("collision not detected")
+            bds.discover_games([r1, r1])
+            raise AssertionError("duplicate not detected")
         except SystemExit as e:
-            assert "collision" in str(e)
+            assert "duplicate" in str(e)
+        # empty root -> abort
         try:
             bds.discover_games([os.path.join(td, "empty")])
             raise AssertionError("empty root not detected")
@@ -59,14 +65,18 @@ def test_discover_games_collision_and_empty():
             assert "no captures" in str(e)
 
 
-def test_frames_override_applies():
-    """The letterboxed run_5 games must point at the de-letterboxed derived frames."""
+def test_letterboxed_games_use_own_frames_now():
+    """run_5 game2/game3 were de-letterboxed IN PLACE (2026-07-05, deletterbox_frames.py
+    --inplace), so the FRAMES_OVERRIDE map is gone and they resolve to their own nested
+    frames dir like every other game — no derived-frames special-casing."""
+    assert not hasattr(bds, "FRAMES_OVERRIDE"), "override should be fully removed"
     with tempfile.TemporaryDirectory() as td:
         root = os.path.join(td, "ai_session")
         _touch(os.path.join(root, "run_5", "game2", "game2.jsonl"))
         (g,) = bds.discover_games([root])
-        assert g["name"] == "ai_run_5_game2"
-        assert g["frames_dir"] == bds.FRAMES_OVERRIDE["ai_run_5_game2"].replace(os.sep, "/")
+        assert g["name"] == "ai_session_run_5_game2"
+        assert g["frames_dir"].endswith("run_5/game2")
+        assert "derived" not in g["frames_dir"]
 
 
 def test_manifest_roundtrip_and_training_expansion():
@@ -83,9 +93,9 @@ def test_manifest_roundtrip_and_training_expansion():
              "capture": "captures/raw/manual/session5.jsonl",
              "frames_dir": "captures/raw/manual/session5"},
         ]
-        bds.write_manifest(ds, games, "ai_run_1")
+        bds.write_manifest(ds, games, ["ai_run_1"])
         m = json.load(open(os.path.join(ds, "games.json"), encoding="utf-8"))
-        assert m["val"] == "ai_run_1" and len(m["games"]) == 2
+        assert m["val"] == ["ai_run_1"] and len(m["games"]) == 2   # val is a LIST (>=1 held-out game)
 
         ds_posix = ds.replace(os.sep, "/")
         crops = tc.dataset_data_specs(ds, "crops")
@@ -125,6 +135,61 @@ def test_apply_existing_dirs_preserves_v1_style_prefixes():
         out = bds.apply_existing_dirs(games, td)
         assert out[0]["dir"] == "precise_ai_run_1"
         assert out[1]["dir"] == "ai_run_15_game1"
+
+
+def test_resolve_vals_default_single_and_multiple():
+    """--val is repeatable. None falls back to [DEFAULT_VAL] when it's a discovered
+    game; one or many explicit names are validated against the game set (order kept)."""
+    names = ["ai_session_run_8_game1", "ai_session2_run_21_game1", "g3"]
+    # no --val -> default held-out game (as a one-element list)
+    assert bds.resolve_vals(None, names) == [bds.DEFAULT_VAL]
+    # explicit single
+    assert bds.resolve_vals(["g3"], names) == ["g3"]
+    # explicit multiple (the ask: add a second whole-game val), order preserved
+    assert bds.resolve_vals(["ai_session_run_8_game1", "ai_session2_run_21_game1"], names) \
+        == ["ai_session_run_8_game1", "ai_session2_run_21_game1"]
+
+
+def test_resolve_vals_rejects_unknown_and_missing_default():
+    # an explicit name not among discovered games aborts (names them)
+    try:
+        bds.resolve_vals(["ai_session_run_8_game1", "typo_game"], ["ai_session_run_8_game1"])
+        raise AssertionError("unknown val game not rejected")
+    except SystemExit as e:
+        assert "typo_game" in str(e)
+    # no --val AND default absent from the game set -> abort (must pass one)
+    try:
+        bds.resolve_vals(None, ["g1", "g2"])
+        raise AssertionError("missing default not rejected")
+    except SystemExit as e:
+        assert "--val" in str(e)
+
+
+def test_classifier_parse_val_specs_multiple():
+    """train_classifier grows the same repeatable --val -> {name: val_set} parser."""
+    assert tc.parse_val_specs(["a:*", "b:E1.0"]) == {"a": "*", "b": {"E1.0"}}
+    assert tc.parse_val_specs([]) == {}
+
+
+def test_resolve_formats():
+    """--hbb/--obb fold into an ordered format list. Backward compatible: neither flag
+    -> ['hbb'] (historical default); --obb alone -> ['obb'] (historical OBB-only); both
+    -> ['hbb','obb'] (one version carrying detector/ + detector_obb/)."""
+    assert bds.resolve_formats(False, False) == ["hbb"]
+    assert bds.resolve_formats(False, True) == ["obb"]
+    assert bds.resolve_formats(True, False) == ["hbb"]
+    assert bds.resolve_formats(True, True) == ["hbb", "obb"]
+
+
+def test_game_yolo_dir_dual_vs_single():
+    """OBB gets the sibling '<game>__obb' dir ONLY when it coexists with HBB (so both
+    formats can live in one version); a single-format build keeps the plain '<game>'
+    dir — preserving today's OBB-only layout (and its crops path for the classifier)."""
+    j = os.path.join
+    assert bds.game_yolo_dir("datasets/v2", "g", "hbb", ["hbb"]) == j("datasets/v2", "g", "yolo")
+    assert bds.game_yolo_dir("datasets/v2", "g", "obb", ["obb"]) == j("datasets/v2", "g", "yolo")
+    assert bds.game_yolo_dir("datasets/v2", "g", "hbb", ["hbb", "obb"]) == j("datasets/v2", "g", "yolo")
+    assert bds.game_yolo_dir("datasets/v2", "g", "obb", ["hbb", "obb"]) == j("datasets/v2", "g__obb", "yolo")
 
 
 def test_dataset_root_naming():

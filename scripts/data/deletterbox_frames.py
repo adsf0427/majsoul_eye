@@ -10,16 +10,28 @@ vertical offset (~28px at the frame edges).
 
 This tool fixes the *data*, not the pipeline (the letterbox is a one-off): for
 each frame it auto-detects the black bars, crops to the content bbox, and
-resizes the content back to 1920x1080. Corrected PNGs + a rewritten
-``frames.jsonl`` go to a NEW directory, so the originals stay untouched and the
-per-frame ``seq`` correspondence is preserved 1:1.
+resizes the content back to 1920x1080.
+
+Two output modes:
+
+* ``--inplace`` (recommended): overwrite the source PNGs in place. The frame
+  filenames and ``frames.jsonl`` are untouched (the ``file`` paths already point
+  at those PNGs, now corrected), so the game becomes byte-for-byte
+  indistinguishable from any other clean 1920x1080 capture — no derived dir, no
+  ``FRAMES_OVERRIDE`` special-case in the dataset builder. Idempotent: a second
+  run finds no bars (content == full frame == 1920x1080) and rewrites each PNG
+  unchanged.
+* ``--out DIR``: corrected PNGs + a rewritten ``frames.jsonl`` go to a NEW
+  directory, leaving the originals untouched (the legacy derived-frames path).
+
+Either way the per-frame ``seq`` correspondence is preserved 1:1.
 
 Run (conda `auto` env, repo root, PYTHONPATH=.):
+  # in place (letterboxed run_5 game2/game3 become clean 1920x1080 raw frames):
+  $PY scripts/data/deletterbox_frames.py --capture captures/raw/ai_session/run_5/game2/game2.jsonl --inplace
+  # or into a separate derived dir (originals untouched):
   $PY scripts/data/deletterbox_frames.py --capture captures/raw/ai_session/run_5/game2/game2.jsonl \
       --out captures/intermediate/derived/ai_run_5_game2_fixed
-Then annotate the corrected frames without touching the original folder:
-  $PY scripts/annotate/annotate_ai_session.py --captures captures/raw/ai_session/run_5/game2/game2.jsonl \
-      --frames-dir captures/intermediate/derived/ai_run_5_game2_fixed --qa-classifier
 """
 from __future__ import annotations
 
@@ -53,11 +65,14 @@ def content_bbox(img: np.ndarray, thr: float = 12.0, min_frac: float = 0.5):
     return t, b, l, r, False
 
 
-def process(capture: str, out_dir: str, frames_dir: str | None = None,
-            thr: float = 12.0) -> dict:
+def process(capture: str, out_dir: str | None = None, frames_dir: str | None = None,
+            thr: float = 12.0, inplace: bool = False) -> dict:
     src_dir = frames_dir or paths.frames_dir_for(capture)
     src_jsonl = os.path.join(src_dir, "frames.jsonl")
-    out_frames = os.path.join(out_dir, "frames")
+    # inplace: overwrite each source PNG and leave the index verbatim (file paths
+    # already point at those PNGs). Otherwise write corrected PNGs + a rewritten
+    # index into a NEW out_dir, keeping the originals untouched.
+    out_frames = os.path.join(src_dir if inplace else out_dir, "frames")
     os.makedirs(out_frames, exist_ok=True)
 
     recs, n_fixed, n_pass, n_degenerate, n_missing = [], 0, 0, 0, 0
@@ -90,15 +105,20 @@ def process(capture: str, out_dir: str, frames_dir: str | None = None,
             else:
                 n_pass += 1
 
-            out_path = os.path.join(out_frames, os.path.basename(file))
-            cv2.imwrite(out_path, out_img)
-            recs.append({**d, "file": paths.rel_frame(out_path, out_dir),  # index-relative (portable)
-                         "orig_dims": [img.shape[1], img.shape[0]],
-                         "crop": [t, b, l, r]})
+            if inplace:
+                cv2.imwrite(file, out_img)     # overwrite the original; index unchanged
+                recs.append(d)
+            else:
+                out_path = os.path.join(out_frames, os.path.basename(file))
+                cv2.imwrite(out_path, out_img)
+                recs.append({**d, "file": paths.rel_frame(out_path, out_dir),  # index-relative (portable)
+                             "orig_dims": [img.shape[1], img.shape[0]],
+                             "crop": [t, b, l, r]})
 
-    with open(os.path.join(out_dir, "frames.jsonl"), "w", encoding="utf-8") as f:
-        for d in recs:
-            f.write(json.dumps(d, ensure_ascii=False) + "\n")
+    if not inplace:                            # in-place keeps the source index as-is
+        with open(os.path.join(out_dir, "frames.jsonl"), "w", encoding="utf-8") as f:
+            for d in recs:
+                f.write(json.dumps(d, ensure_ascii=False) + "\n")
     return {"total": len(recs), "cropped": n_fixed, "passthrough": n_pass,
             "degenerate": n_degenerate, "missing": n_missing}
 
@@ -107,16 +127,26 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--capture", required=True,
                     help="capture jsonl whose frames dir (stem/) to de-letterbox")
-    ap.add_argument("--out", required=True,
-                    help="new dir for corrected frames + rewritten frames.jsonl")
+    ap.add_argument("--out", default=None,
+                    help="new dir for corrected frames + rewritten frames.jsonl "
+                         "(mutually exclusive with --inplace)")
+    ap.add_argument("--inplace", action="store_true",
+                    help="overwrite the source PNGs in place (no new dir; frames.jsonl "
+                         "left untouched). Idempotent; makes a letterboxed game identical "
+                         "to a clean 1920x1080 capture.")
     ap.add_argument("--frames-dir", default=None,
                     help="override source frames dir (default: capture stem)")
     ap.add_argument("--thr", type=float, default=12.0,
                     help="row/col mean below this = black bar (default 12)")
     args = ap.parse_args()
+    if args.inplace == bool(args.out):
+        ap.error("pass exactly one of --inplace or --out")
 
-    st = process(args.capture, args.out, frames_dir=args.frames_dir, thr=args.thr)
-    print(f"{args.out}: {st['total']} frames  "
+    st = process(args.capture, args.out, frames_dir=args.frames_dir,
+                 thr=args.thr, inplace=args.inplace)
+    dest = f"{args.frames_dir or paths.frames_dir_for(args.capture)} (in place)" \
+        if args.inplace else args.out
+    print(f"{dest}: {st['total']} frames  "
           f"cropped={st['cropped']} passthrough={st['passthrough']} "
           f"degenerate={st['degenerate']} missing={st['missing']}", flush=True)
 

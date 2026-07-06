@@ -7,7 +7,8 @@ Mirrors ``train_classifier.py``'s interface. Each ``--data`` entry is
 ``datasets/precise_ai_run_3_game1/yolo``, produced by ``build_dataset.py``) and
 CAPTURE is the GT jsonl, used only to map each frame's global ``seq`` -> kyoku for
 a leakage-safe split. ``--val NAME:k1,k2`` holds those kyoku out; ``--val NAME:*``
-holds the whole game out (the cross-game val — strongest).
+holds the whole game out (the cross-game val — strongest). ``--val`` is repeatable:
+pass it twice (``--val g1:* --val g2:*``) to hold out two whole games at once.
 
 Writes into ``--out`` (default ``datasets/detector``) WITHOUT copying images, using
 REPO-ROOT-RELATIVE POSIX paths so the whole tree is portable: tar ``datasets/`` + the
@@ -84,14 +85,30 @@ def dataset_data_specs(ds_dir: str, sub: str = "yolo") -> list:
             for g in m["games"]]
 
 
-def split_images(sources: dict, val_name: str, val_set, kyoku_fn=seq_to_kyoku):
-    """sources: name -> (yolodir, capture). Returns (train, val) lists of image paths
-    with the yolodir's relativity PRESERVED, POSIX-slashed (relative yolodir in →
-    portable relative path out). ``val_set == "*"`` holds the whole game out; otherwise
-    a kyoku set from ``kyoku_fn(capture)``. Non-val games go entirely to train."""
+def parse_val_specs(specs) -> dict:
+    """``['g1:*', 'g2:k1,k2', ...]`` -> ``{name: val_set}``. ``val_set`` is ``"*"``
+    (whole game held out) or a set of ``"{bakaze}{kyoku}.{honba}"`` kyoku ids; a bare
+    ``NAME`` (or trailing ``:``) -> empty set (nothing held out). ``'' / None`` -> ``{}``.
+    Repeatable ``--val`` accumulates, so several whole games can be held out at once."""
+    val_map = {}
+    for spec in (specs or []):
+        if not spec:
+            continue
+        name, kyoku = (spec.split(":", 1) + [""])[:2]
+        val_map[name] = "*" if kyoku == "*" else (set(kyoku.split(",")) if kyoku else set())
+    return val_map
+
+
+def split_images(sources: dict, val_map: dict, kyoku_fn=seq_to_kyoku):
+    """sources: name -> (yolodir, capture). ``val_map``: name -> val_set (``"*"`` whole
+    game, or a kyoku set), as built by ``parse_val_specs``. Returns (train, val) lists of
+    image paths with the yolodir's relativity PRESERVED, POSIX-slashed (relative yolodir
+    in → portable relative path out). A game absent from ``val_map`` goes entirely to
+    train; ``val_set == "*"`` holds that whole game out (``kyoku_fn`` not consulted)."""
     train, val = [], []
     for name, (yolodir, capture) in sources.items():
-        want_val = name == val_name
+        val_set = val_map.get(name)
+        want_val = name in val_map
         sk = kyoku_fn(capture) if (want_val and val_set != "*") else {}
         for p in sorted(glob.glob(os.path.join(yolodir, "images", "*.png"))):
             ap = p.replace(os.sep, "/")           # POSIX sep; keep relativity → portable
@@ -147,7 +164,9 @@ def main() -> None:
                     help="versioned dataset dir with games.json (scripts/data/build_datasets.py); "
                          "repeatable — expands to one --data entry per game (yolo). Use several to "
                          "assemble a COMBINED split across versions. Duplicate NAMEs: later wins.")
-    ap.add_argument("--val", default="", help="VAL spec 'NAME:k1,k2' or 'NAME:*' (whole game)")
+    ap.add_argument("--val", action="append", default=None,
+                    help="VAL spec 'NAME:k1,k2' or 'NAME:*' (whole game); repeatable — pass "
+                         "--val twice to hold out two whole games at once.")
     ap.add_argument("--out", default="datasets/detector")
     args = ap.parse_args()
 
@@ -163,10 +182,9 @@ def main() -> None:
         if name in sources:
             print(f"note: duplicate game {name!r} — keeping the later spec ({yolodir})")
         sources[name] = (yolodir, capture)
-    val_name, val_kyoku = (args.val.split(":", 1) + [""])[:2] if args.val else ("", "")
-    val_set = "*" if val_kyoku == "*" else set(val_kyoku.split(",")) if val_kyoku else set()
+    val_map = parse_val_specs(args.val)
 
-    train, val = split_images(sources, val_name, val_set)
+    train, val = split_images(sources, val_map)
     write_dataset(args.out, train, val)
     print(f"sources={list(sources)}  val={args.val or '(none)'}")
     print(f"train imgs={len(train)}  val imgs={len(val)}  classes={len(DET_NAMES)}  -> {args.out}")

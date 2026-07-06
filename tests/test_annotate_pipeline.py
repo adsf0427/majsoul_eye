@@ -7,7 +7,7 @@ import numpy as np
 
 from majsoul_eye.annotate.pipeline import (
     build_homographies, transform_points, generate_discard_slots,
-    meld_display_cells, generate_meld_boxes_v2, river_sideways_index,
+    meld_display_cells, generate_meld_boxes_v2, river_sideways_index, tile_live_mask,
 )
 
 HOM = build_homographies(1920, 1080)
@@ -81,6 +81,20 @@ def test_river_sideways_index():
     claimed = [{"riichi": False, "called": False}, {"riichi": True, "called": True},
                {"riichi": False, "called": False}]
     assert river_sideways_index(claimed) == 1
+
+
+def test_tile_live_mask_liveness():
+    def patch(bgr):
+        return np.full((8, 8, 3), bgr, np.uint8)
+    # skinned backs (non-orange) must read live
+    assert tile_live_mask(patch((200, 40, 40))).mean() >= 0.25    # bright blue skin
+    assert tile_live_mask(patch((150, 150, 150))).mean() >= 0.25  # desaturated grey skin (via V)
+    assert tile_live_mask(patch((90, 0, 0))).mean() >= 0.25       # dark saturated skin (via S)
+    # default orange back still reads live (no regression)
+    assert tile_live_mask(patch((40, 120, 220))).mean() >= 0.25
+    # unrendered / empty patches must read NOT live
+    assert tile_live_mask(patch((0, 0, 0))).mean() == 0.0         # black (GT leads render)
+    assert tile_live_mask(patch((80, 80, 80))).mean() == 0.0      # dark uniform
 
 
 if __name__ == "__main__":

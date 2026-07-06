@@ -265,7 +265,8 @@ def main() -> None:
     ap.add_argument("--overlay", action="store_true",
                     help="Draw the tile detector's boxes live onto the browser (visualizer; off by default).")
     ap.add_argument("--detector-weights", default="majsoul_eye/recognize/tile_detector.pt",
-                    help="Detector weights for --overlay (pass weights/detector/tile_detector_obb.pt for rotated OBB polys).")
+                    help="Detector weights for --overlay (the shipped default is OBB, so it draws "
+                         "rotated polys; pass a weights/detector/tile_detector_hbb_*.pt for axis-aligned).")
     ap.add_argument("--overlay-fps", type=float, default=12.0, help="Overlay redraw rate (Hz); ignored with --overlay-manual.")
     ap.add_argument("--overlay-manual", action="store_true",
                     help="Manual overlay: detect once per --overlay-key press in the browser (no fps loop).")

@@ -145,12 +145,17 @@ def resolve_frame_path(file_field: str, index_dir=None) -> str:
 
 
 def ai_game_name(capture_path: str) -> str:
-    """Stable flattened dataset name for an AI GTRecord capture.
+    """Stable flattened dataset name for an AI GTRecord capture, tagged by SOURCE ROOT.
 
-    ``.../run_N/gameM/gameM.jsonl`` -> ``ai_run_N_gameM`` (nested, canonical);
-    ``.../run_N/gameM.jsonl``       -> ``ai_run_N_gameM`` (legacy sibling);
-    ``.../run_1/run_1.jsonl``       -> ``ai_run_1``       (single-game run, either shape);
-    anything else                   -> the basename stem  (manual sessions pass through).
+    The leading tag is the source-root directory basename (the path segment above
+    ``run_N``), so the same run number under two roots yields DISTINCT names — no
+    cross-source run-renumbering needed (raw.7z's ``ai_session2/run_1`` no longer
+    collides with ``ai_session/run_1``):
+
+    ``.../ai_session/run_N/gameM/gameM.jsonl`` -> ``ai_session_run_N_gameM`` (nested);
+    ``.../ai_session2/run_N/gameM.jsonl``      -> ``ai_session2_run_N_gameM`` (sibling);
+    ``.../<root>/run_1/run_1.jsonl``           -> ``<root>_run_1`` (single-game run, either shape);
+    anything else                              -> the basename stem  (manual sessions pass through).
     """
     p = os.path.abspath(capture_path).replace("\\", "/")
     parts = p.split("/")
@@ -160,9 +165,11 @@ def ai_game_name(capture_path: str) -> str:
         anc = anc[:-1]
     parent = anc[-1] if anc else ""
     if re.fullmatch(r"run_\d+", parent) and re.fullmatch(r"game\d+", stem):
-        return f"ai_{parent}_{stem}"
+        root = anc[-2] if len(anc) >= 2 else "ai"         # source-root basename, above run_N
+        return f"{root}_{parent}_{stem}"                  # <root>_run_N_gameM
     if re.fullmatch(r"run_\d+", stem):
-        return f"ai_{stem}"
+        root = anc[-1] if anc else "ai"                   # run_N's parent is the source root
+        return f"{root}_{stem}"                           # <root>_run_N
     return stem
 
 

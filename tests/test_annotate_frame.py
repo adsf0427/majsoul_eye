@@ -10,6 +10,8 @@ from majsoul_eye.state.replay import BoardState, Meld, RiverTile
 from majsoul_eye.annotate import build_homographies, annotate_frame, iter_tile_boxes, crop_box
 from majsoul_eye.annotate.frame import AnnBox, crop_quad
 from majsoul_eye.tiles import NAME_TO_ID
+from majsoul_eye.normalize import locate_fullscreen
+from majsoul_eye.coords import dora_slot, MAX_DORA
 
 HOM = build_homographies(1920, 1080)
 
@@ -54,6 +56,30 @@ def test_reliable_propagation():
     a, b = list(iter_tile_boxes(rec))
     assert a.reliable is True and b.reliable is False
     assert a.sideways is False
+
+
+def _dora_state():
+    s = BoardState(hero_seat=0, bakaze="E", kyoku=1, honba=0, last_actor=1)
+    s.dora_markers = ["E"]          # 1 revealed -> slots 1..4 are face-down backs
+    return s
+
+
+def test_dora_back_reliable_on_skinned_back():
+    # Paint the 4 face-down dora slots a NON-orange (blue) skin colour.
+    img = np.zeros((1080, 1920, 3), np.uint8)
+    region = locate_fullscreen(img)
+    for i in range(1, MAX_DORA):
+        x1, y1, x2, y2 = region.norm_to_px(dora_slot(i))
+        img[y1:y2, x1:x2] = (200, 40, 40)     # BGR bright blue
+    rec = annotate_frame(img, _dora_state(), HOM)
+    backs = [d for d in rec["dora_boxes"] if d.get("back")]
+    assert len(backs) == 4
+    assert all(d.get("reliable", True) for d in backs)   # skin back is rendered -> reliable
+
+    # A black frame (nothing rendered) must still drop the back slots.
+    black = annotate_frame(np.zeros((1080, 1920, 3), np.uint8), _dora_state(), HOM)
+    black_backs = [d for d in black["dora_boxes"] if d.get("back")]
+    assert black_backs and all(not d.get("reliable", True) for d in black_backs)
 
 
 def test_crop_box_sizes():

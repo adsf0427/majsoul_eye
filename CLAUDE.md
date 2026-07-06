@@ -45,10 +45,10 @@ for t in tests/test_*.py; do PYTHONPATH=. python "$t" || break; done
 Mortal + Playwright and writes the unified `GTRecord` + screenshot index inline under
 `captures/raw/ai_session/run_N/gameM/` (self-contained: `gameM.jsonl` GTRecord +
 frames/wire/metadata) — no convert step, no
-`intermediate/gt` (retired; legacy b64 runs were migrated once by
-`scripts/data/migrate_ai_to_gtrecord.py`). The old manual path (`record_gt.py` + Akagi MITM,
-`captures/raw/manual/`) is **deprecated for new capture**; its session5/6 data stays in the
-training set. Frame indexes (`frames.jsonl`) store RELATIVE paths; always resolve via
+`intermediate/gt` (retired; legacy b64 runs were migrated once — that one-shot migration is
+since removed; conversion still lives in `convert_mjcopilot.convert_game`). The old manual path
+(`record_gt.py` + Akagi MITM, `captures/raw/manual/`) is **deprecated for new capture** and its
+session5/6 data is **not in the current v2 training set** (AI-only baseline). Frame indexes (`frames.jsonl`) store RELATIVE paths; always resolve via
 `paths.resolve_frame_path`.
 
 ```bash
@@ -58,9 +58,9 @@ PYTHONPATH=. python scripts/capture/autoplay_ai.py --live --auto-next
 #    manifest). Runs immediately (--dry-run to preview); --resume adds only missing games:
 PYTHONPATH=. python scripts/data/build_datasets.py v2          # default --sources captures/raw/ai_session
 PYTHONPATH=. python scripts/data/build_datasets.py v1 --sources captures/raw/ai_session captures/raw/manual --resume
-#    (rebuild_datasets.py is DEPRECATED — superseded by build_datasets.py; current version: datasets/v1)
+#    (rebuild_datasets.py was REMOVED 2026-07-05 — superseded by build_datasets.py; current version: datasets/v1)
 # 3. Train (GPU, deliberate). --dataset expands a version's games.json; repeat it to mix versions:
-PYTHONPATH=. python scripts/train/train_classifier.py --dataset datasets/v1 --val "ai_run_8_game1:*" --epochs 20
+PYTHONPATH=. python scripts/train/train_classifier.py --dataset datasets/v1 --val "ai_session_run_8_game1:*" --epochs 20
 PYTHONPATH=. python scripts/train/train_detector.py --data datasets/v1/detector/data.yaml
 # QA: inspect_capture.py (frame↔GT join), overlay_labels.py (draw labels on a frame),
 #     annotate_ai_session.py --qa-classifier (crop-consistency spot check)
@@ -163,9 +163,10 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   re-derive that coupling; use `paths.frames_dir_for` / `paths.capture_for_frames_dir` /
   `paths.ai_captures()` (`converted_gt_captures()` is kept as a thin alias for old callers)
   and resolve every `frames.jsonl` `file` (RELATIVE now) through `paths.resolve_frame_path`
-  (accepts legacy absolute too). Layout reorganizations are one-shot idempotent dry-run-default
-  scripts (`migrate_captures_layout.py` 2026-07-02, `migrate_gt_into_gamedir.py` 2026-07-05 —
-  the latter also rewrites `datasets/*/games.json` capture paths).
+  (accepts legacy absolute too). Past layout reorganizations were one-shot idempotent
+  dry-run-default scripts (`migrate_captures_layout.py` 2026-07-02, `migrate_gt_into_gamedir.py`
+  2026-07-05, the latter also rewriting `datasets/*/games.json` capture paths); both completed
+  and **removed 2026-07-06**.
 - **Train/val split by kyoku, never by frame** — the same physical discard appears in many frames
   of one kyoku; a frame split leaks it and inflates accuracy.
 - **Frame-drop predicates for GT-leads-pixels windows** (`majsoul_eye/state/replay.py`):
