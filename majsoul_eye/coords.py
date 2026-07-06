@@ -222,4 +222,9 @@ HUD_SEEDS: dict[str, NormBox] = {k: px_box(*v) for k, v in _HUD_SEEDS_PX.items()
 # x1=0.74 (1420 px, well short of the 1502 px turn-indicator) and y0=0.705
 # (761 px, below the 747 px badge, above the 779 px banner tops) — comfortable
 # margin on both sides, verified 0 count_mismatch across all 22 real frames.
+# ⚠️ KNOWN LIMIT (unverified ≥4-button rows): observed banner pitch is ~270-300 px,
+# so a 4th action banner would land at px ~1500-1530 — INSIDE the excluded
+# turn-indicator's territory. Such frames were absent from the Task-7 harvest; no
+# static zone can hold both. If one appears it degrades to count_mismatch (frame
+# contributes no button labels) — revisit with a smarter confounder filter then.
 BTN_ZONE = NormBox(0.30, 0.705, 0.74, 0.82)
