@@ -10,8 +10,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from majsoul_eye.coords import HUD_SEEDS, BTN_ZONE
-from majsoul_eye.hud import NUMERIC_FIELDS, buttons_for_ops
+from majsoul_eye.coords import HUD_SEEDS, BTN_ZONE, REACH_STICK_SEEDS
+from majsoul_eye.hud import NUMERIC_FIELDS, REACH_STICK_NAMES, buttons_for_ops
 
 # CALIBRATED (Task 6): 150 only caught the brightest anti-aliased crest of the
 # round_label/wall_count glyphs (cyan text tops out at gray~171 under BGR2GRAY,
@@ -78,6 +78,39 @@ def hud_field_boxes(img: np.ndarray, state, region) -> list[dict]:
             box = snapped
         d = {"name": name, "px_box": [int(v) for v in box], "text": text,
              "fill": fill}
+        out.append(d)
+    return out
+
+
+# CALIBRATE (T17b): rough render check, not yet tuned against real reach-accepted
+# frames — the stick is a thin white bar, so its lit slot should show SOME bright
+# coverage but nowhere near the ~1.0 fill of a filled numeric-field box.
+REACH_FILL_OK = 0.05  # CALIBRATE (T17b)
+
+
+def reach_stick_boxes(img: np.ndarray, state, region) -> list[dict]:
+    """One box per seat currently in riichi (spec §10). Label-only, like
+    buttons — no text, the class itself is the label — so this does not go
+    through ink_snap/NUMERIC_FIELDS at all; `fill` is a coarse lit/unlit render
+    check (fraction of gray>=150 pixels in the seed slot), used only to flag
+    `reliable=False` when the stick hasn't rendered yet (GT (`state.reach`)
+    flips at `reach_accepted` a beat before the client draws the stick — same
+    GT-leads-render race as every other zone in this module)."""
+    hero = state.hero_seat
+    if hero < 0 or not state.reach:
+        return []
+    out: list[dict] = []
+    for i, name in enumerate(REACH_STICK_NAMES):
+        if not state.reach[(hero + i) % 4]:
+            continue
+        x0, y0, x1, y1 = (int(v) for v in region.norm_to_px(REACH_STICK_SEEDS[name]))
+        fill = 0.0
+        roi = img[y0:y1, x0:x1]
+        if roi.size:
+            fill = float((cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) >= 150).mean())
+        d = {"name": name, "px_box": [x0, y0, x1, y1], "fill": round(fill, 3)}
+        if fill < REACH_FILL_OK:
+            d["reliable"] = False
         out.append(d)
     return out
 

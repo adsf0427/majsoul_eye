@@ -27,12 +27,18 @@ def _to_int(s: str, strip: str = "") -> Optional[int]:
 def assemble_hud(dets, reader, frame_bgr: np.ndarray) -> dict:
     out = {"scores": {"self": None, "right": None, "across": None, "left": None},
            "round": None, "wall": None, "kyotaku": None, "honba": None,
-           "seat_wind": None, "buttons": []}
+           "seat_wind": None, "buttons": [],
+           "riichi": {"self": False, "right": False, "across": False, "left": False}}
     for cls, (x0, y0, x1, y1) in dets:
         if cls not in HUD_NAMES:
             continue
         if cls.startswith("btn_"):
             out["buttons"].append(cls)
+            continue
+        if cls.startswith("reach_stick_"):
+            # label-only, like buttons -- no reader call; the detected class IS
+            # the seat's riichi state (bucketed under "riichi", not "buttons").
+            out["riichi"][cls[len("reach_stick_"):]] = True
             continue
         crop = frame_bgr[max(0, y0):y1, max(0, x0):x1]
         if crop.size == 0:

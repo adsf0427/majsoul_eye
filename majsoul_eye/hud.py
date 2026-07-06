@@ -1,5 +1,6 @@
-"""HUD-element detector taxonomy — the 17 classes appended after the frozen 38
-tile classes (ids 38-54; spec docs/superpowers/specs/2026-07-04-hud-detection-design.md §3).
+"""HUD-element detector taxonomy — the 21 classes appended after the frozen 38
+tile classes (ids 38-58; spec docs/superpowers/specs/2026-07-04-hud-detection-design.md §3,
+reach sticks added in §10).
 
 Pure data (no cv2/numpy) so every component can import it. Button classes are
 SEMANTIC — CN/JP/TW glyphs are all training samples of the same class.
@@ -7,6 +8,18 @@ SEMANTIC — CN/JP/TW glyphs are all training samples of the same class.
 from __future__ import annotations
 
 from majsoul_eye.tiles import TILE_NAMES
+
+# Reach-stick slots (ids 55-58; spec §10, 2026-07-06): four center-panel-edge
+# slots, one per seat, lit up while that seat is in riichi. LABEL-ONLY like the
+# buttons below — no text to read, so these are deliberately absent from
+# FIELD_ROT / NUMERIC_FIELDS (there is nothing to rotate-and-CTC-read; the
+# detected class IS the label). Distinct from `riichi_stick_count` (the
+# top-left kyotaku/供托 pot counter, a NUMERIC_FIELD): that one counts how many
+# 1000-point sticks are in the pot; these four say WHICH seat(s) contributed
+# one, i.e. "this player is currently in riichi".
+REACH_STICK_NAMES: list[str] = [
+    "reach_stick_self", "reach_stick_right", "reach_stick_across", "reach_stick_left",
+]
 
 HUD_NAMES: list[str] = [
     # center info panel (center-anchored; identical on PC/mobile)
@@ -17,11 +30,11 @@ HUD_NAMES: list[str] = [
     # action buttons (semantic; glyph varies per server language)
     "btn_chi", "btn_pon", "btn_kan", "btn_riichi",
     "btn_tsumo", "btn_ron", "btn_kyushu", "btn_skip",
-]
-DET_NAMES: list[str] = TILE_NAMES + HUD_NAMES          # 55-class detector head
+] + REACH_STICK_NAMES                                  # ids 55-58 (spec §10)
+DET_NAMES: list[str] = TILE_NAMES + HUD_NAMES          # 59-class detector head
 HUD_NAME_TO_ID: dict[str, int] = {n: len(TILE_NAMES) + i for i, n in enumerate(HUD_NAMES)}
 NUM_DET_CLASSES: int = len(DET_NAMES)
-assert NUM_DET_CLASSES == 55, NUM_DET_CLASSES
+assert NUM_DET_CLASSES == 59, NUM_DET_CLASSES
 
 # liqi operation type -> button class. Wire shape verified on run_13/game1:
 # raw_liqi.data.data.operation = {seat, operationList:[{type, combination,...}], ...}.

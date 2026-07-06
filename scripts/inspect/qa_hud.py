@@ -3,14 +3,15 @@
 
 Iterates every 'ok' frame of one capture (skips `is_deal_window` /
 `is_score_anim_window` / `is_call_window` seqs -- same drop policy build_dataset/annotate_frame use
-for HUD, see state/replay.py), runs the 55-class tile+HUD detector, keeps only
-the HUD detections (ids 38-54, `hud.DET_NAMES`), assembles them via
+for HUD, see state/replay.py), runs the 59-class tile+HUD detector, keeps only
+the HUD detections (ids 38-58, `hud.DET_NAMES`), assembles them via
 `recognize.hudstate.assemble_hud`, and compares field-by-field against GT
 derived from the replayed BoardState (`annotate.hud.field_texts` for the
-numeric/round/wind fields, `hud.buttons_for_ops` for the button set). Prints
+numeric/round/wind fields, `hud.buttons_for_ops` for the button set,
+`state.reach` for the per-seat reach-stick fields -- Task 17a). Prints
 per-field exact-match rates + the whole-frame all-fields-correct rate (one
 wrong field/button = the whole frame is wrong; spec
-docs/superpowers/specs/2026-07-04-hud-detection-design.md §6).
+docs/superpowers/specs/2026-07-04-hud-detection-design.md §6, §10).
 
 Usage (real weights, once v2 exists):
   PYTHONPATH=. python scripts/inspect/qa_hud.py \
@@ -51,8 +52,13 @@ DEFAULT_READER = "majsoul_eye/recognize/hud_reader.pt"
 # flat_from_hud()'s output names below (so gt/pred compare like-for-like).
 FIELDS = ["score_self", "score_right", "score_across", "score_left",
           "round_label", "wall_count", "riichi_stick_count", "honba_count",
-          "seat_wind_self"]
+          "seat_wind_self",
+          # per-seat reach-stick fields (Task 17a, spec §10) -- booleans, not
+          # reader strings, but slot into the same per-field hit/total +
+          # whole-frame criterion as every other field above.
+          "riichi_self", "riichi_right", "riichi_across", "riichi_left"]
 _PREFIX = {"wall_count": "余", "riichi_stick_count": "x", "honba_count": "x"}
+RIICHI_SEATS = ["self", "right", "across", "left"]   # == assemble_hud's "riichi" dict order
 
 # _to_int is imported from majsoul_eye.recognize.hudstate (not re-implemented here)
 # so this GT-side normalization can never drift from assemble_hud's own parsing --
@@ -61,27 +67,44 @@ _PREFIX = {"wall_count": "余", "riichi_stick_count": "x", "honba_count": "x"}
 # sides of the comparison are like-for-like (brief requirement).
 
 
+def gt_riichi(state) -> dict:
+    """BoardState.reach -> {seat: bool} hero-relative (self/right/across/left),
+    the same shape/keys as assemble_hud's "riichi" bucket. Omitted (empty dict,
+    same 'never guess' policy as gt_fields/field_texts) when hero_seat is
+    unknown -- there is no hero-relative mapping without it."""
+    hero = state.hero_seat
+    if hero < 0 or not state.reach:
+        return {}
+    return {seat: bool(state.reach[(hero + i) % 4]) for i, seat in enumerate(RIICHI_SEATS)}
+
+
 def gt_fields(state) -> dict:
     """BoardState -> {field_name: value} in the SAME shape assemble_hud emits
-    (ints for numeric fields, str for round_label/seat_wind_self). A field
-    field_texts() omits (GT genuinely unknown, e.g. before the first kyoku)
-    is simply absent here -> not scored either way."""
+    (ints for numeric fields, str for round_label/seat_wind_self, bool for the
+    riichi_* fields). A field field_texts()/gt_riichi() omits (GT genuinely
+    unknown, e.g. before the first kyoku) is simply absent here -> not scored
+    either way."""
     out = {}
     for name, text in field_texts(state).items():
         out[name] = _to_int(text, _PREFIX.get(name, "")) if name in NUMERIC_FIELDS else text
+    for seat, val in gt_riichi(state).items():
+        out[f"riichi_{seat}"] = val
     return out
 
 
 def flat_from_hud(hud: dict) -> dict:
     """assemble_hud's nested dict -> the flat {field_name: value} shape gt_fields
     uses (buttons are compared separately -- a set, not a scalar field)."""
-    return {
+    flat = {
         "score_self": hud["scores"]["self"], "score_right": hud["scores"]["right"],
         "score_across": hud["scores"]["across"], "score_left": hud["scores"]["left"],
         "round_label": hud["round"], "wall_count": hud["wall"],
         "riichi_stick_count": hud["kyotaku"], "honba_count": hud["honba"],
         "seat_wind_self": hud["seat_wind"],
     }
+    for seat in RIICHI_SEATS:
+        flat[f"riichi_{seat}"] = hud["riichi"][seat]
+    return flat
 
 
 def det_to_hud_pairs(dets) -> list:
@@ -128,9 +151,10 @@ class _FakeReader:
 class _FakeDetector:
     """Oracle detector: for the CURRENT frame (set_frame), emits one Detection
     per GT-known field (real on-frame px boxes from HUD_SEEDS, so crops are
-    non-empty) + one per expected button, each dropped with probability
-    drop_rate (simulates a missed detection), plus one bogus tile detection
-    (id < NUM_CLASSES) to prove det_to_hud_pairs filters tiles out."""
+    non-empty) + one per expected button + one per seat currently in riichi
+    (Task 17a, real px boxes from REACH_STICK_SEEDS), each dropped with
+    probability drop_rate (simulates a missed detection), plus one bogus tile
+    detection (id < NUM_CLASSES) to prove det_to_hud_pairs filters tiles out."""
 
     def __init__(self, reader: _FakeReader, drop_rate: float = 0.05, seed: int = 1):
         self.reader = reader
@@ -144,7 +168,7 @@ class _FakeDetector:
         self._region = region
 
     def predict(self, frame_bgr):
-        from majsoul_eye.coords import HUD_SEEDS
+        from majsoul_eye.coords import HUD_SEEDS, REACH_STICK_SEEDS
         from majsoul_eye.hud import HUD_NAME_TO_ID
         from majsoul_eye.recognize.detector import Detection
 
@@ -164,6 +188,13 @@ class _FakeDetector:
             if self.rng.random() < self.drop_rate:
                 continue
             dets.append(Detection(xyxy=(1200, 740, 1360, 790), name=name, tile=None,
+                                  cls=HUD_NAME_TO_ID[name], score=0.9))
+        for seat, is_reach in gt_riichi(self._state).items():
+            if not is_reach or self.rng.random() < self.drop_rate:
+                continue
+            name = f"reach_stick_{seat}"
+            x0, y0, x1, y1 = (int(v) for v in self._region.norm_to_px(REACH_STICK_SEEDS[name]))
+            dets.append(Detection(xyxy=(x0, y0, x1, y1), name=name, tile=None,
                                   cls=HUD_NAME_TO_ID[name], score=0.9))
         return dets
 

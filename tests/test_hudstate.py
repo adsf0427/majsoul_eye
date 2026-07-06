@@ -26,4 +26,13 @@ bad = StubReader({"score_self": "2x500", "wall_count": "余",
                   "honba_count": "x1", "round_label": "E3"})
 h2 = assemble_hud(dets, bad, frame)
 assert h2["scores"]["self"] is None and h2["wall"] is None
+
+# reach-stick detections (Task 17a): label-only, bucketed under "riichi", not
+# "buttons"; no reader call involved (StubReader never asked for it).
+dets_reach = dets + [("reach_stick_left", (828, 350, 853, 445))]
+h3 = assemble_hud(dets_reach, r, frame)
+assert h3["riichi"] == {"self": False, "right": False, "across": False, "left": True}
+assert "reach_stick_left" not in h3["buttons"]           # never conflated with buttons
+# baseline (no reach-stick detections) -> all False
+assert h["riichi"] == {"self": False, "right": False, "across": False, "left": False}
 print("test_hudstate OK")

@@ -148,7 +148,7 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
         from majsoul_eye.annotate import hud as HUD
         from majsoul_eye.state.replay import is_score_anim_window
         region = locate_fullscreen(img)
-        boxes = HUD.hud_field_boxes(img, state, region)
+        boxes = HUD.hud_field_boxes(img, state, region) + HUD.reach_stick_boxes(img, state, region)
         if is_score_anim_window(state):
             for b in boxes:
                 b["reliable"] = False
