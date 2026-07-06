@@ -41,14 +41,29 @@ assert len(boxes3) == 1
 assert boxes3[0]["name"] == "reach_stick"
 assert boxes3[0]["slot"] == "across"
 
-# --- no bar rendered (black frame) -> reliable False -------------------------
-s4 = BoardState(hero_seat=0, reach=[True, False, False, False])
+# --- fill gate is scoped to the reach window (2026-07-07 label fix) ----------
+# The stick can only be missing/occluded on frames whose record is still in the
+# reach window (is_score_anim_window); once settled it stays rendered to the end
+# of the kyoku. A dark skinned stick (sword/syringe) fails the gray>=150 fill
+# even fully rendered, so off-window frames must trust GT (the old
+# unconditional gate silently dropped ~20% of across/left sticks -> trained the
+# detector to treat skinned sticks as background).
+s4 = BoardState(hero_seat=0, reach=[True, False, False, False])   # settled
 boxes4 = reach_stick_boxes(black, s4, region)
 assert len(boxes4) == 1
-assert boxes4[0]["name"] == "reach_stick"
 assert boxes4[0]["slot"] == "self"
-assert boxes4[0]["reliable"] is False
-assert boxes4[0]["fill"] < REACH_FILL_OK
+assert boxes4[0]["fill"] < REACH_FILL_OK              # dark slot...
+assert boxes4[0].get("reliable", True) is True        # ...but GT wins off-window
+
+# in-window (reach_accepted bundled with next actor's tsumo) + unrendered slot
+# -> the per-box safety net still fires
+s5 = BoardState(hero_seat=0, reach=[True, False, False, False],
+                last_event_types=frozenset({"reach_accepted", "tsumo"}))
+boxes5 = reach_stick_boxes(black, s5, region)
+assert boxes5[0]["reliable"] is False
+# in-window but the bar HAS rendered -> fill passes, box stays reliable
+boxes6 = reach_stick_boxes(img, s5, region)
+assert boxes6[0].get("reliable", True) is True
 
 # --- hero_seat unknown (-1) guard --------------------------------------------
 s5 = BoardState(hero_seat=-1, reach=[True, False, False, False])

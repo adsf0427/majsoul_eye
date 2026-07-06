@@ -35,4 +35,28 @@ assert t["seat_wind_self"] == "S"             # (2-1)%4=1 -> S
 # missing GT -> field omitted
 t2 = field_texts(BoardState())
 assert "wall_count" not in t2 and "score_self" not in t2 and "seat_wind_self" not in t2
+
+# --- wall_count: zero-padded text + fixed box (2026-07-07 label fix) ----------
+# The client renders the count zero-padded to 2 digits (余09, not 余9), so the
+# reader GT must match the pixels, and the string is constant-width -> the box
+# is fixed (no extent snap; the old 42px seed clipped the digits off ALL labels).
+from majsoul_eye.annotate.hud import hud_field_boxes
+from majsoul_eye.coords import HUD_SEEDS
+from majsoul_eye.normalize import BoardRegion
+
+assert field_texts(BoardState(left_tile_count=4))["wall_count"] == "余04"
+assert field_texts(BoardState(left_tile_count=0))["wall_count"] == "余00"
+
+region = BoardRegion(0, 0, 1920, 1080)
+frame = np.zeros((1080, 1920, 3), np.uint8)
+frame[433:445, 923:997] = 230                 # 余NN ink band at its measured position
+sw = BoardState(left_tile_count=43)
+wc = next(d for d in hud_field_boxes(frame, sw, region) if d["name"] == "wall_count")
+assert wc["px_box"] == list(region.norm_to_px(HUD_SEEDS["wall_count"]))  # fixed seed, not snapped
+assert wc["px_box"][2] - wc["px_box"][0] >= 80    # covers 余 + both digits (~74px ink)
+assert wc.get("reliable", True)
+# not rendered (no ink in the 余 probe region) -> unreliable, same policy as before
+wc2 = next(d for d in hud_field_boxes(np.zeros((1080, 1920, 3), np.uint8), sw, region)
+           if d["name"] == "wall_count")
+assert wc2.get("reliable", True) is False
 print("test_hud_fields OK")

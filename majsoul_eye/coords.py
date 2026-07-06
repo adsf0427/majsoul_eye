@@ -197,12 +197,17 @@ _HUD_SEEDS_PX: dict[str, tuple[int, int, int, int]] = {
     "score_across":       (895, 353, 1030, 383),   # upside-down digits; y0 trimmed below the vertex glow/crown, y1 widened (to just short of round_label's seed) for bottom margin
     "score_left":         (858, 385, 900, 462),    # vertical digits; y0 trimmed below the corner wind-tag badge; x0 trimmed clear of the vertex glow (~x854)
     "round_label":        (912, 384, 1008, 414),   # 東N局 (below score_across, above wall_count)
-    "wall_count":         (910, 427, 952, 455),    # 余NN (below round_label); y0 trimmed clear of round_label's descender bleed, x1 trimmed clear of the panel's corner bezel highlight (~x956)
+    "wall_count":         (918, 428, 1002, 452),   # 余NN (below round_label). FIXED box, no extent snap: the count renders zero-padded to 2 digits, so the string is constant-width — glyph ink measured x923-997 y432-448, identical across ai_session/2/3 incl. the cloud table (2026-07-07 resurvey). The old 42px seed (x1=952, trimmed for a bezel highlight ~x956) sat BEFORE the digits (~x955+) and clipped them out of every label; with no snap, bezel/score-glow bleed can't stretch the box — render presence is probed on the 余 subregion only (WALL_COUNT_INK_PROBE)
     "seat_wind_self":     (793, 488, 852, 540),    # corner wind tag beside score_self (see note above)
     "riichi_stick_count": (85, 135, 178, 175),      # mycv get_bangzi; x0 clears the icon (ends ~x67) w/ 3px margin before the "x" glyph (starts ~x88), y1 trimmed clear of the panel's bottom trim (~y180)
     "honba_count":        (222, 135, 300, 175),     # mycv get_benchang; x0 clears the icon (ends ~x205) w/ 3px margin before the "x" glyph (starts ~x225), x1/y1 trimmed clear of the panel's bottom-right corner cut
 }
 HUD_SEEDS: dict[str, NormBox] = {k: px_box(*v) for k, v in _HUD_SEEDS_PX.items()}
+
+# Render-presence probe for the fixed wall_count box: just the 余 glyph's cell
+# (ink x923-948 — always present when the field renders, and safely inside the
+# seed away from the bezel/score glow that contaminates a full-width ink scan).
+WALL_COUNT_INK_PROBE = px_box(920, 430, 950, 450)
 
 
 # Action-button strip (bottom, above the hand).

@@ -121,8 +121,12 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   (`CASES`). (The precise pipeline was moved verbatim out of a former root
   `mahjong_relative_annotation_pipeline.py`, now removed — import `from majsoul_eye.annotate import pipeline as P`.)
   `hud.py` = GT-driven HUD field/button boxes: `hud_field_boxes` (seed ROI + per-frame ink-snap on
-  numeric fields), `button_boxes` (op-GT class assignment against `BTN_ZONE` candidates,
-  count-mismatch → whole-frame drop). `annotate_frame` calls both into `rec["hud_boxes"]`.
+  numeric fields — EXCEPT `wall_count`, a fixed box with zero-padded text `余09` and a presence-only
+  ink probe), `button_boxes` (op-GT class assignment against `BTN_ZONE` candidates; emitted boxes are
+  the fixed 250×96 BANNER click area, not the language-dependent glyph blob; oversized/merged
+  candidates rejected; count-mismatch → whole-frame drop), `reach_stick_boxes` (fill gate applies
+  only inside the reach window — settled frames trust GT so dark skinned sticks aren't dropped;
+  STATUS §1.44). `annotate_frame` calls all three into `rec["hud_boxes"]`.
 - **`label/`** — **legacy** NormBox annotator, now just `autolabel.py` (`label_frame`): supplies the
   hero hand + dora boxes only (`annotate_frame` calls it for those zones; `DEFAULT_ZONES = {hand}`).
   The old `river.py`/`meld.py` + `coords.RIVER_QUADS`/`MELD_STRIPS` (equal-subdivision RiverGrid) were

@@ -25,6 +25,27 @@ bb = button_boxes(img, s, region)
 assert [b["name"] for b in bb] == ["btn_pon", "btn_skip"]     # left->right order rule
 assert all(b.get("reliable", True) for b in bb)
 
+# --- boxes are the BANNER (click area), not the text glyph (2026-07-07) ------
+# The banner is a fixed-size plate (calibrated 250x96, centered 10px below the
+# text-blob center across all 7 classes / 189 measured frames); the glyph box
+# varies with display language, the banner does not.
+from majsoul_eye.annotate.hud import BTN_BANNER_W, BTN_BANNER_H, BTN_BANNER_DY
+tcx, tcy = zx0 + 180, cy                       # first blob's center (100..260)
+exp = [tcx - BTN_BANNER_W // 2, tcy + BTN_BANNER_DY - BTN_BANNER_H // 2,
+       tcx + BTN_BANNER_W // 2, tcy + BTN_BANNER_DY + BTN_BANNER_H // 2]
+assert list(bb[0]["px_box"]) == exp, f"want banner box {exp}, got {bb[0]['px_box']}"
+assert bb[0]["px_box"][2] - bb[0]["px_box"][0] == BTN_BANNER_W
+assert bb[0]["px_box"][3] - bb[0]["px_box"][1] == BTN_BANNER_H
+
+# --- oversized text blobs (merged banners/FX) are rejected as candidates -----
+# (7.2% of v3 button labels were >300px-wide merged blobs -> garbage labels;
+# rejecting them degrades the frame to count_mismatch = no labels, 宁缺毋滥)
+img_big = np.zeros((H, W, 3), np.uint8)
+img_big[cy - 25:cy + 25, zx0 + 100:zx0 + 260] = 220    # normal blob
+img_big[cy - 25:cy + 25, zx0 + 300:zx0 + 700] = 220    # 400px merged blob
+cands_big = locate_button_candidates(img_big, locate_fullscreen(img_big))
+assert len(cands_big) == 1, f"oversized blob must be rejected, got {cands_big}"
+
 s2 = BoardState(hero_seat=0, pending_ops=[1, 3, 9])           # expects 3, sees 2
 bb2 = button_boxes(img, s2, region)
 assert len(bb2) == 3, f"Expected 3 entries, got {len(bb2)}"

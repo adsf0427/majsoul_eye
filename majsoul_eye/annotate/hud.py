@@ -1,7 +1,9 @@
 """GT-driven HUD field annotation: seed ROI (WHERE) + BoardState (WHAT).
 
-Numeric fields are ink-snapped per frame (glyph width varies with the value);
-fixed-glyph fields (round_label / seat_wind_self) keep the seed box. Buttons are
+Numeric fields are ink-snapped per frame (glyph width varies with the value),
+EXCEPT constant-width ones (FIXED_BOX_NUMERIC, e.g. zero-padded wall_count)
+which keep the seed box and only probe ink for render-presence; fixed-glyph
+fields (round_label / seat_wind_self) keep the seed box. Buttons are
 handled separately (button_boxes, Task 7). Output dict style matches
 annotate.frame's hand_boxes: `reliable` is only ever SET False.
 """
@@ -10,8 +12,17 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from majsoul_eye.coords import HUD_SEEDS, BTN_ZONE, REACH_STICK_SEEDS
+from majsoul_eye.coords import (HUD_SEEDS, BTN_ZONE, REACH_STICK_SEEDS,
+                                WALL_COUNT_INK_PROBE)
 from majsoul_eye.hud import NUMERIC_FIELDS, REACH_STICK_SLOTS, buttons_for_ops
+from majsoul_eye.state.replay import is_score_anim_window
+
+# Numeric fields whose rendered string is constant-width, so the seed IS the
+# label box (no extent snap; ink is probed for render-presence only). wall_count
+# qualifies because the client zero-pads it to 2 digits; the probe covers just
+# the 余 glyph, clear of the panel bezel / score glow that pollutes a full-width
+# ink scan (the pollution that forced the old — digit-clipping — 42px seed).
+FIXED_BOX_NUMERIC = {"wall_count": WALL_COUNT_INK_PROBE}
 
 # CALIBRATED (Task 6): 150 only caught the brightest anti-aliased crest of the
 # round_label/wall_count glyphs (cyan text tops out at gray~171 under BGR2GRAY,
@@ -52,7 +63,9 @@ def field_texts(state) -> dict[str, str]:
     if state.bakaze and state.kyoku:
         t["round_label"] = f"{state.bakaze}{state.kyoku}"
     if state.left_tile_count is not None:
-        t["wall_count"] = f"余{state.left_tile_count}"
+        # The client zero-pads to 2 digits (余09, never 余9) — verified on real
+        # frames 2026-07-07; the reader GT must match the rendered glyphs.
+        t["wall_count"] = f"余{state.left_tile_count:02d}"
     if state.in_round:
         t["riichi_stick_count"] = f"x{state.kyotaku}"
         t["honba_count"] = f"x{state.honba}"
@@ -70,12 +83,14 @@ def hud_field_boxes(img: np.ndarray, state, region) -> list[dict]:
         seed = region.norm_to_px(HUD_SEEDS[name])
         box, fill = seed, 1.0
         if name in NUMERIC_FIELDS:
-            snapped = ink_snap(img, seed)
+            probe = FIXED_BOX_NUMERIC.get(name)
+            snapped = ink_snap(img, region.norm_to_px(probe) if probe else seed)
             if snapped is None:
                 out.append({"name": name, "px_box": list(seed), "text": text,
                             "fill": 0.0, "reliable": False})
                 continue
-            box = snapped
+            if probe is None:                  # variable-width value: snap to ink
+                box = snapped                  # (fixed-box fields keep the seed)
         d = {"name": name, "px_box": [int(v) for v in box], "text": text,
              "fill": fill}
         out.append(d)
@@ -99,23 +114,24 @@ def hud_field_boxes(img: np.ndarray, state, region) -> list[dict]:
 #           full-screen hand-slam FX covers the slot, riichi_stick_count still x0)
 # 0.35 sits clear of self's only confirmed-lag value (0.334) and left's settled
 # floor (0.428), so it reliably separates "mid-animation" from "rendered" for
-# those two slots (right has no counter-example to violate it either). It DOES
-# cost recall on `across`: ~half its settled samples (the dim syringe-skin
-# games) fall below 0.35 and get flagged unreliable despite being fully
-# rendered — accepted per this module's "reliable only ever SET False" policy
-# (dropping a good frame is safe; the alternative, a low threshold, would miss
-# the confirmed self/across hand-slam lag frames above, i.e. mislabel a
-# not-yet-rendered frame as reliable, which this policy exists to prevent).
-# ⚠️ Also NOTE: `state.replay.is_score_anim_window` (checked as a second,
-# frame-level gate in annotate/frame.py) used to NEVER fire for these exact
-# reach_accepted frames in this capture set — Majsoul bundles reach_accepted
-# with the next actor's immediate tsumo in one record, so `state.last_event`
-# was always overwritten to "tsumo" by the time the frame is snapshotted
-# (verified across all 6 reach_accepted seqs sampled). FIXED (Task 18) via
-# `BoardState.last_event_types` (the full set of event types the bundled
-# record applied, not just the last one) — the frame-level gate now fires
-# correctly too, but this per-box fill check remains as the finer-grained,
-# per-seat safety net.
+# those two slots (right has no counter-example to violate it either).
+# ⚠️ SCOPED TO THE REACH WINDOW (2026-07-07): the gate only applies when
+# `is_score_anim_window(state)` says the frame's record is still in the
+# reach/reach_accepted window — every confirmed lag/occlusion sample above sat
+# on exactly that record (hand-slam FX at declaration); once settled the stick
+# stays rendered to the end of the kyoku. Applied unconditionally, the
+# luminance-only fill conflated "not yet rendered" with "rendered but dark
+# skin" and silently dropped 22.3%/19.7% of across/left sticks in datasets/v3
+# (192 resp. 201 of them with fill>=0.1, i.e. rendered dim skins — measured on
+# a sword-skin frame: fill 0.264) — worse than dropped: those frames still
+# trained the detector with the stick as BACKGROUND. Off-window frames now
+# trust GT regardless of fill. In-window frames are already excluded from HUD
+# label emission wholesale by build_dataset's frame-level is_score_anim_window
+# gate (working since Task 18's last_event_types fix); this per-box check
+# remains as the finer, per-seat safety net for other consumers of the
+# annotations. NOTE the stale-fallback residual (see is_call_window docstring):
+# a zero-event record inherits the previous record's last_event_types, which
+# can only over-gate (conservative) here.
 REACH_FILL_OK = 0.35
 
 
@@ -130,13 +146,16 @@ def reach_stick_boxes(img: np.ndarray, state, region) -> list[dict]:
     from this annotation-time slot. Label-only like buttons — no text, the
     class itself is the label — so this does not go through
     ink_snap/NUMERIC_FIELDS at all; `fill` is a coarse lit/unlit render check
-    (fraction of gray>=150 pixels in the seed slot), used only to flag
-    `reliable=False` when the stick hasn't rendered yet (GT (`state.reach`)
-    flips at `reach_accepted` a beat before the client draws the stick — same
-    GT-leads-render race as every other zone in this module)."""
+    (fraction of gray>=150 pixels in the seed slot), applied ONLY while the
+    frame's record is still in the reach window (GT (`state.reach`) flips at
+    `reach_accepted` a beat before the client draws the stick — same
+    GT-leads-render race as every other zone in this module). Off-window the
+    stick is guaranteed rendered, and a luminance fill would misread dark
+    skinned sticks as absent (see REACH_FILL_OK note above)."""
     hero = state.hero_seat
     if hero < 0 or not state.reach:
         return []
+    in_reach_window = is_score_anim_window(state)
     out: list[dict] = []
     for i, slot in enumerate(REACH_STICK_SLOTS):
         if not state.reach[(hero + i) % 4]:
@@ -147,7 +166,7 @@ def reach_stick_boxes(img: np.ndarray, state, region) -> list[dict]:
         if roi.size:
             fill = float((cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) >= 150).mean())
         d = {"name": "reach_stick", "slot": slot, "px_box": [x0, y0, x1, y1], "fill": round(fill, 3)}
-        if fill < REACH_FILL_OK:
+        if in_reach_window and fill < REACH_FILL_OK:
             d["reliable"] = False
         out.append(d)
     return out
@@ -165,6 +184,31 @@ def reach_stick_boxes(img: np.ndarray, state, region) -> list[dict]:
 # seed guess — the only real bug was BTN_ZONE being too wide (see coords.py).
 BTN_MIN_AREA = 2500    # px² @1080p; real banners measured 5170-21008 px²
 BTN_THRESH = 140       # banner glyph glow vs table; verified across all 22 frames
+# Glyph blobs beyond these dims are merged banners / stray FX, never a single
+# button's text (clean glyphs measured w<=~220, h<=~85; 7.2% of v3 button labels
+# were such merged blobs, up to 845px wide). Rejecting the candidate degrades
+# the frame to count_mismatch -> it contributes no button labels (宁缺毋滥).
+BTN_MAX_W = 300        # px @1080p, glyph-blob upper bound
+BTN_MAX_H = 90
+# CALIBRATED (2026-07-07) banner (= click area) geometry: the label box is the
+# BANNER, not the text glyph — the glyph box varies with display language while
+# the banner plate is a constant-size UI element. Measured by color-distance
+# segmentation against 189 clean button frames across all 7 classes, default +
+# skinned UI themes: banner bbox is 244-251 x 82-102 px, centered 8-13px below
+# the glyph-blob center with |dcx| <= ~10. One fixed size keeps labels
+# consistent for the detector; clicking anywhere in it hits the button.
+BTN_BANNER_W = 250
+BTN_BANNER_H = 96
+BTN_BANNER_DY = 10     # banner center sits this far BELOW the glyph center
+
+
+def banner_box(text_box) -> tuple[int, int, int, int]:
+    """Fixed-size banner (click-area) box anchored on a glyph blob's center."""
+    x0, y0, x1, y1 = text_box
+    cx = (x0 + x1) // 2
+    cy = (y0 + y1) // 2 + BTN_BANNER_DY
+    return (cx - BTN_BANNER_W // 2, cy - BTN_BANNER_H // 2,
+            cx + BTN_BANNER_W // 2, cy + BTN_BANNER_H // 2)
 BTN_ORDER_LTR = True   # display order left->right == buttons_for_ops order —
                        # VERIFIED on all 22 real frames (incl. 3-button pon+kan
                        # and chi+ron frames): on-screen L->R order exactly
@@ -182,19 +226,21 @@ def locate_button_candidates(img, region) -> list[tuple[int, int, int, int]]:
     out = []
     for c in cnts:
         x, y, w, h = cv2.boundingRect(c)
-        if w * h >= BTN_MIN_AREA and w > h:            # wide banner shape
+        if (w * h >= BTN_MIN_AREA and w > h              # wide banner shape
+                and w <= BTN_MAX_W and h <= BTN_MAX_H):  # not a merged blob/FX
             out.append((x0 + x, y0 + y, x0 + x + w, y0 + y + h))
     return sorted(out)
 
 
 def button_boxes(img, state, region) -> list[dict]:
-    """GT-expected buttons matched to located candidates by order.
-    Count mismatch -> every box unreliable + flagged (frame contributes no
-    button labels; 宁缺毋滥)."""
+    """GT-expected buttons matched to located candidates by order; emitted
+    px_box is the fixed-size BANNER (click area) anchored on each glyph blob
+    (see BTN_BANNER_* calibration above). Count mismatch -> every box
+    unreliable + flagged (frame contributes no button labels; 宁缺毋滥)."""
     expected = buttons_for_ops(state.pending_ops or [])
     if not expected:
         return []
-    cands = locate_button_candidates(img, region)
+    cands = [banner_box(c) for c in locate_button_candidates(img, region)]
     ordered = expected if BTN_ORDER_LTR else expected[::-1]
     if len(cands) != len(expected):
         return [{"name": n,

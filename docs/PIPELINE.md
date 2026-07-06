@@ -4,7 +4,11 @@
 > 只要影响 采集/标注/建库/训练 任何一环，**必须同步更新本文**（维护规约见 §8）。
 > 历史沿革与实测结论见 [STATUS.md](STATUS.md)；设计论证见 [DESIGN.md](DESIGN.md)。
 >
-> 最后更新：2026-07-06（**HUD 支线与 dev 实验线合并**。HUD：annotate 出 `hud_boxes`（字段
+> 最后更新：2026-07-07（**HUD 标签三修 + v4 重建**，STATUS §1.44：`wall_count` 固定框 + GT 补零
+> `余09`（旧 42px 收紧种子把数字截出了全部标签）；立直棒 fill 门限缩到声明窗口内（暗皮肤棒不再被当
+> 背景训练，across/left 各救回 16.7%/13.8%）；按钮框改恒定 250×96 banner 点击区（跨语言不变）+
+> 黏连候选上限拒绝。现役数据集 **`datasets/v4`**（71 局全量重建）。）
+> 前次：2026-07-06（**HUD 支线与 dev 实验线合并**。HUD：annotate 出 `hud_boxes`（字段
 > ink-snap + 按钮 op-GT 赋类 + count-mismatch 丢弃）、build 出 **56 类**（38 牌 + 17 HUD/按钮 +
 > 立直棒，`majsoul_eye/hud.py`）YOLO + `hud/` 读取器训练对、新丢帧谓词 `is_call_window`、采集侧
 > `--op-delay` + multi-shot extras（`status="extra"` 下游默认不可见、`dt` 字段）、新入口
@@ -29,8 +33,9 @@
    默认 sources = captures/raw/ai_session（可加 captures/raw/manual、将来的 ai_session_2 等；
    立即执行，--dry-run 才是干跑）。内部按序编排三个阶段，产出自包含版本目录：
 
-   datasets/<name>/                      ←（现役：datasets/v2，28 局纯 AI（38 类旧 build，HUD 训练前重建）；
-                                            datasets/v3 = HUD 流程验证 2 局，见 STATUS §1.41）
+   datasets/<name>/                      ←（现役：datasets/v4，71 局全量（HUD 标签三修后重建，STATUS §1.44）；
+                                            v3 = 修复前全量（wall_count 截断/暗棒缺失，勿再训 HUD 类）；
+                                            v2 = 28 局纯 AI 38 类旧 build）
      annotations/                        标注记录（AI 局；annotate_ai_session 产出）
      <game>/{crops/<38类>/,
              yolo/{images,labels}}       每局一个子文件夹（build_dataset 产出，合并后代码的
@@ -70,7 +75,7 @@
 | `captures/intermediate/derived/` | 修复帧（裁 16:9 等历史遗留局）。去黑边 `*_fixed` 路径**已退役**——run_5 信箱局 2026-07-05 就地修复（`deletterbox_frames.py --inplace`），raw 即修复帧 | ✅ 由 raw 重建 |
 | `captures/legacy/` | 归档的逐字节重复（ai_g*/ai_r1） | — 可删 |
 | `captures/raw/temp/` | ⚠️ 无 GT 的孤儿帧（采集失败残留，只有 PNG 没有对局 jsonl）——不可用，待清理 | — 垃圾 |
-| `datasets/<name>/`（版本目录，现役 `v2`（38 类旧 build，HUD 训练前重建）；`v3` = HUD 流程验证 2 局，STATUS §1.41） | 自包含数据集：`annotations/` + 每局 `<game>/{crops,yolo(合并后 56 类),hud/(读取器训练对)}` + `detector/`（+`--obb` 时 `detector_obb/`，不拷图 txt 引用）+ `games.json` 清单 | ✅ build_datasets.py |
+| `datasets/<name>/`（版本目录，现役 `v4` = 71 局全量、HUD 标签三修后重建（STATUS §1.44）；`v3` = 修复前全量（HUD 类标签有系统性缺陷，勿再训）；`v2` = 38 类旧 build） | 自包含数据集：`annotations/` + 每局 `<game>/{crops,yolo(合并后 56 类),hud/(读取器训练对)}` + `detector/`（+`--obb` 时 `detector_obb/`，不拷图 txt 引用）+ `games.json` 清单 | ✅ build_datasets.py |
 | `out/ai_session_annotations/` | 旧全局标注位置（早期版本产物；现每个版本自带 `datasets/<name>/annotations/`） | — 可删 |
 | `majsoul_eye/recognize/*.pt` | **正式权重**（tile_classifier.pt 入 git；tile_detector.pt 本地） | GPU 重训 |
 | `weights/` | `pretrained/` 训练基座 + `detector/` 变体（aabb/obb 等，均 gitignore） | — |
@@ -124,13 +129,19 @@
   `is_deal_window` 同策略整帧丢弃，在 `annotate_ai_session`/`build_dataset` 都生效；
   run_3/game1 实测丢弃率 ~4.2%，全部单帧命中、无过匹配）。
 - `annotate_frame` 新增 `hud_boxes`（`majsoul_eye/annotate/hud.py`）：数值字段（四家分数/
-  余牌/供托/本场）按标定种子 ROI（`coords.HUD_SEEDS`）做逐帧**墨迹收紧**（ink-snap，
+  供托/本场）按标定种子 ROI（`coords.HUD_SEEDS`）做逐帧**墨迹收紧**（ink-snap，
   亮度阈值 `INK_THRESH=120`，无墨迹即标 `reliable=False`）；`round_label`/`seat_wind_self`
-  定尺寸不收紧。按钮框：`state.pending_ops`（`state/ops.py` 从 `raw_liqi.data.data.operation.
+  定尺寸不收紧；**`wall_count` 为固定框**（客户端补零两位 ⇒ 恒宽恒位，GT 文本亦补零 `余09`，
+  只在余字子区探测是否渲染——旧 42px 收紧种子曾把数字截出全部标签，STATUS §1.44）。
+  按钮框：`state.pending_ops`（`state/ops.py` 从 `raw_liqi.data.data.operation.
   operationList` 提取）经 `hud.buttons_for_ops` 得到期望类别集合，与 `BTN_ZONE` 内定位到的
-  候选按 x 序一一对应；**检出数 ≠ 期望数则整帧按钮标签丢弃**（`flag:count_mismatch`，
+  候选按 x 序一一对应，发出的框是**恒定 250×96 banner（实际点击区，跨显示语言不变）**而非
+  文字字形框；候选超尺寸（`BTN_MAX_W/H`，并排 banner/特效黏连块）直接拒绝；
+  **检出数 ≠ 期望数则整帧按钮标签丢弃**（`flag:count_mismatch`，
   宁缺毋滥，与旧 river/meld 门同哲学）。立直宣言/分数滚动窗口（`replay.is_score_anim_window`）
-  只把 HUD 框标记不可靠、不丢整帧（牌面标签不受影响）。
+  只把 HUD 框标记不可靠、不丢整帧（牌面标签不受影响）；立直棒的逐框亮度 fill 门也**只在该窗口内**
+  生效——settled 帧一律信 GT（暗色皮肤棒 fill 常年 <0.35，无条件门曾把 across/left 槽 16.7%/13.8%
+  的棒当背景训练，STATUS §1.44）。
 - 牌背（`back`）可靠性门是**去皮肤化**的：`pipeline.tile_live_mask`（饱和度或亮度
   `(S>60)|(V>110)`，任意肤色都判活）判定 dora/副露反面槽是否已渲染（fill 门），与
   `tile_back_mask`（纯饱和度 `S>70`，供 `snap_meld_strip` 做吸附阶段的 face/back 几何判别）
@@ -146,6 +157,8 @@
 - manual session5/6 一律直接建（不经标注层）。
 - `--drop-violations` 常开；遮挡一致性门 `--occlusion-gate` **默认关**（采集期 roi_diff 已防大头）。
 - 输出既有 crops（分类）也有 yolo（检测）——同一套精确几何，一次标定两处喂。
+- **`yolo/images` 走 copy 快路径**（STATUS §1.43）：帧未经 resize 且源 PNG 是 8-bit RGB 时直接
+  `copyfile` 源帧（跳过 ~100ms/帧 的 PNG 重编码，逐像素等价）；resize 过或非纯 RGB 源回退 `imwrite`。
 - **HUD**：同一份 `rec["hud_boxes"]` 出两种产物：所有 `reliable` 框追加为 YOLO 行
   （**56 类** = 38 牌 + 17 HUD/按钮 + 立直棒，`majsoul_eye.hud.DET_NAMES`；旧的 38 类数据集天然是
   56 类标签空间的子集，可与新数据混训）；带 `text` 的数值/`round_label` 字段额外产出
