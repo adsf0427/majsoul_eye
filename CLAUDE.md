@@ -81,9 +81,11 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
 - **`normalize.py`** — front-end that maps an arbitrary screenshot onto the canonical frame via
   a `BoardRegion` (`locate_fullscreen` / `locate_letterbox`; `AnchorLocator` is a TODO stub).
   This is what lets fixed-slot logic survive other resolutions.
-- **`hud.py`** — the HUD-element detector taxonomy: `HUD_NAMES` (17 classes — 7 center-panel
-  fields, 2 top-left counters, 8 semantic action buttons) + `DET_NAMES = TILE_NAMES + HUD_NAMES`
-  (the 55-class detector head); `OP_TO_BTN`/`buttons_for_ops` (liqi op type → button class);
+- **`hud.py`** — the HUD-element detector taxonomy: `HUD_NAMES` (18 classes — 7 center-panel
+  fields, 2 top-left counters, 8 semantic action buttons, 1 symmetric `reach_stick`) +
+  `DET_NAMES = TILE_NAMES + HUD_NAMES` (the 56-class detector head); `OP_TO_BTN`/`buttons_for_ops`
+  (liqi op type → button class); `REACH_STICK_SLOTS` (self/right/across/left seat-attribution
+  vocabulary for the single symmetric class — spec §10, revised same-day from 4 classes to 1);
   `FIELD_ROT`/`NUMERIC_FIELDS`/`ROUND_CLASSES`/`WIND_CLASSES`/`CTC_CHARSET` (micro-reader
   contracts). Pure data (no cv2/numpy) — every component imports it.
 - **`capture/`** — ⚠️ **DEV-ONLY. The shipped recognizer never imports it.**
@@ -127,9 +129,9 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   **removed** — superseded by `annotate/` (see docs/STATUS.md §1.13).
 - **`recognize/`** — the SHIPPED product: `classifier.py` (`TileNet` small CNN, 64px, 38-class +
   `TileClassifier`) and `detector.py` (`TileDetector`, YOLO HBB/OBB, lazy-loads ultralytics). The
-  detector head is now **55-class** (`hud.DET_NAMES` = 38 tiles + 17 HUD/button classes);
-  `Detection.name` is valid for all 55 ids while `Detection.tile` is `None` for HUD-class ids
-  (38-54) — old 38-class weights still load fine (a strict id prefix). `hudreader.py`
+  detector head is now **56-class** (`hud.DET_NAMES` = 38 tiles + 17 HUD/button classes + 1
+  `reach_stick`); `Detection.name` is valid for all 56 ids while `Detection.tile` is `None` for
+  HUD-class ids (38-55) — old 38-class weights still load fine (a strict id prefix). `hudreader.py`
   (`HudReader` — `DigitCTC` segmentation-free CRNN-CTC for numeric fields + `round_label`/
   `seat_wind_self` classifier heads reusing `TileNet`) and `hudstate.py` (`assemble_hud` —
   detector HUD boxes + `HudReader` outputs → one structured HUD state dict) are the HUD reading

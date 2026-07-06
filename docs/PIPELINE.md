@@ -5,8 +5,8 @@
 > 历史沿革与实测结论见 [STATUS.md](STATUS.md)；设计论证见 [DESIGN.md](DESIGN.md)。
 >
 > 最后更新：2026-07-06（**HUD 支线与 dev 实验线合并**。HUD：annotate 出 `hud_boxes`（字段
-> ink-snap + 按钮 op-GT 赋类 + count-mismatch 丢弃）、build 出 **55 类**（38 牌 + 17 HUD/按钮，
-> `majsoul_eye/hud.py`）YOLO + `hud/` 读取器训练对、新丢帧谓词 `is_call_window`、采集侧
+> ink-snap + 按钮 op-GT 赋类 + count-mismatch 丢弃）、build 出 **56 类**（38 牌 + 17 HUD/按钮 +
+> 立直棒，`majsoul_eye/hud.py`）YOLO + `hud/` 读取器训练对、新丢帧谓词 `is_call_window`、采集侧
 > `--op-delay` + multi-shot extras（`status="extra"` 下游默认不可见、`dt` 字段）、新入口
 > `train_hudreader.py`/`eval_detector_split.py`/`qa_hud.py`——代码全通，**HUD 训练待 v2 重建后跑**
 > （STATUS §1.41）。dev 线：`launch_classifier.sh` 启动器、现役数据集 **`datasets/v2`**（28 局纯 AI，
@@ -34,9 +34,9 @@
      annotations/                        标注记录（AI 局；annotate_ai_session 产出）
      <game>/{crops/<38类>/,
              yolo/{images,labels}}       每局一个子文件夹（build_dataset 产出，合并后代码的
-                                          yolo labels 为 **55 类** = 38 牌 + 17 HUD/按钮）
+                                          yolo labels 为 **56 类** = 38 牌 + 17 HUD/按钮 + 立直棒）
      <game>/hud/{<字段>/*.png, labels.jsonl}  HUD 微读取器训练对（同一 build_dataset 产出）
-     detector/{train.txt, val.txt, data.yaml}       按局切分装配（build_detector_dataset，nc=55；
+     detector/{train.txt, val.txt, data.yaml}       按局切分装配（build_detector_dataset，nc=56；
                                           `--obb` 时另出 detector_obb/）
      games.json                          清单：每局 name/capture/frames_dir/dir + val（held-out 局列表）+ formats（hbb/obb）
         │
@@ -48,10 +48,10 @@
        → weights/detector/tile_detector_<mode>_<ts>.pt（每 run 版本化，不互相覆盖）
        → OBB 另复制一份到 recognize/tile_detector.pt（现役运行时默认）
    scripts/train/train_hudreader.py --dataset datasets/<name> --out majsoul_eye/recognize/hud_reader.pt
-       → CTC 数字读取器 + round/wind 分类头（一份 checkpoint 三个子模型；⚠️ 待跑，需重建后的 55 类数据集）
+       → CTC 数字读取器 + round/wind 分类头（一份 checkpoint 三个子模型；⚠️ 待跑，需重建后的 56 类数据集）
    # 直调底层：train_classifier.py --dataset datasets/v2 [...] / train_detector.py --data <ds>/detector/data.yaml
    # 跨版本合并检测集：build_detector_dataset.py --dataset datasets/v2 --dataset datasets/v3 ...
-   # 55 类检测器回归门槛 / 端到端 QA：见 §2「装配 + 训练」末尾
+   # 56 类检测器回归门槛 / 端到端 QA：见 §2「装配 + 训练」末尾
         │
         ▼
 【运行时产品 · Akagi-free】  majsoul_eye/recognize/  (TileClassifier / TileDetector)
@@ -70,7 +70,7 @@
 | `captures/intermediate/derived/` | 修复帧（裁 16:9 等历史遗留局）。去黑边 `*_fixed` 路径**已退役**——run_5 信箱局 2026-07-05 就地修复（`deletterbox_frames.py --inplace`），raw 即修复帧 | ✅ 由 raw 重建 |
 | `captures/legacy/` | 归档的逐字节重复（ai_g*/ai_r1） | — 可删 |
 | `captures/raw/temp/` | ⚠️ 无 GT 的孤儿帧（采集失败残留，只有 PNG 没有对局 jsonl）——不可用，待清理 | — 垃圾 |
-| `datasets/<name>/`（版本目录，现役 `v2`（38 类旧 build，HUD 训练前重建）；`v3` = HUD 流程验证 2 局，STATUS §1.41） | 自包含数据集：`annotations/` + 每局 `<game>/{crops,yolo(合并后 55 类),hud/(读取器训练对)}` + `detector/`（+`--obb` 时 `detector_obb/`，不拷图 txt 引用）+ `games.json` 清单 | ✅ build_datasets.py |
+| `datasets/<name>/`（版本目录，现役 `v2`（38 类旧 build，HUD 训练前重建）；`v3` = HUD 流程验证 2 局，STATUS §1.41） | 自包含数据集：`annotations/` + 每局 `<game>/{crops,yolo(合并后 56 类),hud/(读取器训练对)}` + `detector/`（+`--obb` 时 `detector_obb/`，不拷图 txt 引用）+ `games.json` 清单 | ✅ build_datasets.py |
 | `out/ai_session_annotations/` | 旧全局标注位置（早期版本产物；现每个版本自带 `datasets/<name>/annotations/`） | — 可删 |
 | `majsoul_eye/recognize/*.pt` | **正式权重**（tile_classifier.pt 入 git；tile_detector.pt 本地） | GPU 重训 |
 | `weights/` | `pretrained/` 训练基座 + `detector/` 变体（aabb/obb 等，均 gitignore） | — |
@@ -147,8 +147,8 @@
 - `--drop-violations` 常开；遮挡一致性门 `--occlusion-gate` **默认关**（采集期 roi_diff 已防大头）。
 - 输出既有 crops（分类）也有 yolo（检测）——同一套精确几何，一次标定两处喂。
 - **HUD**：同一份 `rec["hud_boxes"]` 出两种产物：所有 `reliable` 框追加为 YOLO 行
-  （**55 类** = 38 牌 + 17 HUD/按钮，`majsoul_eye.hud.DET_NAMES`；旧的 38 类数据集天然是
-  55 类标签空间的子集，可与新数据混训）；带 `text` 的数值/`round_label` 字段额外产出
+  （**56 类** = 38 牌 + 17 HUD/按钮 + 立直棒，`majsoul_eye.hud.DET_NAMES`；旧的 38 类数据集天然是
+  56 类标签空间的子集，可与新数据混训）；带 `text` 的数值/`round_label` 字段额外产出
   读取器训练对 `<out>/hud/<字段>/<seq>.png`（15% 内边距、按 `hud.FIELD_ROT` 转正）+
   `<out>/hud/labels.jsonl`（每行 `{"file","name","text","pad"}`）。按钮无 `text`——类别本身即标签。
 
@@ -187,9 +187,9 @@
   - 读取器：`train_hudreader.py --dataset datasets/<name> --out majsoul_eye/recognize/hud_reader.pt`
     ——CTC 数字读取器 + round/wind 分类头，一份 checkpoint 三个子模型；held-out 按
     `games.json` 的 `val`（**整局**，非按 kyoku——HUD 字段没有 kyoku 粒度 GT）。
-  - 55 类检测器回归门槛：`eval_detector_split.py <weights> <data.yaml>` 按 id<38（牌）/≥38
+  - 56 类检测器回归门槛：`eval_detector_split.py <weights> <data.yaml>` 按 id<38（牌）/≥38
     （HUD）分组报 mAP50；牌面组门槛 `0.993 − 0.005`，不达标即退回独立 HUD 检测器（spec §6）。
-  - 端到端 QA：`qa_hud.py <game.jsonl>`（真实用法需 55 类检测器 + 读取器权重都到位；`--selftest`
+  - 端到端 QA：`qa_hud.py <game.jsonl>`（真实用法需 56 类检测器 + 读取器权重都到位；`--selftest`
     用假检测器/假读取器单独验证组装/比对逻辑，不需要任何权重）——按字段打印读取精确匹配率
     + 整帧全字段全对率。
 - **GPU 服务器（多卡 DDP，bash，tar-and-go）**——两个脚本只需 raw 采集（run_5 信箱局已就地
