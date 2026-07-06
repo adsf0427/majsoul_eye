@@ -81,13 +81,21 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
 - **`normalize.py`** — front-end that maps an arbitrary screenshot onto the canonical frame via
   a `BoardRegion` (`locate_fullscreen` / `locate_letterbox`; `AnchorLocator` is a TODO stub).
   This is what lets fixed-slot logic survive other resolutions.
+- **`hud.py`** — the HUD-element detector taxonomy: `HUD_NAMES` (17 classes — 7 center-panel
+  fields, 2 top-left counters, 8 semantic action buttons) + `DET_NAMES = TILE_NAMES + HUD_NAMES`
+  (the 55-class detector head); `OP_TO_BTN`/`buttons_for_ops` (liqi op type → button class);
+  `FIELD_ROT`/`NUMERIC_FIELDS`/`ROUND_CLASSES`/`WIND_CLASSES`/`CTC_CHARSET` (micro-reader
+  contracts). Pure data (no cv2/numpy) — every component imports it.
 - **`capture/`** — ⚠️ **DEV-ONLY. The shipped recognizer never imports it.**
   - `akagi_tap.py` (**legacy manual path**) monkeypatches `MajsoulBridge.parse_liqi` to tee each
     (raw liqi + derived MJAI) tick to a background JSONL writer. Records both because **MJAI drops
     superset fields** (`leftTileCount`, `moqie`, mid-round `scores`, full `ActionHule`).
   - `roi_diff.py` (ROI-stability confirm — prevents discard-animation occlusion at the source),
     `overlay.py` (`DetectionOverlay` — draws live detector boxes in the browser, `--overlay`),
-    `gamemeta.py` (per-game display-language `metadata.json`).
+    `gamemeta.py` (per-game display-language `metadata.json`), `multishot.py` (`MultiShot` —
+    extra-shot scheduler for uncertain-timing windows: meld→forced-dahai animation, pending
+    action-button offers; purely additive `_dt{ms}.png` frames with `status="extra"` in
+    `frames.jsonl`, wired via `autoplay_ai.py --op-delay`/`--multishot-offsets`).
   - `sync.py` (`FrameSyncer`) — the top correctness risk. Protocol events fire *before* the
     animation renders, so capture is async **debounce-to-quiet**: capture one frame once no
     board event has arrived for `quiet` s (plus optional pixel-stability confirm). Decision logic
@@ -96,8 +104,11 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
     (shared `build_seq_state`/`load_frames` for the annotator + dataset builder — Akagi-free).
 - **`state/replay.py`** — pure, Akagi-free `Replayer` consuming MJAI events into a full
   seat-absolute `BoardState` (rivers with tsumogiri/riichi/called flags, melds, dora, hero hand,
-  concealed counts, scores). `check_invariants()` flags desync (>4 of a kind, bad hand size) —
-  drop/human-review violating frames.
+  concealed counts, scores, `pending_ops`). `check_invariants()` flags desync (>4 of a kind, bad
+  hand size) — drop/human-review violating frames. **`state/ops.py`** (`ops_from_record`) is the
+  sibling extractor: pending liqi op types offered to the hero, parsed from a `GTRecord`'s
+  `raw_liqi.data.data.operation.operationList` — `Replayer.apply_record` sets
+  `BoardState.pending_ops` from it (drives HUD button auto-labels via `hud.buttons_for_ops`).
 - **`annotate/`** — the **precise** GT-driven annotator; the source `build_dataset.py` now consumes.
   `pipeline.py` = a fullwarp top-down homography + data-calibrated `DISCARD_GRID`/`DISCARD_ROW_OFFSETS`
   + composition-aware melds (`generate_meld_boxes_v2`/`meld_display_cells`) + per-frame mask snap
@@ -107,14 +118,24 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   `_screen_to_seat`/`SEAT_POS` (the seat mapping, owned here); `cases.py` = the named AB validation seqs
   (`CASES`). (The precise pipeline was moved verbatim out of a former root
   `mahjong_relative_annotation_pipeline.py`, now removed — import `from majsoul_eye.annotate import pipeline as P`.)
+  `hud.py` = GT-driven HUD field/button boxes: `hud_field_boxes` (seed ROI + per-frame ink-snap on
+  numeric fields), `button_boxes` (op-GT class assignment against `BTN_ZONE` candidates,
+  count-mismatch → whole-frame drop). `annotate_frame` calls both into `rec["hud_boxes"]`.
 - **`label/`** — **legacy** NormBox annotator, now just `autolabel.py` (`label_frame`): supplies the
   hero hand + dora boxes only (`annotate_frame` calls it for those zones; `DEFAULT_ZONES = {hand}`).
   The old `river.py`/`meld.py` + `coords.RIVER_QUADS`/`MELD_STRIPS` (equal-subdivision RiverGrid) were
   **removed** — superseded by `annotate/` (see docs/STATUS.md §1.13).
 - **`recognize/`** — the SHIPPED product: `classifier.py` (`TileNet` small CNN, 64px, 38-class +
-  `TileClassifier`) and `detector.py` (`TileDetector`, YOLO HBB/OBB, lazy-loads ultralytics).
-  Production weights: `tile_classifier.pt` (tracked) + `tile_detector.pt` (local); training
-  bases/variants live under `weights/`.
+  `TileClassifier`) and `detector.py` (`TileDetector`, YOLO HBB/OBB, lazy-loads ultralytics). The
+  detector head is now **55-class** (`hud.DET_NAMES` = 38 tiles + 17 HUD/button classes);
+  `Detection.name` is valid for all 55 ids while `Detection.tile` is `None` for HUD-class ids
+  (38-54) — old 38-class weights still load fine (a strict id prefix). `hudreader.py`
+  (`HudReader` — `DigitCTC` segmentation-free CRNN-CTC for numeric fields + `round_label`/
+  `seat_wind_self` classifier heads reusing `TileNet`) and `hudstate.py` (`assemble_hud` —
+  detector HUD boxes + `HudReader` outputs → one structured HUD state dict) are the HUD reading
+  half; **not yet trained** — see `docs/STATUS.md` §1.31. Production weights: `tile_classifier.pt`
+  (tracked) + `tile_detector.pt` (local, still 38-class); training bases/variants live under
+  `weights/`.
 
 ## Critical invariants & gotchas
 
@@ -147,6 +168,14 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   the latter also rewrites `datasets/*/games.json` capture paths).
 - **Train/val split by kyoku, never by frame** — the same physical discard appears in many frames
   of one kyoku; a frame split leaks it and inflates accuracy.
+- **Frame-drop predicates for GT-leads-pixels windows** (`majsoul_eye/state/replay.py`):
+  `is_deal_window` (rivers all empty — deal animation still sorting the hand) and
+  `is_call_window` (last event is chi/pon/daiminkan/ankan/kakan/nukidora — the meld's forced
+  follow-up dahai animation is still in flight) both drop the WHOLE frame in `build_dataset`/
+  `annotate_ai_session`, not just flag it unreliable, because GT has already advanced past what
+  the pixels show (~4.2% of frames on the `is_call_window` measurement). `is_score_anim_window`
+  (reach/reach_accepted) is narrower: it only marks HUD boxes unreliable, since only the HUD
+  numbers animate, not the tiles.
 - **Recording must never break the bridge or the TUI.** `parse_liqi` runs under Akagi's lock on
   the MITM thread; recorder code swallows all exceptions, writes from a background thread, and
   routes status to a sidecar `.log` (printing to stdout corrupts Akagi's Textual TUI).

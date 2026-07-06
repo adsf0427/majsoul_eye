@@ -174,7 +174,7 @@ bangzi/benchang ROI 作种子，`coords.py` 已有）。
 
 | 风险 | 说明 | 缓解 |
 |---|---|---|
-| **按钮帧存量未知**（最大数据风险） | AI 会话里 MahjongCopilot 秒点按钮，quiet 抓帧可能极少含按钮 | 先跑存量盘点（ops 提取器 × 现有帧）；不足则录 1–2 局人工被动局（决策等待期必然抓到按钮帧）；record_gt 管线现成 |
+| **按钮帧存量未知**（最大数据风险） | AI 会话里 MahjongCopilot 秒点按钮，quiet 抓帧可能极少含按钮 | 先跑存量盘点（`scripts/inspect/inventory_ops.py`：ops 提取器 × 现有帧）；不足则**不**走 record_gt 人工被动局，改用 `autoplay_ai.py --op-delay LO HI`（拉长 hero 待决操作后 AI 点击前的随机等待，配合 quiet-debounce 让截图命中按钮窗口）针对性 harvest——**已实现并验证**：`--op-delay 1.5 2.5` 采出 22 帧，全部按钮类型（含稀缺的 ron/kan/riichi）都有样本，足够 Task 7 Step 5 标定；详见 §9 |
 | 墨迹收紧误框 | 发光/皮肤差异导致阈值失效 | 收紧幅度设上限（不超出种子 ROI）；fill/亮度异常打 flag 丢帧 |
 | 槽位规则按钮框不准 | 按钮数不同锚点平移规则与实测不符 | 检出数校验丢帧兜底；轮廓检测退路 |
 | CTC 读取器过重/难调 | — | 退路：投影切分 + 逐位 CNN（标签同样免费：切格按序赋 GT 字符，与牌河同招） |
@@ -191,3 +191,34 @@ bangzi/benchang ROI 作种子，`coords.py` 已有）。
 3. 训练加强布局增广（mosaic/平移/AR 抖动/多分辨率 letterbox），
    在移动端 golden set 上验收泛化。
 4. 平板 4:3 等更窄画布：无样例，待采集后评估。
+
+## 9. 实施偏差（代码落地后回填，2026-07-06）
+
+分支 `feat/hud-detection`（T1–T16）代码已全通（详见 `docs/STATUS.md` §1.31），训练待跨分支
+数据集合并后再跑。以下是实施期间相对本 spec 的偏差/补充，供后续读 spec 的人对照：
+
+- **CTC 最小宽度地板是涌现的，非显式断言**：`hudreader._strip()` 把任何输入 crop 缩到最小
+  32px 宽（等比缩放，`nw = max(32, round(w * 32 / h))`），`DigitCTC` 的 4 级池化块沿宽度共缩
+  4×（两级 `(2,2)`+两级 `(2,1)`），故最短也有 T=8 个时间步喂给 CTC 对齐——这个下限从架构常数
+  自然推出，代码里没有对它写断言/校验。真训练时如果出现极短读值（如 `x0`），需要留意 CTC
+  loss/blank 是否在这个宽度上塌陷。
+- **`buttons_for_ops` 的输出序 = `HUD_NAMES` 声明序**（不是 liqi `operationList` 的顺序），
+  是稳定确定的；Task 7 Step 5 用 22 帧真实数据独立验证了它恰好等于屏幕从左到右的按钮排列序
+  （`BTN_ORDER_LTR`），包括 pon+kan+skip、chi+ron 这类多按钮帧——spec §3.3 只说"按同一优先序
+  排成一行"，没有明确这个优先序具体是什么，此处补上。
+- **`BTN_ZONE` 的已知 4 按钮行限制**：标定时（`coords.py` 里的改动记录）发现旧种子框会连带
+  框进一个每帧恒在的"座位数+20"提示条，收紧后的 `BTN_ZONE` 干净覆盖了已观测到的最多 3 按钮
+  行；但按已测的 banner 间距外推，第 4 个 banner 会落进被排除的提示条区域内——这类帧尚未在
+  harvest 数据里出现过，出现时会安全退化为 `count_mismatch`（整帧按钮标签丢弃），非本 spec
+  原定范围内的问题，留作已知限制而非当场解决。
+- **T15/T16：multi-shot 采集 + `is_call_window` 丢帧**——不在本 spec 原始范围内，是实现中途
+  按用户要求追加的两个任务：①`capture/multishot.py` 在鸣牌/按钮待决这类时序不确定事件后
+  按固定偏移额外截图（`_dt{ms}.png`，`frames.jsonl` 标 `status="extra"`，纯增量不影响现有
+  消费者），为将来的"多帧择优"选择器攒数据；②`state.replay.is_call_window`（镜像
+  `is_deal_window` 的整帧丢弃策略，丢鸣牌动画未完成的帧）。两者都是训练数据质量的加固，
+  不改变 §2/§3 的检测器+读取器两级架构本身。
+- **`detector.py` 的 `Detection.name` 修复**：spec §2 隐含假设检测结果只需要"是哪张牌"
+  （`Detection.tile`）。T13 复审时发现 `_parse_result` 无条件 `TILE_NAMES[cls]`——55 类模型
+  一旦检出任何 HUD 类 id（38–54）就会 `IndexError`，原设计完全没考虑消费者怎么读 HUD 类的
+  检测结果。修复：`Detection` 新增 `.name`（55 类全有效，来自 `hud.DET_NAMES`），`.tile` 对
+  HUD id 显式设为 `None`；两条解析路径（OBB/HBB）都对 `cls >= 55` 的未知类防御性跳过而非崩溃。

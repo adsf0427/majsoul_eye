@@ -4,10 +4,15 @@
 > 只要影响 采集/标注/建库/训练 任何一环，**必须同步更新本文**（维护规约见 §8）。
 > 历史沿革与实测结论见 [STATUS.md](STATUS.md)；设计论证见 [DESIGN.md](DESIGN.md)。
 >
-> 最后更新：2026-07-05（**GT jsonl 归入对局目录**：`run_N/gameM.jsonl` → `run_N/gameM/gameM.jsonl`，
+> 最后更新：2026-07-06（**HUD 检测支线**：annotate 出 `hud_boxes`（字段 ink-snap + 按钮
+> op-GT 赋类 + count-mismatch 丢弃）、build 出 **55 类**（38 牌 + 17 HUD/按钮，
+> `majsoul_eye/hud.py`）YOLO + `hud/` 读取器训练对、新丢帧谓词 `is_call_window`、采集侧
+> `--op-delay` + multi-shot extras（`status="extra"` 下游默认不可见、`dt` 字段）、新训练/QA
+> 入口 `train_hudreader.py`/`eval_detector_split.py`/`qa_hud.py`。代码已全通，**训练尚未跑**
+> ——详见 §0/§2 与 `docs/STATUS.md` §1.31）。
+> 前次：2026-07-05（**GT jsonl 归入对局目录**：`run_N/gameM.jsonl` → `run_N/gameM/gameM.jsonl`，
 > 每局目录自包含；旧"同名兄弟"形态仅作 legacy 兼容读取；迁移脚本
 > `migrate_gt_into_gamedir.py` 已对 captures + datasets/*/games.json 执行）。
-> 前次：2026-07-04（采集统一 AI 路线；`intermediate/gt` 退役；数据集版本化 `build_datasets.py`）。
 
 ## 0. 一图流
 
@@ -23,10 +28,13 @@
    默认 sources = captures/raw/ai_session（可加 captures/raw/manual、将来的 ai_session_2 等；
    立即执行，--dry-run 才是干跑）。内部按序编排三个阶段，产出自包含版本目录：
 
-   datasets/<name>/                      ←（现役：datasets/v1，20 局）
+   datasets/<name>/                      ←（现役：datasets/v1，20 局；datasets/v3 = HUD 流程验证，见 STATUS §1.31）
      annotations/                        标注记录（AI 局；annotate_ai_session 产出）
-     <game>/{crops/<38类>/, yolo/{images,labels}}   每局一个子文件夹（build_dataset 产出）
-     detector/{train.txt, val.txt, data.yaml}       按局切分的检测器装配（build_detector_dataset）
+     <game>/{crops/<38类>/,
+             yolo/{images,labels}}       每局一个子文件夹（build_dataset 产出，
+                                          yolo labels **55 类** = 38 牌 + 17 HUD/按钮）
+     <game>/hud/{<字段>/*.png, labels.jsonl}  HUD 微读取器训练对（同一 build_dataset 产出）
+     detector/{train.txt, val.txt, data.yaml}       按局切分的检测器装配（build_detector_dataset，nc=55）
      games.json                          清单：每局 name/capture/frames_dir/dir + val
         │
         ▼
@@ -34,8 +42,11 @@
    scripts/train/train_classifier.py --dataset datasets/v1 [--dataset datasets/v2 ...]
        → majsoul_eye/recognize/tile_classifier.pt   （38类, 正式）
    scripts/train/train_detector.py --data datasets/<name>/detector/data.yaml
-       → weights/detector/*.pt → 择优升 recognize/tile_detector.pt
+       → weights/detector/*.pt → 择优升 recognize/tile_detector.pt   （55类 v2 权重待训，见 §2/STATUS §1.31）
+   scripts/train/train_hudreader.py --dataset datasets/<name> --out majsoul_eye/recognize/hud_reader.pt
+       → CTC 数字读取器 + round/wind 分类头（一份 checkpoint 三个子模型；⚠️ 待跑）
    # 跨版本合并检测集：build_detector_dataset.py --dataset datasets/v1 --dataset datasets/v2 ...
+   # 55类检测器回归门槛 / 端到端 QA：见 §2「装配 + 训练」末尾
         │
         ▼
 【运行时产品 · Akagi-free】  majsoul_eye/recognize/  (TileClassifier / TileDetector)
@@ -54,7 +65,7 @@
 | `captures/intermediate/derived/` | 修复帧（去黑边 `*_fixed`、裁 16:9）——仅历史遗留局需要 | ✅ 由 raw 重建 |
 | `captures/legacy/` | 归档的逐字节重复（ai_g*/ai_r1） | — 可删 |
 | `captures/raw/temp/` | ⚠️ 无 GT 的孤儿帧（采集失败残留，只有 PNG 没有对局 jsonl）——不可用，待清理 | — 垃圾 |
-| `datasets/<name>/`（版本目录，现役 `v1`） | 自包含数据集：`annotations/` + 每局 `<game>/{crops,yolo}` + `detector/`（不拷图，txt 引用）+ `games.json` 清单 | ✅ build_datasets.py |
+| `datasets/<name>/`（版本目录，现役 `v1`；`v3` = HUD 流程验证 2 局，STATUS §1.31） | 自包含数据集：`annotations/` + 每局 `<game>/{crops,yolo(55类=38牌+17 HUD),hud/(读取器训练对)}` + `detector/`（不拷图，txt 引用，nc=55）+ `games.json` 清单 | ✅ build_datasets.py |
 | `out/ai_session_annotations/` | 旧全局标注位置（v1 时代产物；已拷贝进 `datasets/v1/annotations/`） | — 可删 |
 | `majsoul_eye/recognize/*.pt` | **正式权重**（tile_classifier.pt 入 git；tile_detector.pt 本地） | GPU 重训 |
 | `weights/` | `pretrained/` 训练基座 + `detector/` 变体（aabb/obb 等，均 gitignore） | — |
@@ -84,6 +95,17 @@
   无关。（此 fix 前的 `ai_session2/run_5` 已离线裁回 1920×1080。）
 - 采集期已内建两类脏帧规避：发牌动画不 arm 截图（ActionMJStart/NewRound）、ROI 稳定确认
   （`capture/roi_diff.py`，防弃牌动画遮挡，实测残留 ~0.4%）。
+- `--op-delay LO HI`（默认 `0.5 1.0`）拉长 hero 收到待决操作后 AI 点击前的随机等待
+  （覆盖 MahjongCopilot 的 `delay_random_lower/upper`），配合默认 `--quiet 0.30` 让
+  quiet-debounce 截图能在动作按钮还在屏幕上时落盘——**按钮采集专用**（如
+  `--op-delay 1.5 2.5`），HUD 按钮标定/训练数据靠这条路径补足（不再需要 record_gt 人工被动局）。
+- **multi-shot extras**（默认开，`--no-multishot` 关；`capture/multishot.py` 的 `MultiShot`）：
+  鸣牌（吃/碰/杠/拔北）与"按钮可能出现"这类**时序不确定**的事件之后，除常规
+  quiet-debounce 帧外，再按固定偏移（默认 `0.6/1.2/2.4` s，`--multishot-offsets` 可改）
+  额外截 `frames/{seq:06d}_dt{ms:04d}.png`，`frames.jsonl` 对应行 `status:"extra"`——纯**增量**，
+  不影响既有 `"ok"`/`"timeout"` 消费者（下游默认不读取、不参与标注/建库）；每行（含 `"ok"`）都新增
+  `dt` 字段（本次截图相对触发事件 `last_event_t` 的秒数），供将来"从多帧里挑最佳一张"的
+  best-shot selector 使用（尚未实现，见 STATUS §1.31 的 OWNED FOLLOW-UP）。
 - 每局写 `metadata.json`（显示语言 BCP-47，`--lang` > localStorage 探测 > 服务器粗判）。
 - **已过时**：`record_gt.py` 手动 F11 + Akagi 路线（akagi 环境）。不再用于新采集；
   脚本保留只为存档复现 session5/6。
@@ -92,7 +114,18 @@
 - `annotate_ai_session.py` 默认标注**全部** `paths.ai_captures()`；`--captures` 指定局；
   `--frames-dir` 用于 derived 修复帧（run_5 game2/3 信箱局）；`--workers` 默认保守 4（RAM 束）。
 - GT 谓词丢弃发牌窗帧（`replay.is_deal_window`：rivers 全空）；hero 摸牌槽经 `replay.drawn_tile`
-  正确标注（14 张自摸态不再漏标）。
+  正确标注（14 张自摸态不再漏标）。**新增** `replay.is_call_window`（`last_event` 为
+  chi/pon/daiminkan/ankan/kakan/nukidora——鸣牌动画中途，GT 已更新但像素未跟上，与
+  `is_deal_window` 同策略整帧丢弃，在 `annotate_ai_session`/`build_dataset` 都生效；
+  run_3/game1 实测丢弃率 ~4.2%，全部单帧命中、无过匹配）。
+- `annotate_frame` 新增 `hud_boxes`（`majsoul_eye/annotate/hud.py`）：数值字段（四家分数/
+  余牌/供托/本场）按标定种子 ROI（`coords.HUD_SEEDS`）做逐帧**墨迹收紧**（ink-snap，
+  亮度阈值 `INK_THRESH=120`，无墨迹即标 `reliable=False`）；`round_label`/`seat_wind_self`
+  定尺寸不收紧。按钮框：`state.pending_ops`（`state/ops.py` 从 `raw_liqi.data.data.operation.
+  operationList` 提取）经 `hud.buttons_for_ops` 得到期望类别集合，与 `BTN_ZONE` 内定位到的
+  候选按 x 序一一对应；**检出数 ≠ 期望数则整帧按钮标签丢弃**（`flag:count_mismatch`，
+  宁缺毋滥，与旧 river/meld 门同哲学）。立直宣言/分数滚动窗口（`replay.is_score_anim_window`）
+  只把 HUD 框标记不可靠、不丢整帧（牌面标签不受影响）。
 
 ### 建库（build_dataset）
 - **标注步不是必须的**：不给 `--from-annotations` 时 build_dataset 走**自足模式**（内部逐帧
@@ -104,6 +137,11 @@
 - manual session5/6 一律直接建（不经标注层）。
 - `--drop-violations` 常开；遮挡一致性门 `--occlusion-gate` **默认关**（采集期 roi_diff 已防大头）。
 - 输出既有 crops（分类）也有 yolo（检测）——同一套精确几何，一次标定两处喂。
+- **HUD**：同一份 `rec["hud_boxes"]` 出两种产物：所有 `reliable` 框追加为 YOLO 行
+  （**55 类** = 38 牌 + 17 HUD/按钮，`majsoul_eye.hud.DET_NAMES`；旧的 38 类数据集天然是
+  55 类标签空间的子集，可与新数据混训）；带 `text` 的数值/`round_label` 字段额外产出
+  读取器训练对 `<out>/hud/<字段>/<seq>.png`（15% 内边距、按 `hud.FIELD_ROT` 转正）+
+  `<out>/hud/labels.jsonl`（每行 `{"file","name","text","pad"}`）。按钮无 `text`——类别本身即标签。
 
 ### 装配 + 训练
 - **切分铁律：按局/kyoku，绝不按帧**（同一物理牌跨 ~10 帧，帧切分必泄漏）。
@@ -117,6 +155,16 @@
   跨版本先合并 split：`build_detector_dataset.py --dataset datasets/v1 --dataset datasets/v2
   --val ai_run_8_game1:* --out datasets/detector_combined`。
 - 训练命令 `build_datasets.py` 收尾会按当前局清单打印好，直接复制。
+- **HUD（⚠️ 三条均待跑——real 训练等用户另一分支的数据集合并 v1+v3 混训后再执行；
+  `datasets/v3` = `ai_session3` 2 局，只是 T10 的**流程验证** build，非训练候选）**：
+  - 读取器：`train_hudreader.py --dataset datasets/<name> --out majsoul_eye/recognize/hud_reader.pt`
+    ——CTC 数字读取器 + round/wind 分类头，一份 checkpoint 三个子模型；held-out 按
+    `games.json` 的 `val`（**整局**，非按 kyoku——HUD 字段没有 kyoku 粒度 GT）。
+  - 55 类检测器回归门槛：`eval_detector_split.py <weights> <data.yaml>` 按 id<38（牌）/≥38
+    （HUD）分组报 mAP50；牌面组门槛 `0.993 − 0.005`，不达标即退回独立 HUD 检测器（spec §6）。
+  - 端到端 QA：`qa_hud.py <game.jsonl>`（真实用法需 v2 检测器 + 读取器权重都到位；`--selftest`
+    用假检测器/假读取器单独验证组装/比对逻辑，不需要任何权重）——按字段打印读取精确匹配率
+    + 整帧全字段全对率。
 - **GPU 服务器（多卡 DDP，bash，tar-and-go）**——两个脚本只需 raw 采集（+ 信箱局的
   `intermediate/derived/…_fixed` 帧），**无需 MahjongCopilot、也无需已退役的 `intermediate/gt`**：
   - `scripts/data/regen_detector_dataset.sh [--obb|--obb-only] [--skip-annotate] [--jobs=N]`
