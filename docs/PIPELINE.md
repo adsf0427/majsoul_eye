@@ -179,6 +179,8 @@
   `--obb`→仅 OBB（历史布局，每局仍在 `<ds>/<game>/yolo`）、`--hbb --obb`→**一个版本同时出**
   `detector/`+`detector_obb/`。双出时 OBB 落**兄弟目录** `<ds>/<game>__obb/yolo`，其 `images` **软链**
   回 HBB（OBB/HBB 帧字节相同，零重编码，只写 9 点标签，`build_dataset.py --reuse-images --no-crops`）；
+  Windows 无软链权限（无开发者模式/未提权，`WinError 1314`）时 `Runner.symlink` 自动回退**目录 junction**
+  （免权限、`glob` 透明穿透；但存绝对目标 → 该版本宿主本地，换机重建，见 STATUS §1.42）；
   stage-2 先跑完 HBB 再跑 OBB（reuse 依赖 HBB 帧先落盘）。`games.json` 记 `formats` 字段；`dir` 仍存 HBB
   局名，OBB 目录＝`<dir>__obb`。已建的 HBB 版本可 `--hbb --obb --resume` **原地补 OBB**（跳过已验证的
   HBB 与标注，只增量建 OBB 标签＋重装两套 split，快）。

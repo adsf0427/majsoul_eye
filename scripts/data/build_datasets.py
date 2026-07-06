@@ -234,6 +234,24 @@ def dataset_root(name: str) -> str:
 
 # ---- runner (same shape as the deprecated rebuild_datasets.py) ---------------
 
+def _remove_dir_link(link: str) -> None:
+    """Remove ``link`` if it exists, NEVER recursing through a symlink/junction into its
+    target (that would delete the shared HBB frames the OBB build points at). A real
+    directory is rmtree'd; a symlink/junction is unlinked in place."""
+    if not os.path.lexists(link):
+        return
+    is_junction = os.name == "nt" and getattr(os.path, "isjunction", lambda p: False)(link)
+    if os.path.islink(link):
+        # POSIX: unlink handles a symlink-to-dir; Windows: a dir symlink needs rmdir.
+        os.rmdir(link) if (os.name == "nt" and os.path.isdir(link)) else os.unlink(link)
+    elif is_junction:
+        os.rmdir(link)                       # drops the reparse point, keeps the target
+    elif os.path.isdir(link):
+        shutil.rmtree(link)                  # a real directory
+    else:
+        os.remove(link)
+
+
 class Runner:
     def __init__(self, execute: bool):
         self.execute = execute
@@ -280,21 +298,28 @@ class Runner:
             shutil.rmtree(path)
 
     def symlink(self, target: str, link: str) -> None:
-        """Point dir `link` -> `target` with a RELATIVE symlink (tar-and-go portable),
-        replacing any stale entry. Lets an OBB per-game build share the HBB frames dir
-        instead of re-encoding the (byte-identical) images."""
+        """Point dir `link` -> `target`, replacing any stale entry, so an OBB per-game build
+        shares the HBB frames dir instead of re-encoding the (byte-identical) images.
+
+        Prefers a RELATIVE symlink (tar-and-go portable). On Windows without the symlink
+        privilege (no Developer Mode / not elevated -> WinError 1314) it falls back to a
+        directory JUNCTION, which needs no privilege but stores an ABSOLUTE target, so the
+        built version is host-local (rebuild rather than relocate it)."""
         rel = os.path.relpath(target, os.path.dirname(link))
-        print(f"  ln -sfn {rel} {link}")
         if not self.execute:
+            print(f"  ln -sfn {rel} {link}")
             return
         os.makedirs(os.path.dirname(link), exist_ok=True)
-        if os.path.islink(link):
-            os.unlink(link)
-        elif os.path.isdir(link):
-            shutil.rmtree(link)
-        elif os.path.exists(link):
-            os.remove(link)
-        os.symlink(rel, link, target_is_directory=True)
+        _remove_dir_link(link)
+        try:
+            os.symlink(rel, link, target_is_directory=True)
+            print(f"  ln -sfn {rel} {link}")
+        except OSError:
+            if os.name != "nt":
+                raise
+            import _winapi                    # Windows-only; junction = privilege-free symlink
+            _winapi.CreateJunction(os.path.abspath(target), link)
+            print(f"  mklink /J {link} {os.path.abspath(target)}   (no symlink privilege)")
 
 
 def main() -> None:

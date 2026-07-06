@@ -192,6 +192,36 @@ def test_game_yolo_dir_dual_vs_single():
     assert bds.game_yolo_dir("datasets/v2", "g", "obb", ["hbb", "obb"]) == j("datasets/v2", "g__obb", "yolo")
 
 
+def test_symlink_reuse_images_link_is_safe_and_traversable():
+    """The dual-build OBB `images` link (Runner.symlink) must, on BOTH platforms:
+    (1) resolve to the HBB frames, (2) survive a --resume re-run without ever deleting
+    the shared HBB frames it points at, and (3) create nothing under --dry-run. On
+    Windows-without-symlink-privilege this exercises the directory-junction fallback
+    (STATUS §1.42); on POSIX it's a plain relative symlink."""
+    import glob
+    with tempfile.TemporaryDirectory() as ds:
+        hbb = os.path.join(ds, "game", "yolo", "images")
+        os.makedirs(hbb)
+        frame = os.path.join(hbb, "000001.png")
+        with open(frame, "w") as f:
+            f.write("frame")
+        link = os.path.join(ds, "game__obb", "yolo", "images")
+
+        r = bds.Runner(execute=True)
+        r.symlink(hbb, link)
+        assert glob.glob(os.path.join(link, "*.png")), "link does not traverse to HBB frame"
+
+        # --resume re-run: the link is replaced in place, HBB frame MUST survive
+        r.symlink(hbb, link)
+        assert os.path.exists(frame), "re-run destroyed the shared HBB frame!"
+        assert glob.glob(os.path.join(link, "*.png"))
+
+        # dry-run touches nothing
+        link2 = os.path.join(ds, "game3__obb", "yolo", "images")
+        bds.Runner(execute=False).symlink(hbb, link2)
+        assert not os.path.exists(link2)
+
+
 def test_dataset_root_naming():
     assert bds.dataset_root("v2") == os.path.join("datasets", "v2")
     assert bds.dataset_root("datasets/v2") == "datasets/v2"
