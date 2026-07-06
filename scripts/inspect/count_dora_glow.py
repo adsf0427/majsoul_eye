@@ -134,19 +134,23 @@ def main() -> None:
     args = ap.parse_args()
 
     games, val = load_games(args)
+    # games.json "val" is now a LIST of held-out games (build_datasets.py); tolerate the
+    # old single-string schema and the --val default too.
+    val_set = set(val if isinstance(val, list) else [val])
+    val_label = ", ".join(sorted(val_set))
     if args.limit:
         games = games[:args.limit]
     train = {name: [0, 0] for name in TILE_NAMES}
     valt = {name: [0, 0] for name in TILE_NAMES}
     for g in games:
         tally = count_game(g["capture"], g["frames_dir"])
-        _merge(valt if g["name"] == val else train, tally)
+        _merge(valt if g["name"] in val_set else train, tally)
         print(f"  counted {g['name']:>18}  "
               f"(total={sum(t for t, _ in tally.values())}, "
               f"glow={sum(gl for _, gl in tally.values())})")
 
-    print_table(f"TRAIN (all games except {val})", train, args.min_glow)
-    print_table(f"VAL ({val})", valt, args.min_glow)
+    print_table(f"TRAIN (all games except {val_label})", train, args.min_glow)
+    print_table(f"VAL ({val_label})", valt, args.min_glow)
 
 
 if __name__ == "__main__":

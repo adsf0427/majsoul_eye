@@ -107,8 +107,9 @@ decorations that render the whole table (`7`=牌背 `6`=桌布 `8`=场景); `cha
 game actually used. The hero is found by `hero_account_id` (from the `authGame` REQ) — the RES's
 `players` list is account_id-sorted, NOT hero-first (seat order lives in `seat_list`), so
 `players[0]` is usually a stranger. Metadata written before this fix (2026-07-05, ai_session2)
-recorded `players[0]`'s views as `table` (usually `{}`); `scripts/capture/backfill_skin_meta.py`
-re-derived the correct values from each game's recorded wire (already applied to ai_session2).
+recorded `players[0]`'s views as `table` (usually `{}`); a one-shot backfill
+(`scripts/capture/backfill_skin_meta.py`, since **removed 2026-07-06**) re-derived the correct
+values from each game's recorded wire and was applied to ai_session2.
 
 ## Decoration slot reference (`ItemDefinitionItem.type` == view slot)
 

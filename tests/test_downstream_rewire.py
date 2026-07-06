@@ -26,18 +26,6 @@ def test_annotate_uses_ai_game_name_and_ai_captures():
     assert "paths.ai_captures()" in src
 
 
-def test_ingest_run_has_no_convert_step():
-    src = open("scripts/data/ingest_run.py", encoding="utf-8").read()
-    assert "convert_mjcopilot.py" not in src
-
-
-def test_ingest_run_resolves_capture_via_paths():
-    # the GT jsonl <-> frames dir coupling lives in paths, not re-derived inline
-    src = open("scripts/data/ingest_run.py", encoding="utf-8").read()
-    assert "paths.capture_for_frames_dir" in src
-    assert '+ ".jsonl"' not in src
-
-
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

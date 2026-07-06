@@ -33,12 +33,15 @@ auto-generated classifier crops + YOLO labels, **zero hand-drawing**.
    `out/ai_session_annotations/`。
 3. **构建（一条命令，版本化）** **`scripts/data/build_datasets.py <name>`** —— 编排 标注→建库→装配，
    产出自包含 `datasets/<name>/{annotations/, <game>/{crops,yolo}, detector/, games.json}`；
-   `--sources` 指定多个采集根、`--resume` 增量并入新局、`--force` 清空重建。现役版本 `datasets/v1`。
-4. **训练** `train_classifier.py --dataset datasets/v1 [--dataset …]` /
+   `--sources` 指定多个采集根、`--resume` 增量并入新局、`--force` 清空重建。现役版本
+   `datasets/v2`（28 局纯 AI：18 `ai_session` + 10 换肤 `ai_session2`）。
+4. **训练** `train_classifier.py --dataset datasets/v2 [--dataset …]` /
    `train_detector.py --data datasets/<name>/detector/data.yaml`（GPU，手动触发；多版本可混用）。
+   多卡服务器用启动器：`launch_classifier.sh` / `launch_detector.sh {hbb|obb}`（见下方「训练」）。
 
 > ⚠️ **`record_gt.py`（Akagi MITM 手动 F11 采集）已列为过时** —— 新数据一律走
-> autoplay_ai；session5/6 的存量手动数据保留在训练集中。
+> autoplay_ai。现役 `datasets/v2` 为**纯 AI 采集基线**（`ai_session` + 换肤 `ai_session2`）；
+> 早期 session5/6 手动局不在当前训练集内。
 
 ## Layout
 
@@ -67,10 +70,10 @@ scripts/
   train/build_detector_dataset.py / train_classifier.py   # 均支持 --dataset 多版本清单展开
   train/train_detector.py
   train/launch_detector.sh       # ★ 起一次检测器训练：hbb|obb 多卡 DDP 包装 train_detector.py
+  train/launch_classifier.sh     # ★ 起一次分类器训练：单卡包装 train_classifier.py（自动读 games.json val）
   data/build_datasets.py         # ★ 版本化构建 datasets/<name>/（标注→建库→装配 + games.json）
   data/regen_detector_dataset.sh # GPU 服务器侧重建检测集（分局并行, --obb/--obb-only/--skip-annotate）
-  data/migrate_*.py, purge_*.py, crop_game.py, deletterbox_frames.py, convert_mjcopilot.py,
-    ingest_run.py  # 一次性/遗留工具（非管线环节，见 PIPELINE §4）
+  data/purge_*.py, crop_game.py, deletterbox_frames.py, convert_mjcopilot.py  # 一次性/遗留工具（非管线环节，见 PIPELINE §4）
   annotate/{build_case_annotations,calibrate_annotation_model,spike_topdown}.py  # AB case/标定/归档 spike
   inspect/…                      # QA & debug（下方 §QA）
 weights/            # pretrained/ 训练基座 + detector/ 变体（gitignore; 正式权重在 recognize/）
@@ -78,19 +81,22 @@ tests/              # plain-script suites (pytest-compatible)
 docs/PIPELINE.md    # ★ 权威管线   docs/STATUS.md  # 进度史(中文)   docs/DESIGN.md  # 设计
 ```
 
-## Status (2026-07-05)
+## Status (2026-07-06)
 
-**采集已统一为单一路径**（autoplay_ai 直接写 `GTRecord`，`intermediate/gt` 退役）。
-数据 **28 AI 局（含 10 换肤局 `ai_session2/run_21..23`）+ 2 手动 4K 局**，检测器已在
-28 局重训（STATUS §1.31：regen 并发竞态截断 1092 个 OBB 标签已修 + build_datasets 完整性门）。
+**采集为单一 AI 路径**（autoplay_ai 直接写 `GTRecord`，`intermediate/gt` 退役）。现役数据集
+**`datasets/v2` = 28 局纯 AI 采集**（18 `ai_session` + 10 换肤 `ai_session2/run_21..23`），
+`--hbb --obb` 一次出双格式（`detector/` + `detector_obb/`），held-out **两整局**
+`ai_session_run_8_game1` + 换肤 `ai_session2_run_21_game1`。
 
-- 分类器 `tile_classifier.pt`：held-out 整局 val_acc **0.9991**（07-03 数据）。
-- 检测器（07-05，28 局，held-out `ai_run_8_game1`）：正式 `tile_detector.pt` = **OBB
-  mAP50 0.9946 / mAP50-95 0.9848**（rotated-IoU）；HBB 变体
-  `weights/detector/tile_detector_hbb.pt` **0.9940 / 0.9653**。
-- 轨迹：93.5 → 95.3(P1 清洗) → 96.0(P2 erode) → 97.6(+AI) → 99.78(16 局精确) → **99.91**(dealfix)。
-- ⚠️ 待办：分类器尚未在 07-05 数据重训；换肤局 dora 牌背被橙背校验丢框（back 类换肤覆盖缺口，
-  STATUS §1.31 遗留）。
+- 检测器（2026-07-06，v2 重训，held-out 2 局含 1 换肤局）：HBB 正式
+  `recognize/tile_detector.pt` = **mAP50 0.992 / mAP50-95 0.957**；OBB 变体
+  `weights/detector/tile_detector_obb.pt` = **0.994 / 0.981**（rotated-IoU）。val 现含换肤局，
+  数字略低于此前非换肤 val——是更诚实的泛化测。
+- 分类器 `tile_classifier.pt`：**尚未在 v2 重训**，仍是 07-03 dealfix 权重（held-out val_acc
+  0.9991）。重训一条命令：`bash scripts/train/launch_classifier.sh --dataset v2 --gpu 0`。
+- 轨迹（分类器）：93.5 → 95.3(P1 清洗) → 96.0(P2 erode) → 97.6(+AI) → 99.78(16 局精确) → **99.91**(dealfix)。
+- ⚠️ 待办：① 分类器在 v2 重训（吃换肤外观多样性）；② 换肤局 dora 牌背被橙背门丢框（back 类
+  换肤覆盖缺口，STATUS §1.31 遗留）。
 
 → 细节：[`docs/STATUS.md`](docs/STATUS.md)。
 
@@ -107,7 +113,7 @@ $env:PYTHONPATH = "."        # bash: export PYTHONPATH=.
 
 ```powershell
 python scripts/capture/autoplay_ai.py --dry-run                    # dry-run：
-python scripts/capture/autoplay_ai.py --server jp --live --auto-next --out captures/raw/ai_session# 真跑：整场循环
+python scripts/capture/autoplay_ai.py --server jp --live --auto-next --out captures/raw/ai_session   # 真跑：整场循环
 # 每局写 captures/raw/ai_session/run_<N>/game<M>.jsonl (GTRecord)
 #   + game<M>/{frames/*.png, frames.jsonl, liqi.jsonl 线流备份, metadata.json 语言}
 
@@ -120,39 +126,40 @@ python  scripts/capture/autoplay_ai.py --skins --skins-randomize --skins-all-sea
 ### 构建数据集（版本化，一条命令）
 
 ```powershell
-python scripts/data/build_datasets.py v1 -j 12   #默认 --sources captures/raw/ai_session）
-python scripts/data/build_datasets.py v2 --sources captures/raw/ai_session captures/raw/ai_session2 captures/raw/ai_session/mannual 
-#   --resume 只补缺的局并重组 detector split；--force 清空重建；--dry-run 干跑
-# 产出 datasets/<name>/{annotations/, <game>/{crops,yolo}, detector/, games.json}
+# 现役 v2 = 纯 AI 两源 + HBB/OBB 双格式（这是当前实际在跑的命令）：
+python scripts/data/build_datasets.py v2 --hbb --obb --sources captures/raw/ai_session captures/raw/ai_session2 -j 12
+#   不给 --sources 时默认 captures/raw/ai_session；--resume 只补缺的局并重组 detector split；
+#   --force 清空重建；--dry-run 干跑
+# 产出 datasets/<name>/{annotations/, <game>/{crops,yolo}, detector/(+ --obb 时 detector_obb/), games.json}
 ```
 
 ### 训练（GPU；确切命令 build_datasets 收尾会按当前局清单打印好）
 
+单机直调（PowerShell 里 --val 值必须加引号；--val 可重复 = 多留一整局）：
 ```powershell
-# 38 类分类器（⚠️ 切分按局绝不按帧；PowerShell 里 --val 值必须加引号）
-python scripts/train/train_classifier.py --dataset datasets/v1 --val "ai_session_run_8_game1:*" --epochs 20
+# 38 类分类器（⚠️ 切分按局绝不按帧）
+python scripts/train/train_classifier.py --dataset datasets/v2 `
+      --val "ai_session_run_8_game1:*" --val "ai_session2_run_21_game1:*" --epochs 20
 # YOLO 检测器（imgsz 1280；16GiB 卡 --batch 4 防 OOM；OBB 用 --model weights/pretrained/yolov8s-obb.pt）
-python scripts/train/train_detector.py --data datasets/v1/detector/data.yaml
+python scripts/train/train_detector.py --data datasets/v2/detector/data.yaml
 # 跨版本合并检测集：
-python scripts/train/build_detector_dataset.py --dataset datasets/v1 --dataset datasets/v2 `
+python scripts/train/build_detector_dataset.py --dataset datasets/v2 --dataset datasets/v3 `
       --val "ai_session_run_8_game1:*" --out datasets/detector_combined
 ```
 
-#### GPU 服务器（多卡 DDP，bash 脚本）
+#### GPU 服务器（多卡启动器，bash）
 
-远端 GPU 机上一条命令重建检测集 + 一条命令起训（只需 raw 采集 + `captures/intermediate/gt/` 的 GT
-副本，无需 MahjongCopilot）。两个脚本都从仓库根、`auto` 环境跑，用 `PY=` 指到该 python：
-
+三条命令 = 当前完整训练管线（分类器单卡 + 检测器 HBB/OBB 各一组 DDP）：
 ```bash
-# 1. 重建 YOLO 检测集：分局并行；--obb 追加 OBB 变体（复用 HBB 帧、只写 8 点标签），
-#    --obb-only 只补 OBB，--skip-annotate 复用已有 out/ai_session_annotations，--jobs=N 并发
-PY=/path/to/envs/auto/python bash scripts/data/regen_detector_dataset.sh [--obb|--obb-only] [--skip-annotate] [--jobs=N]
-# 2. 起一次训练：hbb/obb 各自挑好 dataset/基座/输出/run 目录。CUDA_VISIBLE_DEVICES 选物理卡，
-#    --gpus N 定 DDP 卡数（--batch 是全局 batch，跨这 N 卡切分）
-CUDA_VISIBLE_DEVICES=0,1,2,3 bash scripts/train/launch_detector.sh hbb --gpus 4   # -> recognize/tile_detector.pt
-CUDA_VISIBLE_DEVICES=4,5,6,7 bash scripts/train/launch_detector.sh obb --gpus 4   # -> weights/detector/tile_detector_obb.pt
-#   默认 batch 128 / epochs 60 / imgsz 1280；run 目录 runs/<mode>/<ts>/；`--` 之后原样透传 train_detector.py
-#   （如 -- --patience 30 --lr0 0.001）。换骨架：--model weights/pretrained/yolo11m.pt。
+# 分类器：单卡（小 CNN，无 DDP）。--gpu 选物理卡（走 CUDA_VISIBLE_DEVICES）；不传 --val 时
+#   自动读 datasets/v2/games.json 的 val 列表，与检测器留出同样的整局。~几分钟，先跑完再起下面
+#   两组 DDP，或挑一张空卡。
+bash scripts/train/launch_classifier.sh --dataset v2 --gpu 0        # -> recognize/tile_classifier.pt
+# 检测器：--gpus 选物理卡做 DDP（**别用 CUDA_VISIBLE_DEVICES**——ultralytics select_device 会覆写它）；
+#   --batch 是跨卡全局 batch。默认 batch 64 / epochs 60 / imgsz 1280；run 目录 runs/<mode>/<ts>/。
+bash scripts/train/launch_detector.sh hbb --dataset v2 --gpus 0,1,2,3   # -> recognize/tile_detector.pt
+bash scripts/train/launch_detector.sh obb --dataset v2 --gpus 4,5,6,7   # -> weights/detector/tile_detector_obb.pt
+#   `--` 之后原样透传底层脚本（如 -- --patience 30 --lr0 0.001）。换骨架：--model weights/pretrained/yolo11m.pt。
 ```
 ### 可视化
 ```powershell

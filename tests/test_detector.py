@@ -54,7 +54,7 @@ def test_split_kyoku_holdout_no_leakage():
         # seq 1,2 -> kyoku E1.0 (held out); seq 3,4 -> S1.0 (train)
         stub = {1: "E1.0", 2: "E1.0", 3: "S1.0", 4: "S1.0"}
         sources = {"g": (ydir, "unused-capture")}
-        train, val = bdd.split_images(sources, "g", {"E1.0"}, kyoku_fn=lambda c: stub)
+        train, val = bdd.split_images(sources, {"g": {"E1.0"}}, kyoku_fn=lambda c: stub)
         base = lambda ps: {os.path.basename(p) for p in ps}
         assert base(val) == {"000001.png", "000002.png"}
         assert base(train) == {"000003.png", "000004.png"}
@@ -69,10 +69,35 @@ def test_split_whole_game_holdout():
         # val = whole g2; kyoku_fn must NOT be consulted for '*'
         def boom(_):
             raise AssertionError("kyoku_fn called for whole-game '*' holdout")
-        train, val = bdd.split_images(sources, "g2", "*", kyoku_fn=boom)
+        train, val = bdd.split_images(sources, {"g2": "*"}, kyoku_fn=boom)
         assert len(val) == 3 and len(train) == 2
         assert all("g2" in p for p in val)
         assert all("g1" in p for p in train)
+
+
+def test_parse_val_specs_multiple():
+    """--val is repeatable: each 'NAME:spec' folds into a {name: val_set} map.
+    ':*' -> whole game ('*'); ':k1,k2' -> a kyoku set; '' / None -> empty map."""
+    assert bdd.parse_val_specs(["g1:*", "g2:E1.0,S2.0"]) == {"g1": "*", "g2": {"E1.0", "S2.0"}}
+    assert bdd.parse_val_specs(["g:*"]) == {"g": "*"}          # single still works
+    assert bdd.parse_val_specs([]) == {}
+    assert bdd.parse_val_specs(None) == {}
+
+
+def test_split_multiple_whole_games():
+    """Two whole games held out at once: BOTH go entirely to val, the rest to train,
+    and kyoku_fn is never consulted for a '*' game."""
+    with tempfile.TemporaryDirectory() as tmp:
+        g1 = _make_fake_game(tmp, "g1", [1, 2])
+        g2 = _make_fake_game(tmp, "g2", [1, 2, 3])
+        g3 = _make_fake_game(tmp, "g3", [1, 2])
+        sources = {"g1": (g1, "c1"), "g2": (g2, "c2"), "g3": (g3, "c3")}
+        def boom(_):
+            raise AssertionError("kyoku_fn called for a whole-game '*' holdout")
+        train, val = bdd.split_images(sources, {"g1": "*", "g2": "*"}, kyoku_fn=boom)
+        assert len(val) == 5 and len(train) == 2                 # g1(2)+g2(3) val, g3(2) train
+        assert all(("g1" in p or "g2" in p) for p in val)
+        assert all("g3" in p for p in train)
 
 
 def test_split_paths_are_relative_posix():
@@ -82,7 +107,7 @@ def test_split_paths_are_relative_posix():
     d = "datasets/_bdd_test_tmp"
     try:
         ydir = _make_fake_game(d, "g", [5])
-        train, val = bdd.split_images({"g": (ydir, "c")}, "", set())
+        train, val = bdd.split_images({"g": (ydir, "c")}, {})
         assert len(train) == 1 and not val
         assert not os.path.isabs(train[0])          # relative → tar-and-go portable
         assert "/images/" in train[0] and "\\" not in train[0]

@@ -92,10 +92,12 @@ def build_train_kwargs(args, device):
                mixup=args.mixup)
     kw = dict(data=args.data, imgsz=args.imgsz, epochs=args.epochs, batch=args.batch,
               patience=args.patience, device=device, name=args.name, **aug)
-    # project defaults to ultralytics' own runs/detect; passing our own "runs/detect"
-    # here would nest it (runs/detect/runs/detect/...), so only override when non-empty.
+    # ultralytics nests a RELATIVE project under its runs/<task>/ root (get_save_dir:
+    # `project = RUNS_DIR / task / project` unless absolute) — "--project runs/obb"
+    # would land at runs/obb/runs/obb/<name>. Pass it absolute so it is used as-is;
+    # empty keeps ultralytics' default runs/<task>/.
     if args.project:
-        kw["project"] = args.project
+        kw["project"] = os.path.abspath(args.project)
     return kw, aug
 
 

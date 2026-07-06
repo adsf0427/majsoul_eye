@@ -1,6 +1,8 @@
 """Detector aug-config tests: the corrected defaults (fliplr off, hsv_v boosted)
 and overridability. No torch/ultralytics/GPU — build_train_kwargs is pure."""
 
+import os
+
 from scripts.train.train_detector import build_parser, build_train_kwargs
 
 
@@ -25,7 +27,8 @@ def test_aug_overridable_from_cli():
     assert kw["fliplr"] == 0.5
     assert kw["hsv_v"] == 0.9
     assert kw["device"] == "0,1"
-    assert kw["project"] == "runs/x"
+    # absolute: ultralytics nests a RELATIVE project under runs/<task>/ (get_save_dir)
+    assert kw["project"] == os.path.abspath("runs/x") and os.path.isabs(kw["project"])
 
 
 if __name__ == "__main__":
