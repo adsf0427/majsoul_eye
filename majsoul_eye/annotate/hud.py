@@ -82,10 +82,39 @@ def hud_field_boxes(img: np.ndarray, state, region) -> list[dict]:
     return out
 
 
-# CALIBRATE (T17b): rough render check, not yet tuned against real reach-accepted
-# frames — the stick is a thin white bar, so its lit slot should show SOME bright
-# coverage but nowhere near the ~1.0 fill of a filled numeric-field box.
-REACH_FILL_OK = 0.05  # CALIBRATE (T17b)
+# CALIBRATED (T17b) on real reach-accepted frames (same captures as coords.py's
+# _REACH_STICK_SEEDS_PX; see that comment for the box-placement fix this fill
+# measurement depends on). Measured fraction of gray>=150 px inside the
+# CALIBRATED slot box, "settled" (>=2 frames after reach_accepted) vs the exact
+# reach_accepted seq (the frame most likely to still be mid-animation):
+#   self:   settled min 0.735 (n=116) | confirmed-lag 0.334 (seq1437,
+#           run_3/game1 — hero's own hand-slam sprite covers the slot AND
+#           riichi_stick_count still reads x0 in that same frame)
+#   right:  settled min 0.610 (n=105) | no confirmed-lag sample caught mid-render
+#   left:   settled min 0.428 (n=107) | confirmed-lag 0.0 (seq687, run_3/game1 —
+#           riichi_stick_count already x2 but the slot is visibly still empty)
+#   across: settled min 0.101 (n=123, wide spread — see cosmetic-diversity note
+#           above: the ornate syringe skin is dimmer than the plain bar even
+#           fully rendered) | confirmed-lag 0.0 (seq222/717, run_3/game3 — a
+#           full-screen hand-slam FX covers the slot, riichi_stick_count still x0)
+# 0.35 sits clear of self's only confirmed-lag value (0.334) and left's settled
+# floor (0.428), so it reliably separates "mid-animation" from "rendered" for
+# those two slots (right has no counter-example to violate it either). It DOES
+# cost recall on `across`: ~half its settled samples (the dim syringe-skin
+# games) fall below 0.35 and get flagged unreliable despite being fully
+# rendered — accepted per this module's "reliable only ever SET False" policy
+# (dropping a good frame is safe; the alternative, a low threshold, would miss
+# the confirmed self/across hand-slam lag frames above, i.e. mislabel a
+# not-yet-rendered frame as reliable, which this policy exists to prevent).
+# ⚠️ Also NOTE: `state.replay.is_score_anim_window` (checked as a second,
+# frame-level gate in annotate/frame.py) turns out to NEVER fire for these
+# exact reach_accepted frames in this capture set — Majsoul bundles
+# reach_accepted with the next actor's immediate tsumo in one record, so
+# `state.last_event` is always overwritten to "tsumo" by the time the frame is
+# snapshotted (verified across all 6 reach_accepted seqs sampled). This
+# per-box fill check is therefore not a redundant safety net here — it is the
+# only mechanism that actually catches these frames.
+REACH_FILL_OK = 0.35
 
 
 def reach_stick_boxes(img: np.ndarray, state, region) -> list[dict]:

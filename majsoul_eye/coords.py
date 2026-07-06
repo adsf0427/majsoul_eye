@@ -230,30 +230,44 @@ HUD_SEEDS: dict[str, NormBox] = {k: px_box(*v) for k, v in _HUD_SEEDS_PX.items()
 BTN_ZONE = NormBox(0.30, 0.705, 0.74, 0.82)
 
 
-# --- reach-stick (立直棒) slots, one per seat (Task 17a/17c; spec §10) -------
-# CALIBRATE (T17b): rough seed guess only, not yet verified against a real
-# reach-accepted frame. Derived from the _HUD_SEEDS_PX center-panel fields
-# above: the panel's occupied footprint spans roughly x 793 (seat_wind_self
-# left edge) .. 1063 (score_right right edge), y 353 (score_across top edge)
-# .. 540 (seat_wind_self bottom edge) — call it x 855-1065 / y 300-505 for a
-# tidier center estimate. A reach stick renders just OUTSIDE that footprint on
-# the edge nearest its seat: self (bottom, horizontal bar) sits just below the
-# panel; across (top, horizontal bar) just above; left/right (vertical bars,
-# rendered ±90°) sit beside the panel's left/right edges. Sizes are guesses
-# (thin bar, ~100-120 px along the panel edge, ~20 px across) — T17b will
-# ink/fill-calibrate real boxes + REACH_FILL_OK against actual capture frames.
+# --- reach-stick (立直棒) slots, one per seat (Task 17a/17c/17b; spec §10) ---
+# CALIBRATED (T17b) against real reach-accepted frames (captures/raw/ai_session/
+# run_3/{game1,game3,game4} + ai_session3/run_2/game1 [different "cloud" table
+# skin — robustness check] + ai_session3/run_3/game1; scripts/inspect/overlay_hud.py).
+# The Task-17a guess this replaces (across: px 905,278,1010,299) was WRONG: it sat
+# on the discard row's own bright bottom bevel/trim (present regardless of reach —
+# measured fill ~0.68-0.93 even with NO reach anywhere in the frame), not the stick.
+# Found the real per-slot object by connected-components on gray>=200 in a window
+# around each guess, across >=10 present frames each (self/right/left: pixel-identical
+# box on every sample; across: object position confirmed via 3 independently-skinned
+# cosmetics, see below), then verified visually (scripts/inspect/overlay_hud.py PNGs):
+# self/across are horizontal bars just below/above the panel; left/right are vertical
+# bars just left/right of it — same footprint the Task-17a guess described, just
+# mis-sized/placed. ⚠️ COSMETIC DIVERSITY: the 立直棒 asset is a per-player equipped
+# skin, not a fixed sprite — observed a plain white bar+red dot (self, right, left,
+# and one across game), an ornate syringe-with-heart (across, run_3/game3), and a
+# glowing purple arrow (across, ai_session3/run_2, the alt table skin) — all three
+# occupy roughly this SAME screen real estate (confirming the box placement
+# generalizes), but their brightness profile differs a lot (see REACH_FILL_OK note
+# in annotate/hud.py). Boxes below = the plain-bar footprint (the common case) + a
+# few px margin.
 #
 # Keyed by SLOT (self/right/across/left, hud.REACH_STICK_SLOTS), not by
 # detector class — the stick is a single symmetric `reach_stick` class (spec
 # §10 revision); these four boxes are WHERE each slot is on screen, used both
 # to render/ink-check the annotator's per-slot box (annotate/hud.py) and, at
 # calibration time, as the geometric reference the detection-relative seat
-# attribution (recognize/hudstate.py) is expected to reproduce. Values are
-# unchanged from the original per-class seeds, only the keys changed.
+# attribution (recognize/hudstate.py) is expected to reproduce.
+# Direction convention VERIFIED (T17b): feeding these four box centers + the
+# round_label seed center (960, 399, from _HUD_SEEDS_PX above) through
+# recognize.hudstate._attribute_slot reproduces self/across/left/right exactly:
+# self dx=-7 dy=+122 (dominant-|dy|, dy>0) -> self; across dx=+5 dy=-72
+# (dominant-|dy|, dy<0) -> across; left dx=-140 dy=+14 (dominant-|dx|, dx<0)
+# -> left; right dx=+137 dy=+27 (dominant-|dx|, dx>0) -> right.
 _REACH_STICK_SEEDS_PX: dict[str, tuple[int, int, int, int]] = {
-    "self":   (910, 507, 1015, 528),   # horizontal bar, just below the panel
-    "across": (905, 278, 1010, 299),   # horizontal bar, just above the panel
-    "left":   (828, 350, 853, 445),    # vertical bar, just left of the panel
-    "right":  (1067, 350, 1092, 445),  # vertical bar, just right of the panel
+    "self":   (870, 510, 1036, 531),   # horizontal bar, just below the panel
+    "across": (888, 316, 1042, 338),   # horizontal bar, just above the panel
+    "left":   (805, 356, 835, 470),    # vertical bar, just left of the panel
+    "right":  (1078, 383, 1115, 468),  # vertical bar, just right of the panel
 }
 REACH_STICK_SEEDS: dict[str, NormBox] = {k: px_box(*v) for k, v in _REACH_STICK_SEEDS_PX.items()}
