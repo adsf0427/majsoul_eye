@@ -359,6 +359,12 @@ def main() -> None:
                     help="emit OBB (8-point) YOLO labels. Alone -> OBB-only (historical layout); "
                          "with --hbb -> both detector/ + detector_obb/ in one version, the OBB "
                          "build reusing the HBB frames via symlink (no re-encode).")
+    ap.add_argument("--backs", action="store_true",
+                    help="EXPERIMENTAL (default OFF): also label opponent hand-row tile backs "
+                         "(手摸切 groundwork — annotate/backs.py). Threads --backs to the annotate "
+                         "stage and the per-game builds; frames where an opponent is mid-draw "
+                         "(backs_holding) are dropped from YOLO for label consistency. Keep this "
+                         "OUT of the mainline v1/v2 versions — use a scratch version name.")
     args = ap.parse_args()
 
     workers, jobs = resolve_parallelism(args.parallel, args.workers, args.jobs)
@@ -390,10 +396,11 @@ def main() -> None:
                 and not (args.resume and os.path.exists(os.path.join(ann, g["name"] + ".jsonl")))]
         print(f"[1/3] annotate {len(todo)} game(s) -> {ann}")
         wk = ["--workers", str(workers)] if workers else []
+        bk = ["--backs"] if args.backs else []
         batch = [g["capture"] for g in todo]
         if batch:
             r.run([py, "scripts/annotate/annotate_ai_session.py",
-                   "--captures", *batch, "--out", ann, *wk])
+                   "--captures", *batch, "--out", ann, *wk, *bk])
         print()
 
     # ---- stage 2: per-game crops + YOLO ------------------------------------
@@ -413,6 +420,8 @@ def main() -> None:
                     print(f"  resume: REBUILD {g['name']} [{fmt}] ({prob})")
                 cmd = [py, "scripts/train/build_dataset.py", g["capture"], g["frames_dir"],
                        "--out", out, "--drop-violations"]
+                if args.backs:
+                    cmd += ["--backs"]
                 if g["kind"] == "ai":
                     cmd += ["--from-annotations", ann]
                 if spec["obb"]:

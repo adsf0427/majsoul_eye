@@ -53,22 +53,34 @@ def game_of(rel: str) -> str:
     return parts[1] if len(parts) > 1 else "unknown"
 
 
-def read_detections(label_file: Path, names: dict):
+def read_labels(label_file: Path, names: dict):
+    """Parse one YOLO label file -> a FiftyOne label object, auto-detecting the
+    row format: 5-field HBB rows -> fo.Detections; 9-field OBB rows (cls x1 y1
+    .. x4 y4, build_dataset.py --obb) -> fo.Polylines (closed quads, so the
+    App draws the true rotated box). A build emits one uniform format per file."""
     import fiftyone as fo
-    dets = []
+    dets, polys = [], []
     if not label_file.exists():
-        return dets
+        return fo.Detections(detections=[])
     for line in label_file.read_text().splitlines():
         line = line.strip()
         if not line:
             continue
         f = line.split()
-        cls = int(f[0]); cx, cy, w, h = (float(x) for x in f[1:5])
-        dets.append(fo.Detection(
-            label=names.get(cls, str(cls)),
-            bounding_box=[cx - w / 2.0, cy - h / 2.0, w, h],  # top-left, normalized
-        ))
-    return dets
+        cls = int(f[0])
+        label = names.get(cls, str(cls))
+        if len(f) == 9:
+            pts = [(float(f[i]), float(f[i + 1])) for i in range(1, 9, 2)]
+            polys.append(fo.Polyline(label=label, points=[pts], closed=True, filled=False))
+        else:
+            cx, cy, w, h = (float(x) for x in f[1:5])
+            dets.append(fo.Detection(
+                label=label,
+                bounding_box=[cx - w / 2.0, cy - h / 2.0, w, h],  # top-left, normalized
+            ))
+    if polys:
+        return fo.Polylines(polylines=polys)
+    return fo.Detections(detections=dets)
 
 
 def build_split(list_file: Path, names: dict, split: str, root: Path):
@@ -83,11 +95,32 @@ def build_split(list_file: Path, names: dict, split: str, root: Path):
             missing += 1
             continue
         s = fo.Sample(filepath=str(img.resolve()))
-        s["ground_truth"] = fo.Detections(detections=read_detections(label_path_for(img), names))
+        s["ground_truth"] = read_labels(label_path_for(img), names)
         s["game"] = game_of(rel)
         s["split"] = split          # data field, NOT a tag — tags are reserved for user reject-marking
         samples.append(s)
     return samples, missing
+
+
+def _repair_zero_count(ds):
+    """Self-heal a mongod unclean-shutdown artifact (diagnosed 2026-07-07).
+
+    FiftyOne's embedded mongod gets hard-killed on Windows session exit; a
+    recently-created sample collection then keeps a WiredTiger METADATA count of
+    0 even though its documents survived via the journal. find()/iteration/
+    $count aggregation all see the samples, but the fast `count` command — which
+    len(dataset) and the App's grid use — reports 0, so the GUI renders empty
+    ('backs_sample' showed len 0 with 68 iterable samples). `validate`
+    recomputes and repairs the metadata count in place."""
+    if len(ds) > 0:
+        return ds
+    if next(iter(ds), None) is None:
+        return ds                                    # genuinely empty
+    import fiftyone.core.odm as foo
+    foo.get_db_conn().command("validate", ds._doc.sample_collection_name)
+    print(f"  repaired zero-count metadata on '{ds.name}' "
+          f"(mongod unclean-shutdown artifact) -> {len(ds)} samples")
+    return ds
 
 
 def load_dataset(root: Path, data_yaml: Path, name: str, rebuild: bool = False):
@@ -96,7 +129,7 @@ def load_dataset(root: Path, data_yaml: Path, name: str, rebuild: bool = False):
     # runs — a fresh build would wipe them. --rebuild re-imports from disk (use
     # after editing labels on disk, e.g. via CVAT).
     if fo.dataset_exists(name) and not rebuild:
-        ds = fo.load_dataset(name)
+        ds = _repair_zero_count(fo.load_dataset(name))
         print(f"loaded existing FiftyOne dataset '{name}' ({len(ds)} samples; --rebuild to re-import from disk)")
         return ds, 0
 
@@ -135,7 +168,9 @@ def print_stats(ds):
     per_game = Counter()
     for s in ds:
         per_game[s["game"]] += 1
-        for det in s["ground_truth"].detections:
+        gt = s["ground_truth"]
+        items = gt.detections if hasattr(gt, "detections") else gt.polylines
+        for det in items:
             n_det += 1
             cls[det.label] += 1
     print(f"\nsamples: {len(ds)}   detections: {n_det}")
@@ -193,7 +228,10 @@ def main():
     import fiftyone as fo
     session = fo.launch_app(ds, port=args.port)
     print(f"\nFiftyOne running at http://localhost:{args.port}  (Ctrl-C to quit)")
-    session.wait()
+    # wait(-1) = block until Ctrl-C. Plain wait() returns as soon as the browser
+    # tab disconnects (incl. slow first connect / a reload), which read as "the
+    # program quit by itself" on Windows.
+    session.wait(-1)
 
 
 if __name__ == "__main__":

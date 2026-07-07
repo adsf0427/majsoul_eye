@@ -123,6 +123,9 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   `hud.py` = GT-driven HUD field/button boxes: `hud_field_boxes` (seed ROI + per-frame ink-snap on
   numeric fields), `button_boxes` (op-GT class assignment against `BTN_ZONE` candidates,
   count-mismatch → whole-frame drop). `annotate_frame` calls both into `rec["hud_boxes"]`.
+  `backs.py` = EXPERIMENTAL opt-in (`annotate_frame(..., backs=True)` / `build_datasets.py --backs`,
+  default OFF, not in v1/v2): opponent concealed-hand tile-back boxes from GT counts + a calibrated
+  fullwarp row grid (手摸切 groundwork; holding seats skipped + flagged, builds drop those frames whole).
 - **`label/`** — **legacy** NormBox annotator, now just `autolabel.py` (`label_frame`): supplies the
   hero hand + dora boxes only (`annotate_frame` calls it for those zones; `DEFAULT_ZONES = {hand}`).
   The old `river.py`/`meld.py` + `coords.RIVER_QUADS`/`MELD_STRIPS` (equal-subdivision RiverGrid) were

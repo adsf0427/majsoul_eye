@@ -99,7 +99,9 @@
   persistent `user_data_dir` 记忆、后续启动复原为大窗）时右/下会多出纯黑边。clip 使截图与窗口尺寸
   无关。（此 fix 前的 `ai_session2/run_5` 已离线裁回 1920×1080。）
 - 采集期已内建两类脏帧规避：发牌动画不 arm 截图（ActionMJStart/NewRound）、ROI 稳定确认
-  （`capture/roi_diff.py`，防弃牌动画遮挡，实测残留 ~0.4%）。
+  （`capture/roi_diff.py`，防弃牌动画遮挡，实测残留 ~0.4%；2026-07-07 起为**多矩形**
+  `STABILITY_ROIS`＝中央桌面＋三家手牌行＋hero 行，取 MAX——此前单矩形不含手牌行，
+  会放行手切后理牌收缩中段的帧，见 STATUS §1.45）。
 - `--op-delay LO HI`（默认 `0.5 1.0`）拉长 hero 收到待决操作后 AI 点击前的随机等待
   （覆盖 MahjongCopilot 的 `delay_random_lower/upper`），配合默认 `--quiet 0.30` 让
   quiet-debounce 截图能在动作按钮还在屏幕上时落盘——**按钮采集专用**（如
@@ -188,7 +190,19 @@
   stage-2 先跑完 HBB 再跑 OBB（reuse 依赖 HBB 帧先落盘）。`games.json` 记 `formats` 字段；`dir` 仍存 HBB
   局名，OBB 目录＝`<dir>__obb`。已建的 HBB 版本可 `--hbb --obb --resume` **原地补 OBB**（跳过已验证的
   HBB 与标注，只增量建 OBB 标签＋重装两套 split，快）。
-- 训练命令 `build_datasets.py` 收尾会按当前局清单打印好，直接复制。
+- **对手牌背（实验，默认关）**：`build_datasets.py --backs` 额外标注三家对手暗牌行的 `back` 框
+  （手摸切识别的前置；`majsoul_eye/annotate/backs.py`，标定于 run_8 真实帧，fullwarp 均匀 pitch +
+  玩家左手端锚点 + 副露收缩 bias，跨皮肤/分辨率已验证）。透传路径：`--backs` →
+  `annotate_ai_session.py --backs`（记录多出 `back_boxes`）→ `build_dataset.py`（YOLO 出 `back`
+  类框、**不出分类器 crop**；任何带 `backs_holding` flag 的帧——该座位摸牌中、理牌插槽位置
+  GT 不可知——**整帧丢弃**保证 back 信号一致，实测约丢 40–56% 帧）。⚠️ 勿混入主线 v1/v2 版本，
+  用独立版本名（样例：`datasets/backs_sample/`，单局 68 帧，`detector/`(HBB)+`detector_obb/`(OBB)
+  双 split；`fiftyone_view.py` 已支持 9 字段 OBB 标签渲染（Polylines），侧座建议看 OBB——HBB 会把
+  倾斜 quad 坍缩成大幅重叠的轴对齐盒）。几何来源＝**人工 per-slot 模板**：`scripts/annotate/
+  calibrate_backs_manual.py` 生成自包含 HTML 标注页（auto env 是 headless OpenCV，无 cv2 GUI；
+  浏览器里滚轮缩放逐张点 4 角，下载 JSON 到 `out/backs_calib/`），`--ingest` 合并校验并生成
+  `majsoul_eye/annotate/_backs_manual.py`（勿手改）——13 槽/座 + 摸牌槽，fullwarp quad；
+  副露收缩＝绕锚点端伸缩（bias 沿用自动实测）。摸牌槽暂未参与标注（holding 帧仍整帧丢）。
 - **HUD（⚠️ 三条均待跑——先用合并后代码重建 v2（旧 v2 是 38 类、无 `hud/`），再执行）**：
   - 读取器：`train_hudreader.py --dataset datasets/<name> --out majsoul_eye/recognize/hud_reader.pt`
     ——CTC 数字读取器 + round/wind 分类头，一份 checkpoint 三个子模型；held-out 按

@@ -186,6 +186,13 @@ def main() -> None:
     ap.add_argument("--from-annotations", metavar="DIR", default=None,
                     help="Reuse annotate_ai_session records from DIR/<capture-stem>.jsonl "
                          "instead of re-running annotate_frame (no warp/mask recompute).")
+    ap.add_argument("--backs", action="store_true",
+                    help="EXPERIMENTAL (default OFF): annotate opponent hand-row tile backs "
+                         "on the direct (non --from-annotations) path. Records that carry "
+                         "back_boxes — from this flag or from a --backs annotate run — emit "
+                         "them as YOLO 'back' labels (no classifier crops), and any frame "
+                         "with a backs_holding flag is dropped whole for label consistency "
+                         "(an unlabeled rendered row would teach the detector to suppress backs).")
     ap.add_argument("--reuse-images", metavar="DIR", default=None,
                     help="Label-only mode: take the frame SET + pixel dims from DIR/<seq>.png "
                          "(an already-built yolo/images dir, e.g. the HBB precise_<game>/yolo/images) "
@@ -250,7 +257,7 @@ def main() -> None:
         os.makedirs(d, exist_ok=True)
 
     n_frames = n_crops = n_yolo = n_skip = n_letterbox = n_deal = n_call = 0
-    n_occ_box = n_occ_frame = 0
+    n_occ_box = n_occ_frame = n_backs_hold = 0
     hud_meta = []
     occ_clf = None
     if args.occlusion_gate:
@@ -302,8 +309,19 @@ def main() -> None:
                 frame = cv2.resize(frame, (1920, 1080), interpolation=cv2.INTER_AREA)
                 h, w = 1080, 1920
 
-        rec = recs[seq] if args.from_annotations else annotate_frame(frame, seq_state[seq], hom)
+        rec = (recs[seq] if args.from_annotations
+               else annotate_frame(frame, seq_state[seq], hom, backs=args.backs))
         rec["_seq"] = seq
+
+        # Backs experiment: a holding seat's row layout is GT-underivable, and a
+        # post-tedashi compaction (backs_sorting, pixel-gated) row misaligns the
+        # templates (see annotate/backs.py) — either way that row goes unlabeled,
+        # so drop the WHOLE frame to keep the 'back' training signal consistent
+        # rather than teach suppression.
+        if rec.get("back_boxes") is not None and any(
+                f.endswith(("backs_holding", "backs_sorting")) for f in rec.get("flags", [])):
+            n_backs_hold += 1
+            continue
 
         reliable = [b for b in iter_tile_boxes(rec) if b.reliable]
         skip = set()
@@ -335,7 +353,9 @@ def main() -> None:
                 yolo_lines.append(obb_label_line(cls, quad, w, h) if args.obb
                                   else hbb_label_line(cls, quad, w, h))
             # classifier crop: skip sideways (upright orientation not geometry-recoverable)
-            if not args.no_crops and not box.sideways:
+            # and opponent hand backs (detector-only labels — 39 near-identical crops per
+            # frame would just flood the classifier's 'back' class)
+            if not args.no_crops and not box.sideways and box.zone != "oppback":
                 crop = crop_box(frame, box, size=args.crop_size)
                 if crop.size:
                     cdir = os.path.join(crops_dir, box.tile)
@@ -375,7 +395,7 @@ def main() -> None:
     print(f"frames labeled: {n_frames}  crops: {n_crops}  yolo-imgs: {n_yolo}  "
           f"skipped: {n_skip}  deal-skipped: {n_deal}  call-skipped: {n_call}  letterbox-skipped: {n_letterbox}  "
           f"occ-box-skipped: {n_occ_box}  occ-frame-dropped: {n_occ_frame}  "
-          f"hud-crops: {len(hud_meta)}")
+          f"backs-holding-dropped: {n_backs_hold}  hud-crops: {len(hud_meta)}")
     print(f"dataset -> {args.out}")
 
 

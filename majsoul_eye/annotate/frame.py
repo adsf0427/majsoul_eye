@@ -37,9 +37,13 @@ def _fill(ii: np.ndarray, poly) -> float:
     return P._box_fill(ii, p[:, 0].min(), p[:, 1].min(), p[:, 0].max(), p[:, 1].max())
 
 
-def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False) -> dict:
+def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False,
+                   backs: bool = False) -> dict:
     """Full annotation record for one frame. `hand_suspect` marks frames right
-    after a kyoku start, where the deal/sort animation may not match GT order."""
+    after a kyoku start, where the deal/sort animation may not match GT order.
+    `backs` (EXPERIMENTAL, opt-in — see annotate/backs.py) additionally emits
+    the three opponents' concealed hand-row tile-back boxes as
+    ``rec["back_boxes"]`` (str(pos) -> box list; holding seats skipped+flagged)."""
     Hinv = hom["H_full_inv"]
     full = P.warp_to_full(img, hom["H_full"], hom["full_size"])
     mw = P.tile_face_mask(full)
@@ -143,6 +147,16 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
     except Exception as e:                       # dora strip is best-effort
         rec["flags"].append(f"dora:error:{e}")
 
+    # opponent hand-row tile backs (EXPERIMENTAL, opt-in; annotate/backs.py)
+    if backs:
+        try:
+            from majsoul_eye.annotate import backs as B
+            bb, bflags = B.back_boxes(img, state, hom)
+            rec["back_boxes"] = bb
+            rec["flags"] += bflags
+        except Exception as e:                   # best-effort like dora/HUD
+            rec["flags"].append(f"backs:error:{e}")
+
     # HUD fields + action buttons (GT text/ops drive labels; see annotate/hud.py)
     try:
         from majsoul_eye.annotate import hud as HUD
@@ -177,7 +191,7 @@ class AnnBox:
     (riichi discard, called meld tile) whose upright orientation is not
     recoverable from geometry alone.
     """
-    zone: str                       # 'river' | 'meld' | 'hand' | 'dora'
+    zone: str                       # 'river' | 'meld' | 'hand' | 'dora' | 'oppback'
     tile: str                       # tiles.TILE_NAMES member ('back' allowed for melds)
     kind: str                       # always 'tile'
     poly_original: Optional[list]   # 4x2 px quad (river/meld); None for hand/dora
@@ -201,6 +215,11 @@ def iter_tile_boxes(rec: dict) -> Iterator[AnnBox]:
         for b in boxes:
             yield AnnBox("meld", b["tile"], "tile", b["poly_original"], None,
                          bool(b.get("sideways")), bool(b.get("reliable", True)))
+    # opponent hand-row backs (only present when annotated with backs=True)
+    for boxes in rec.get("back_boxes", {}).values():
+        for b in boxes:
+            yield AnnBox("oppback", b["tile"], "tile", b["poly_original"], None,
+                         False, bool(b.get("reliable", True)))
     for h in rec["hand_boxes"]:
         yield AnnBox("hand", h["tile"], "tile", None, list(h["px_box"]),
                      False, bool(h.get("reliable", True)))

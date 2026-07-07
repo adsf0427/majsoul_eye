@@ -67,6 +67,10 @@ def render_overlay(img: np.ndarray, rec: dict, path: str) -> None:
     for h in rec["hand_boxes"]:
         x1, y1, x2, y2 = h["px_box"]
         cv2.rectangle(vis, (x1, y1), (x2, y2), (255, 255, 255), 1)
+    for boxes in rec.get("back_boxes", {}).values():
+        for b in boxes:
+            col = (255, 255, 255) if b.get("reliable", True) else (0, 0, 255)
+            cv2.polylines(vis, [np.int32(b["poly_original"])], True, col, 2, cv2.LINE_AA)
     for d in rec.get("dora_boxes", []):
         x1, y1, x2, y2 = d["px_box"]
         if not d.get("reliable", True):
@@ -124,7 +128,7 @@ def _process_capture(cap, cfg):
                     continue
                 if img.shape[1] != 1920:
                     img = cv2.resize(img, (1920, 1080), interpolation=cv2.INTER_AREA)
-                rec = annotate_frame(img, seq_state[seq], hom)
+                rec = annotate_frame(img, seq_state[seq], hom, backs=cfg["backs"])
                 rec["capture"] = name
                 rec["seq"] = seq
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -140,6 +144,10 @@ def _process_capture(cap, cfg):
                 stats["hand_boxes"] += len(rec["hand_boxes"])
                 stats["dora_boxes"] += len(rec["dora_boxes"])
                 stats["dora_ok"] += sum(1 for d in rec["dora_boxes"] if d.get("reliable", True))
+                for boxes in rec.get("back_boxes", {}).values():
+                    stats["back_boxes"] += len(boxes)
+                    stats["back_ok"] += sum(1 for b in boxes if b.get("reliable", True))
+                stats["back_holding"] += sum(1 for f in rec["flags"] if f.endswith("backs_holding"))
 
                 if cfg["overlay_every"] and k % cfg["overlay_every"] == 0:
                     render_overlay(img, rec, os.path.join(cfg["out"], "overlays", f"{name}_seq{seq}.png"))
@@ -215,6 +223,10 @@ def main() -> None:
                          "only valid with exactly one --captures")
     ap.add_argument("--out", default="out/ai_session_annotations")
     ap.add_argument("--overlay-every", type=int, default=60)
+    ap.add_argument("--backs", action="store_true",
+                    help="EXPERIMENTAL: also annotate opponent hand-row tile backs "
+                         "(annotate/backs.py; holding seats skipped + flagged). Opt-in — "
+                         "not part of the default v1/v2 datasets.")
     ap.add_argument("--qa-classifier", action="store_true",
                     help="classify sampled face crops and report GT agreement")
     ap.add_argument("--qa-per-game", type=int, default=400)
@@ -231,7 +243,7 @@ def main() -> None:
     os.makedirs(os.path.join(args.out, "overlays"), exist_ok=True)
 
     cfg = {"out": args.out, "frames_dir": args.frames_dir,
-           "overlay_every": args.overlay_every,
+           "overlay_every": args.overlay_every, "backs": args.backs,
            "qa_classifier": args.qa_classifier, "qa_per_game": args.qa_per_game}
 
     # merge into an existing summary so multiple runs into the same --out (e.g.
