@@ -128,8 +128,55 @@ def multishot_window(record) -> bool:
     return bool(ops and buttons_for_ops(ops))
 
 
+# Game-end "one more game" button guards. Coordinates are in MahjongCopilot's 16x9
+# logical space; each guard samples the current CDP screenshot and returns
+# (present, colour-fraction, centroid) — the centroid is where auto_next_flow actually
+# clicks, so exact button positions self-calibrate. Boxes + colours + fallbacks were
+# MEASURED on real jp 段位戦 end-game full-screen captures (2026-07-05, all four screens):
+# 確認 yellow bottom-right (centroid ≈14.3,8.1); もう一局 blue bottom-centre, missions only
+# (≈12.2,8.3); the rematch dialog's はい (≈6.5,6.6) / いいえ (≈9.5,6.6) sit centre-screen
+# with NO active 確認, which is how the dialog is told apart from a settlement screen.
+_YELLOW = lambda r, g, b: r > 170 and g > 115 and b < 150 and r > b + 45
+_BLUE = lambda r, g, b: b > 105 and g > 65 and r < 165 and b > r + 20
+BUTTON_GUARDS = {
+    # kind: box (x0,y0,x1,y1) in 16x9, colour pred, min hit-fraction, fallback click pt
+    "confirm":    {"box": (13.30, 7.55, 15.75, 8.80), "pred": _YELLOW, "min_frac": 0.035, "fallback": (14.35, 8.10)},
+    "rematch":    {"box": (11.10, 7.95, 13.40, 8.75), "pred": _BLUE,   "min_frac": 0.045, "fallback": (12.21, 8.32)},
+    # dialog_yes/dialog_no min_frac 0.030 are just coarse "is there colour here" sensors —
+    # the rematch-dialog DECISION is is_rematch_dialog() below (a raised threshold does NOT
+    # work; see its docstring + STATUS §1.44).
+    "dialog_yes": {"box": (5.00, 5.00, 8.50, 7.10),   "pred": _YELLOW, "min_frac": 0.030, "fallback": (6.50, 6.60)},
+    "dialog_no":  {"box": (8.60, 5.00, 11.00, 7.10),  "pred": _BLUE,   "min_frac": 0.030, "fallback": (9.50, 6.57)},
+}
+
+# Rematch dialog (はい/いいえ) vs the 終局 ranking screen. BOTH put yellow in the はい box
+# (a gold-skinned winner's illustration) and blue in the いいえ box (the rank bars), and the
+# art alone can hit dialog_yes frac 0.39 — HIGHER than the real はい button's 0.2068 — so no
+# single yellow threshold separates them (ai_session4 run_5 game4). What IS invariant: the real
+# dialog is two EQUAL side-by-side buttons, so its yes/no fracs are comparable (ratio pinned
+# 0.2068/0.2264 = 0.91 across 10 dialogs in 3 runs). The ranking screen is never balanced —
+# rank bars dominate (no≫yes, e.g. 0.13/0.87) or, before the bars render, the art dominates
+# (yes≫no, e.g. 0.39/0.0002). So gate on BOTH buttons present AND their fracs symmetric.
+DIALOG_FLOOR = 0.12       # each button's frac ≥ this (real はい 0.207 / いいえ 0.226; art bleed alone maxes ~0.13)
+DIALOG_BALANCE = 0.6      # min(yes,no) ≥ 0.6·max(yes,no); real ratio 0.91, worst false 0.148
+
+
+def is_rematch_dialog(yes_frac: float, no_frac: float, confirm_present: bool) -> bool:
+    """True iff the はい/いいえ rematch modal is up (NOT the 終局 ranking screen whose winner
+    art + rank bars can trip both colour boxes). Distinguished by two equal buttons: both
+    fracs above DIALOG_FLOOR and comparable (symmetric) in magnitude, with no active 確認.
+    Verified on ai_session4 run_2+run_3+run_5 (139 frames): fires on 10/10 real dialogs,
+    0 misfires, 0 misses. See STATUS §1.44."""
+    if confirm_present:                       # 確認 present -> settlement/missions, never the dialog
+        return False
+    if yes_frac < DIALOG_FLOOR or no_frac < DIALOG_FLOOR:
+        return False
+    lo, hi = min(yes_frac, no_frac), max(yes_frac, no_frac)
+    return lo >= DIALOG_BALANCE * hi
+
+
 def auto_next_flow(*, button_guard, main_menu_visible, click_at, delay_step,
-                   timeout, state, now=time.time, log=print):
+                   timeout, state, now=time.time, log=print, debug=None):
     """Game-end "one more game" step generator (deps injected; unit-testable).
 
     Real Majsoul game-end sequence (measured live 2026-07-05, jp 段位戦):
@@ -154,6 +201,12 @@ def auto_next_flow(*, button_guard, main_menu_visible, click_at, delay_step,
     deadline = now() + timeout
     yield delay_step(random.uniform(2.0, 4.0))
     while now() < deadline:
+        if debug is not None:                          # diagnostic frame+frac dump (no behaviour change)
+            try:
+                debug()
+            except Exception as e:
+                log(f"  auto-next debug dump err: {type(e).__name__}: {e}")
+
         menu_ok, menu_diff = main_menu_visible()
         if menu_ok:
             log(f"  auto-next: lobby detected (diff={menu_diff:.1f}); stopping — never clicking in the lobby")
@@ -161,19 +214,20 @@ def auto_next_flow(*, button_guard, main_menu_visible, click_at, delay_step,
             state["active"] = False
             return
 
-        yes_ok, yes_frac, yes_xy = button_guard("dialog_yes")
-        no_ok, _, _ = button_guard("dialog_no")
+        _, yes_frac, yes_xy = button_guard("dialog_yes")
+        _, no_frac, _ = button_guard("dialog_no")
         conf_ok, conf_frac, conf_xy = button_guard("confirm")
 
-        if yes_ok and no_ok and not conf_ok:          # rematch confirmation dialog
-            log(f"  auto-next: rematch dialog -> clicking はい (frac={yes_frac:.3f})")
+        if is_rematch_dialog(yes_frac, no_frac, conf_ok):   # symmetric はい/いいえ modal (not ranking art)
+            log(f"  auto-next: rematch dialog -> clicking はい @({yes_xy[0]:.2f},{yes_xy[1]:.2f}) "
+                f"(yes={yes_frac:.3f} no={no_frac:.3f} conf={conf_frac:.3f})")
             yield from click_at(yes_xy, kind="dialog_yes")
             yield delay_step(random.uniform(2.0, 3.0))
-            still, _, _ = button_guard("dialog_yes")
-            if not still:
-                state["clicked_next"] = True          # matchmaking; next authGame clears state
+            still_frac = button_guard("dialog_yes")[1]
+            if still_frac < DIALOG_FLOOR:                    # はい button gone -> matchmaking under way
+                state["clicked_next"] = True                # next authGame clears state
                 return
-            log("  auto-next: dialog still up after clicking はい; retrying")
+            log(f"  auto-next: dialog still up after clicking はい (yes={still_frac:.3f}); retrying")
             continue
 
         rem_ok, rem_frac, rem_xy = button_guard("rematch")
@@ -249,6 +303,11 @@ def main() -> None:
                     help="After a complete game, guarded-click the result confirms and the 'one more game' button.")
     ap.add_argument("--auto-next-timeout", type=float, default=90.0,
                     help="Seconds to wait for the guarded auto-next UI flow before falling back to --autojoin, if enabled.")
+    ap.add_argument("--auto-next-debug", action="store_true",
+                    help="DIAGNOSTIC (not a dataset input): while auto-next runs, dump every evaluated "
+                         "end-game frame + all four guard fractions/centroids (all measured on ONE frame) "
+                         "to <run>/_autonext_debug/ (PNGs + autonext_debug.jsonl). Use to see exactly which "
+                         "screen the flow misreads when it loops on はい.")
     ap.add_argument("--quiet", type=float, default=0.40, help="Screenshot once the board is event-quiet this long.")
     ap.add_argument("--stable-thresh", type=float, default=3.0,
                     help="Table-ROI frame-diff below this == settled (discard animation done).")
@@ -500,41 +559,26 @@ def main() -> None:
         except Exception:
             return None
 
-    # Game-end "one more game" flow.  Coordinates are in MahjongCopilot's 16x9
-    # logical space; each guard samples the current CDP screenshot and returns
-    # (present, colour-fraction, centroid) — the centroid is where auto_next_flow
-    # actually clicks, so exact button positions self-calibrate. Boxes + colours +
-    # fallbacks were MEASURED on real jp 段位戦 end-game full-screen captures
-    # (2026-07-05, all four screens): 確認 yellow bottom-right (centroid ≈14.3,8.1);
-    # もう一局 blue bottom-centre, missions only (≈12.2,8.3); the rematch dialog's
-    # はい (≈6.5,6.6) / いいえ (≈9.5,6.6) sit centre-screen with NO active 確認 (the
-    # dimmed settlement buttons behind the modal are too dark to trip the colours),
-    # which is how the dialog is told apart from a settlement screen.
-    _YELLOW = lambda r, g, b: r > 170 and g > 115 and b < 150 and r > b + 45
-    _BLUE = lambda r, g, b: b > 105 and g > 65 and r < 165 and b > r + 20
-    BUTTON_GUARDS = {
-        # kind: box (x0,y0,x1,y1) in 16x9, colour pred, min hit-fraction, fallback click pt
-        "confirm":    {"box": (13.30, 7.55, 15.75, 8.80), "pred": _YELLOW, "min_frac": 0.035, "fallback": (14.35, 8.10)},
-        "rematch":    {"box": (11.10, 7.95, 13.40, 8.75), "pred": _BLUE,   "min_frac": 0.045, "fallback": (12.21, 8.32)},
-        "dialog_yes": {"box": (5.00, 5.00, 8.50, 7.10),   "pred": _YELLOW, "min_frac": 0.030, "fallback": (6.50, 6.60)},
-        "dialog_no":  {"box": (8.60, 5.00, 11.00, 7.10),  "pred": _BLUE,   "min_frac": 0.030, "fallback": (9.50, 6.57)},
-    }
-
-    def button_guard(kind: str) -> tuple[bool, float, tuple[float, float]]:
+    # Game-end "one more game" flow. Guard boxes/colours/thresholds live module-level in
+    # BUTTON_GUARDS (see its header for the calibration + the dialog_yes threshold rationale);
+    # button_guard just samples the current CDP screenshot against them.
+    def button_guard(kind: str, img=None) -> tuple[bool, float, tuple[float, float]]:
         """Return (present, colour-fraction, click-point-in-16x9). The click point
         is the centroid of the colour-matching pixels (falls back to a fixed point
-        when the button isn't present)."""
+        when the button isn't present). Pass a pre-loaded RGB PIL image to evaluate
+        several guards on ONE frame (else each call grabs its own screenshot)."""
         spec = BUTTON_GUARDS[kind]
         fallback = spec["fallback"]
-        png = screenshot_png()
-        if not png:
-            return False, 0.0, fallback
-        try:
-            from PIL import Image
-            img = Image.open(io.BytesIO(png)).convert("RGB")
-        except Exception as e:
-            print(f"  auto-next guard image error: {e}", flush=True)
-            return False, 0.0, fallback
+        if img is None:
+            png = screenshot_png()
+            if not png:
+                return False, 0.0, fallback
+            try:
+                from PIL import Image
+                img = Image.open(io.BytesIO(png)).convert("RGB")
+            except Exception as e:
+                print(f"  auto-next guard image error: {e}", flush=True)
+                return False, 0.0, fallback
 
         w, h = img.size
         x0, y0, x1, y1 = spec["box"]
@@ -576,24 +620,68 @@ def main() -> None:
 
     auto_next_state = {"active": False, "started": 0.0, "clicked_next": False, "failed": False}
 
-    def main_menu_visible() -> tuple[bool, float]:
+    def main_menu_visible(img=None) -> tuple[bool, float]:
         """True if the current screen is the lobby main menu (MahjongCopilot's
         masked-template diff, threshold as in GameVisual.comp_temp). Uses OUR CDP
-        screenshot, not browser.screen_shot() (page.screenshot flickers WebGL)."""
-        png = screenshot_png()
-        if not png:
-            return False, -1.0
+        screenshot, not browser.screen_shot() (page.screenshot flickers WebGL).
+        Pass a pre-loaded RGB PIL image to reuse a frame (else grabs its own)."""
         try:
             from PIL import Image
+            if img is None:
+                png = screenshot_png()
+                if not png:
+                    return False, -1.0
+                img = Image.open(io.BytesIO(png)).convert("RGB")
             base, mask = automation.g_v.temp_dict[ImgTemp.MAIN_MENU]
-            diff = img_avg_diff(base, Image.open(io.BytesIO(png)).convert("RGB"), mask)
+            diff = img_avg_diff(base, img, mask)
             return diff < 30, diff
         except Exception as e:
             print(f"  auto-next menu check error: {type(e).__name__}: {e}", flush=True)
             return False, -1.0
 
+    def autonext_debug_dump() -> None:
+        """DIAGNOSTIC (--auto-next-debug): grab ONE frame, evaluate all four guards +
+        the lobby check on it, save the PNG + a JSONL line (fracs, centroids, predicted
+        branch, menu-diff) under <run>/_autonext_debug/. One frame per auto-next loop
+        iteration, so a stuck run leaves the exact misread screens on disk. Never
+        raises into the flow (the caller wraps it, but be defensive anyway)."""
+        try:
+            from PIL import Image
+            png = screenshot_png()
+            if not png:
+                return
+            img = Image.open(io.BytesIO(png)).convert("RGB")
+            n = auto_next_state.get("dbg_i", 0)
+            g = auto_next_state.get("dbg_game", game_idx)
+            auto_next_state["dbg_i"] = n + 1
+            res = {k: button_guard(k, img) for k in BUTTON_GUARDS}     # all guards on the SAME frame
+            menu_ok, menu_diff = main_menu_visible(img)
+            conf_ok = res["confirm"][0]; rem_ok = res["rematch"][0]
+            if menu_ok:                       branch = "lobby"
+            elif is_rematch_dialog(res["dialog_yes"][1], res["dialog_no"][1], conf_ok): branch = "dialog_yes"
+            elif rem_ok and conf_ok:          branch = "rematch"
+            elif conf_ok:                     branch = "confirm"
+            else:                             branch = "wait"
+            dbg_dir = os.path.join(out_dir, "_autonext_debug")
+            os.makedirs(dbg_dir, exist_ok=True)
+            with open(os.path.join(dbg_dir, f"an_g{g}_{n:03d}_{branch}.png"), "wb") as fh:
+                fh.write(png)
+            line = {"i": n, "game": g, "ts": time.time(), "branch": branch,
+                    "menu_diff": round(menu_diff, 1),
+                    "guards": {k: {"present": v[0], "frac": round(v[1], 4),
+                                   "xy": [round(v[2][0], 2), round(v[2][1], 2)]}
+                               for k, v in res.items()}}
+            with open(os.path.join(dbg_dir, "autonext_debug.jsonl"), "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(line) + "\n")
+            print(f"  [autonext-dbg g{g} {n}] -> {branch}  conf={res['confirm'][1]:.3f} "
+                  f"rem={res['rematch'][1]:.3f} yes={res['dialog_yes'][1]:.3f} "
+                  f"no={res['dialog_no'][1]:.3f} menu={menu_diff:.0f}", flush=True)
+        except Exception as e:
+            print(f"  autonext-dbg err: {type(e).__name__}: {e}", flush=True)
+
     def start_auto_next() -> None:
-        auto_next_state.update(active=True, started=time.time(), clicked_next=False, failed=False)
+        auto_next_state.update(active=True, started=time.time(), clicked_next=False,
+                               failed=False, dbg_i=0, dbg_game=game_idx)
         automation.stop_previous()
         task = AutomationTask(browser, "Auto_NextGame", "Confirming game end and requesting another game")
         automation._task = task
@@ -601,6 +689,7 @@ def main() -> None:
             button_guard=button_guard, main_menu_visible=main_menu_visible,
             click_at=click_at, delay_step=ActionStepDelay,
             timeout=args.auto_next_timeout, state=auto_next_state,
+            debug=autonext_debug_dump if args.auto_next_debug else None,
             log=lambda m: print(m, flush=True))
         task.start_action_steps(flow, None)
 

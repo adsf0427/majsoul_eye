@@ -111,6 +111,10 @@
   不影响既有 `"ok"`/`"timeout"` 消费者（下游默认不读取、不参与标注/建库）；每行（含 `"ok"`）都新增
   `dt` 字段（本次截图相对触发事件 `last_event_t` 的秒数），供将来"从多帧里挑最佳一张"的
   best-shot selector 使用（尚未实现，见 STATUS §1.41 的 OWNED FOLLOW-UP）。
+- `--auto-next-debug`（**诊断专用，非数据集输入**）：`--auto-next` 循环卡死时开这个，每轮把当前
+  端末帧 + 四个按钮 guard 的 frac/质心/预测分支（**全在同一帧上评估**）+ lobby menu_diff 存到
+  `<run>/_autonext_debug/`（PNG + `autonext_debug.jsonl`）。产物在 `frames/`、`games.json` 之外，
+  下游一律不读。用来定位 auto-next 把哪一屏误判成 rematch 对话框（见 STATUS §1.43）。
 - 每局写 `metadata.json`（显示语言 BCP-47，`--lang` > localStorage 探测 > 服务器粗判）。
 - **已过时**：`record_gt.py` 手动 F11 + Akagi 路线（akagi 环境）。不再用于新采集；
   脚本保留只为存档复现 session5/6。

@@ -198,6 +198,134 @@ def test_timeout_marks_failed():
     assert state["active"] is False
 
 
+def _drive_with_debug(ui, debug, timeout=90.0):
+    clock = FakeClock()
+    state = {"active": True, "started": clock.t, "clicked_next": False, "failed": False}
+    gen = autoplay_ai.auto_next_flow(
+        button_guard=ui.button_guard, main_menu_visible=ui.main_menu_visible,
+        click_at=ui.click_at, delay_step=lambda s: ("delay", s),
+        timeout=timeout, state=state, now=clock.now, log=lambda *_: None, debug=debug)
+    for step in gen:
+        if isinstance(step, tuple) and step[0] == "delay":
+            clock.t += step[1]
+    return state
+
+
+def test_debug_hook_fires_each_iteration_without_changing_decisions():
+    # The diagnostic dump runs once per loop iteration and must NOT alter the click path.
+    calls = []
+    ui = FakeUI([
+        {"buttons": ("confirm",), "on_confirm": 1},
+        {"buttons": ("confirm", "rematch"), "on_rematch": 2},
+        {"buttons": ("dialog_yes", "dialog_no"), "on_dialog_yes": 3},
+        {},
+    ])
+    state = _drive_with_debug(ui, debug=lambda: calls.append(1))
+    assert _kinds(ui) == ["confirm", "rematch", "dialog_yes"], ui.clicks
+    assert state["clicked_next"] is True
+    assert len(calls) >= 3           # at least one dump per advancing screen
+
+
+def test_debug_hook_exception_never_breaks_flow():
+    # A failing dump (e.g. disk/screenshot error) must be swallowed, not strand the flow.
+    def boom():
+        raise RuntimeError("dump failed")
+    ui = FakeUI([
+        {"buttons": ("confirm",), "on_confirm": 1},
+        {"buttons": ("dialog_yes", "dialog_no"), "on_dialog_yes": 2},
+        {},
+    ])
+    state = _drive_with_debug(ui, debug=boom)
+    assert _kinds(ui) == ["confirm", "dialog_yes"], ui.clicks
+    assert state["clicked_next"] is True
+
+
+class FracUI:
+    """Screens defined by raw guard *fractions*; presence applies the REAL module-level
+    thresholds (autoplay_ai.BUTTON_GUARDS[kind]['min_frac']). Lets us replay recorded
+    end-game frames (captures/raw/ai_session4/run_2/_autonext_debug) through the real gate,
+    so a threshold regression fails here instead of live on a burner account."""
+
+    def __init__(self, screens):
+        self.screens = screens
+        self.idx = 0
+        self.clicks = []
+
+    def button_guard(self, kind):
+        frac = self.screens[self.idx].get(kind, 0.0)
+        spec = autoplay_ai.BUTTON_GUARDS[kind]
+        return frac >= spec["min_frac"], frac, tuple(spec["fallback"])
+
+    def main_menu_visible(self):
+        return False, 80.0
+
+    def click_at(self, xy, kind=None):
+        self.clicks.append((kind, xy))
+        nxt = self.screens[self.idx].get("_on", {}).get(kind)
+        if nxt is not None:
+            self.idx = nxt
+        yield ("click", xy)
+
+
+def _drive_frac(ui, timeout=90.0):
+    clock = FakeClock()
+    state = {"active": True, "started": clock.t, "clicked_next": False, "failed": False}
+    gen = autoplay_ai.auto_next_flow(
+        button_guard=ui.button_guard, main_menu_visible=ui.main_menu_visible,
+        click_at=ui.click_at, delay_step=lambda s: ("delay", s),
+        timeout=timeout, state=state, now=clock.now, log=lambda *_: None)
+    for step in gen:
+        if isinstance(step, tuple) and step[0] == "delay":
+            clock.t += step[1]
+    return state
+
+
+# Real recorded (dialog_yes, dialog_no) frac pairs, tagged by whether they are the actual
+# はい/いいえ modal, from ai_session4 run_2+run_3+run_5 _autonext_debug logs. confirm is absent
+# on all of these. This is the ground truth the gate must reproduce.
+_REAL_DIALOG_FRACS = [(0.2068, 0.2264)]                         # pinned across 10 dialogs / 3 runs
+_FALSE_DIALOGLIKE_FRACS = [
+    (0.0715, 0.8676),   # run_2 game6 i1 — faint art + full rank bars (original stuck frame)
+    (0.0801, 0.1765),   # run_2 game2 i6 — settling screen
+    (0.0486, 0.8676),   # run_3 game3 i1 — the frame that made run_3 give up
+    (0.0447, 0.0759),   # matchmaking-retry frame (post-click)
+    (0.1284, 0.8676),   # run_5 game1 i1 — GOLD skin art 0.13 (would pass a 0.12 threshold!)
+    (0.3882, 0.0002),   # run_5 game4 i0 — art 0.39 > real button, bars not yet rendered
+]
+
+
+def test_is_rematch_dialog_matches_recorded_ground_truth():
+    # The pixel-free decision must fire on every real dialog and no false positive.
+    for yf, nf in _REAL_DIALOG_FRACS:
+        assert autoplay_ai.is_rematch_dialog(yf, nf, False) is True, (yf, nf)
+    for yf, nf in _FALSE_DIALOGLIKE_FRACS:
+        assert autoplay_ai.is_rematch_dialog(yf, nf, False) is False, (yf, nf)
+    # 確認 present always vetoes the dialog (settlement/missions screen), even if symmetric.
+    assert autoplay_ai.is_rematch_dialog(0.2068, 0.2264, True) is False
+
+
+def test_ai_session4_all_false_dialoglike_frames_rejected():
+    # Drive the whole flow on each recorded false positive (incl. run_5's gold-skin 0.13 and
+    # 0.39 art that DEFEAT any single yellow threshold): must never click はい on the ranking.
+    for yf, nf in _FALSE_DIALOGLIKE_FRACS:
+        ui = FracUI([{"dialog_yes": yf, "dialog_no": nf, "confirm": 0.0, "rematch": 0.0}])
+        state = _drive_frac(ui, timeout=6.0)
+        assert ui.clicks == [], (yf, nf, ui.clicks)
+
+
+def test_ai_session4_real_dialog_frac_clicks_hai_once():
+    # The REAL rematch dialog (dialog_yes 0.2068, dialog_no 0.2264, symmetric, confirm absent):
+    # click はい exactly once; matchmaking (all guards gone) -> success, no retry loop.
+    ui = FracUI([
+        {"dialog_yes": 0.2068, "dialog_no": 0.2264, "confirm": 0.0, "rematch": 0.0,
+         "_on": {"dialog_yes": 1}},
+        {},                                                     # matchmaking: はい gone
+    ])
+    state = _drive_frac(ui)
+    assert [k for k, _ in ui.clicks] == ["dialog_yes"], ui.clicks
+    assert state["clicked_next"] is True
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
