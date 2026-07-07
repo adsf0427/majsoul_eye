@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 
 
 def gate_frame(frame, boxes, crops, clf, tau, max_bad):
@@ -216,8 +217,17 @@ def main() -> None:
         ap.error("--reuse-images is label-only (loads no pixels): pass --no-crops and drop --occlusion-gate")
 
     import cv2  # auto env
-    if args.reuse_images:
-        from PIL import Image  # header-only frame-size reads
+    from PIL import Image  # header-only reads: frame sizes (--reuse-images) + copy fast-path
+
+    def plain_rgb(path: str) -> bool:
+        """True when the PNG decodes to exactly the 8-bit 3-channel array
+        ``cv2.imwrite`` would re-emit (no alpha/16-bit/palette) — the
+        precondition for copying the source file instead of re-encoding."""
+        try:
+            with Image.open(path) as im:      # header only, no pixel decode
+                return im.mode == "RGB"
+        except Exception:
+            return False
 
     from majsoul_eye import paths
     from majsoul_eye.tiles import NAME_TO_ID
@@ -305,7 +315,8 @@ def main() -> None:
                 continue
             # default path calibrates at 1920x1080 and resizes to match; reuse path keeps the
             # native frame (the stored polys are native-px — don't rescale the frame under them).
-            if (w, h) != (1920, 1080) and not args.from_annotations:
+            resized = (w, h) != (1920, 1080) and not args.from_annotations
+            if resized:
                 frame = cv2.resize(frame, (1920, 1080), interpolation=cv2.INTER_AREA)
                 h, w = 1080, 1920
 
@@ -380,7 +391,11 @@ def main() -> None:
 
         if yolo_lines and not args.no_yolo:
             if frame is not None:                                        # reuse-images: image already on disk (symlinked)
-                cv2.imwrite(os.path.join(img_dir, f"{seq:06d}.png"), frame)   # RESIZED frame
+                dst = os.path.join(img_dir, f"{seq:06d}.png")
+                if not resized and plain_rgb(frames[seq]):
+                    shutil.copyfile(frames[seq], dst)   # pixel-identical to the source — skip the ~100ms PNG re-encode
+                else:
+                    cv2.imwrite(dst, frame)             # RESIZED (or non-plain-RGB source) frame
             with open(os.path.join(lbl_dir, f"{seq:06d}.txt"), "w") as lf:
                 lf.write("\n".join(yolo_lines) + "\n")
             n_yolo += 1

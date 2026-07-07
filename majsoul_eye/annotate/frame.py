@@ -46,10 +46,11 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
     ``rec["back_boxes"]`` (str(pos) -> box list; holding seats skipped+flagged)."""
     Hinv = hom["H_full_inv"]
     full = P.warp_to_full(img, hom["H_full"], hom["full_size"])
-    mw = P.tile_face_mask(full)
-    mb = P.tile_back_mask(full)                 # face/back discrimination for snap
+    hsv_full = cv2.cvtColor(full, cv2.COLOR_BGR2HSV)   # one conversion feeds all 3 masks
+    mw = P.tile_face_mask(hsv=hsv_full)
+    mb = P.tile_back_mask(hsv=hsv_full)         # face/back discrimination for snap
     ii_w = cv2.integral(mw)
-    ii_l = cv2.integral(P.tile_live_mask(full)) # skin-agnostic liveness for back-cell fill
+    ii_l = cv2.integral(P.tile_live_mask(hsv=hsv_full))  # skin-agnostic liveness for back-cell fill
 
     rec = {"hero_seat": state.hero_seat,
            "kyoku": f"{state.bakaze}{state.kyoku}",
