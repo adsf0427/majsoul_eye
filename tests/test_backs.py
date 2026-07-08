@@ -31,21 +31,15 @@ def test_plain13_reproduces_manual_templates():
         assert abs(_tpl_pitch(pos) - 71.2) < 0.5, (pos, _tpl_pitch(pos))
 
 
-def test_meld_shrink_keeps_players_left_anchor():
+def test_melded_row_is_the_first_slots_unchanged():
+    # a melded row does not re-space: it's exactly the first row_n templates
+    # (meld_bias 0 -> k=1 for every seat; STATUS §1.49).
     for pos in (1, 2, 3):
         boxes = generate_back_boxes(pos, 10, 1, HINV)   # one meld -> 10-tile row
         assert len(boxes) == 10
-        a = _anchor_coord(pos)
-        # anchored extreme of slot 0 unchanged (stretch is about the anchor)
-        anchored = [abs(_along(p, pos) - a) for p in boxes[0]["poly_fullwarp"]]
-        tpl0 = [abs(_along(p, pos) - a) for p in BACK_SLOT_QUADS[pos][0]]
-        assert abs(min(anchored) - min(tpl0)) < 0.11
-        # moving-end outer edge = template outer edge of slot 9, stretched by k
-        k = _meld_k(pos, 10, 1)
-        outer_tpl = max(abs(_along(p, pos) - a) for p in BACK_SLOT_QUADS[pos][9])
-        outer_now = max(abs(_along(p, pos) - a) for p in boxes[9]["poly_fullwarp"])
-        assert abs(outer_now - outer_tpl * k) < 0.11, (pos, outer_now, outer_tpl * k)
-        assert (k > 1.0) == (BACK_ROWS[pos]["meld_bias"] > 0)
+        assert _meld_k(pos, 10, 1) == 1.0
+        for b, tpl in zip(boxes, BACK_SLOT_QUADS[pos]):
+            assert np.allclose(b["poly_fullwarp"], tpl, atol=0.11), (pos, b["slot"])
 
 
 def test_drawn_quad_rides_the_moving_end():
@@ -86,15 +80,30 @@ def _state(counts=(13, 13, 13, 13)):
     return st
 
 
-def test_back_boxes_skips_holding_seat_and_flags():
+def test_back_boxes_labels_holding_row_plus_drawn():
     img = np.zeros((1080, 1920, 3), np.uint8)
     st = _state((13, 13, 14, 13))                        # seat2 = across = pos2 holding
     rec, flags = back_boxes(img, st, HOM)
-    assert rec["2"] == []
-    assert "pos2:backs_holding" in flags
+    assert "backs_holding" not in " ".join(flags)        # holding is no longer skipped
+    # settled seats: 13 row backs; holding seat: 13 static row + 1 drawn = 14
     assert len(rec["1"]) == 13 and len(rec["3"]) == 13
+    assert len(rec["2"]) == 14
+    drawn = [b for b in rec["2"] if b.get("drawn")]
+    assert len(drawn) == 1 and drawn[0]["slot"] == 13
     # black frame -> every emitted box fails the live-fill check
-    assert all(b.get("reliable") is False for b in rec["1"] + rec["3"])
+    assert all(b.get("reliable") is False for b in rec["1"] + rec["2"] + rec["3"])
+
+
+def test_holding_row_matches_settled_geometry():
+    # a holding seat's static row (n-1) reuses the exact settled templates; the
+    # drawn box sits past the moving end (slot index n-1).
+    img = np.zeros((1080, 1920, 3), np.uint8)
+    st = _state((14, 13, 13, 13))                        # seat1 = right = pos1 holding, 0 meld
+    rec, _ = back_boxes(img, st, HOM)
+    row = [b for b in rec["1"] if not b.get("drawn")]
+    assert len(row) == 13
+    for b, tpl in zip(row, BACK_SLOT_QUADS[1]):
+        assert np.allclose(b["poly_fullwarp"], tpl, atol=0.11)
 
 
 def test_annotate_frame_backs_opt_in():

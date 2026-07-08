@@ -215,7 +215,10 @@
   calibrate_backs_manual.py` 生成自包含 HTML 标注页（auto env 是 headless OpenCV，无 cv2 GUI；
   浏览器里滚轮缩放逐张点 4 角，下载 JSON 到 `out/backs_calib/`），`--ingest` 合并校验并生成
   `majsoul_eye/annotate/_backs_manual.py`（勿手改）——13 槽/座 + 摸牌槽，fullwarp quad；
-  副露收缩＝绕锚点端伸缩（bias 沿用自动实测）。摸牌槽暂未参与标注（holding 帧仍整帧丢）。
+  副露不重排（副露行＝前 row_n 个模板槽原位，STATUS §1.49）；holding 座位已标注（静止 n-1 行 + 摸牌槽，
+  §1.48）。多局多皮肤 diversity 审查集：`scripts/inspect/build_backs_review.py`（回放扫全部 AI 局 → 按状态
+  签名去重、稀有态[各座副露/听牌/摸牌]优先、跨局散布 → 只标选中帧，出扁平 `<game>__<seq>` HBB+OBB →
+  `datasets/backs_review/`；`fiftyone_view.py --data datasets/backs_review/obb/data.yaml` 浏览）。
 - **HUD（⚠️ 三条均待跑——先用合并后代码重建 v2（旧 v2 是 38 类、无 `hud/`），再执行）**：
   - 读取器：`train_hudreader.py --dataset datasets/<name> --out majsoul_eye/recognize/hud_reader.pt`
     ——CTC 数字读取器 + round/wind 分类头，一份 checkpoint 三个子模型；held-out 按

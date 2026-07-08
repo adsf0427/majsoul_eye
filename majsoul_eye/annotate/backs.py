@@ -19,19 +19,24 @@ kept below in BACK_ROWS as the coarse reference — see STATUS.md §1.45):
     Template centroid pitch came out 71.1/71.3/71.2 for the three seats —
     physically one tile width, a strong self-consistency check vs the automatic
     sprite-extent pitches (76.9/72.6/78.2) that averaged the lean smear in.
-  * melds: row occupies slots 0..row_n-1, uniformly STRETCHED about the anchor
-    by the measured moving-end bias (sprite-run measurements: end = anchor +
-    row_n*pitch + n_melds*meld_bias; pos2 bias 0, side seats ~17/25 px).
+  * melds: the concealed row is simply the first ``row_n`` template slots at
+    their FIXED positions — no re-spacing (tiles are laid from the anchor at a
+    fixed pitch, a meld just drops the far slots). ``_meld_k`` is 1.0 (meld_bias
+    all 0); the earlier per-seat stretch was a sprite-extent artifact that
+    drifted short rows off their moving end (STATUS §1.49).
   * BACK_DRAWN_QUADS[pos] = the separated drawn-tile slot, clicked on real
     first-turn thinking frames (centroid gap beyond slot 12 ≈ +36 px, identical
-    across all three seats). UNUSED while holding seats are skipped (below) —
-    recorded for the future holding-state extension via ``drawn_quad``.
-  * a HOLDING seat (concealed_count % 3 == 2, drawn tile up) is SKIPPED whole:
-    mid-sort the client opens an insertion gap whose position depends on the
-    opponent's hidden tiles — not derivable from GT, and a wrong box is worse
-    than none. The frame gets a ``pos{p}:backs_holding`` flag so builds can drop
-    it for label-consistency (an unlabeled rendered row would train the detector
-    to suppress backs — the hero-hand lesson).
+    across all three seats). For a melded/short row it rides the moving end via
+    ``_drawn_fw`` (validated on real 0-meld and 1-meld holding frames).
+  * a HOLDING seat (concealed_count % 3 == 2 — just drew, drawn tile still up)
+    IS LABELED: the concealed row is a STATIC ``n-1``-tile row (the draw does not
+    reflow it) plus one separated drawn-tile back. Both are fully GT-derivable —
+    the row is the same templates, the drawn tile sits in the fixed drawn slot
+    (STATUS §1.46, correcting the earlier belief that holding was underivable;
+    that reasoning actually belonged to the POST-tedashi reflow, which the
+    ``sorting_suspect`` pixel gate handles on settled frames). Only the
+    slide-in draw animation can leave the drawn tile unrendered — caught per-box
+    by the fill check, not a whole-frame drop.
 """
 from __future__ import annotations
 
@@ -44,15 +49,22 @@ from majsoul_eye.annotate._backs_manual import BACK_DRAWN_QUADS, BACK_SLOT_QUADS
 # Coarse per-seat row model from the AUTOMATIC strip-run calibration (run_8
 # games 1-4, V>170 fullwarp runs, mad=0 per extent). The manual templates above
 # supersede it for box geometry; this stays as (a) the along-axis/anchor-side
-# metadata the stretch math needs, (b) the measured per-meld moving-end bias,
-# (c) the reference the ingest validation prints against.
+# metadata, (b) the reference the ingest validation prints against.
+# ``meld_bias`` is 0 for every seat: a melded row is simply the first row_n
+# TEMPLATE slots at their fixed positions — the concealed tiles are laid from the
+# anchor at a fixed pitch, so removing tiles (a meld) drops the far slots and does
+# NOT re-space the rest. The earlier non-zero biases (17/0/25.5) came from fitting
+# the moving-end SPRITE EXTENT (lean smear), which over-stretched short rows and
+# drifted the boxes toward the moving end (~+3.6% on pos3 -> last box off the row
+# end; user-spotted on a pos3 1-meld frame, STATUS §1.49). Verified k=1 hugs every
+# tile on 1-meld rows for all three seats.
 BACK_ROWS = {
     1: {"along": "y", "along0": 587.0, "along1": 1587.0, "pitch": 76.92,
-        "cross": (2380.0, 2505.0), "anchor": "high", "meld_bias": 17.0},
+        "cross": (2380.0, 2505.0), "anchor": "high", "meld_bias": 0.0},
     2: {"along": "x", "along0": 1179.0, "along1": 2123.0, "pitch": 72.62,
         "cross": (50.0, 230.0), "anchor": "high", "meld_bias": 0.0},
     3: {"along": "y", "along0": 277.0, "along1": 1293.0, "pitch": 74.08,
-        "cross": (552.0, 692.0), "anchor": "low", "meld_bias": 25.5},
+        "cross": (552.0, 692.0), "anchor": "low", "meld_bias": 0.0},
 }
 DRAWN_GAP = 25.0        # fullwarp px, sprite-run edge gap (manual centroid gap ≈ 36)
 FILL_OK_BACKS = 0.25    # tile_live_mask coverage below this = not rendered / occluded
@@ -93,8 +105,11 @@ def _stretch_quad(quad, pos: int, k: float):
 
 
 def _meld_k(pos: int, row_n: int, n_melds: int) -> float:
-    """Uniform about-anchor stretch factor for a melded row (see module doc)."""
-    if not n_melds:
+    """About-anchor stretch for a melded row. Now identically 1.0 for every seat
+    (meld_bias all 0 — a melded row does not re-space; see module doc / BACK_ROWS
+    comment). Kept as a hook so a future measured re-spacing, if any, drops in via
+    meld_bias without touching call sites."""
+    if not n_melds or not BACK_ROWS[pos]["meld_bias"]:
         return 1.0
     return 1.0 + (n_melds * BACK_ROWS[pos]["meld_bias"]) / (row_n * _tpl_pitch(pos))
 
@@ -141,9 +156,19 @@ def _drawn_fw(pos: int, row_n: int, n_melds: int, extra_pitches: float = 0.0):
 
 
 def drawn_quad(pos: int, row_n: int, n_melds: int, H_full_inv):
-    """Separated drawn-tile quad in ORIGINAL px — for the sorting gate below and
-    the future holding-state extension (holding seats are still skipped whole)."""
+    """Separated drawn-tile quad in ORIGINAL px — used by the holding-state label
+    (the concealed row's separated tile) and the sorting gate below."""
     return P.fullwarp_to_original(_drawn_fw(pos, row_n, n_melds), H_full_inv)
+
+
+def _drawn_box(pos: int, row_n: int, n_melds: int, H_full_inv) -> dict:
+    """The separated drawn-tile back box for a holding row (slot index = row_n,
+    i.e. appended after the row's 0..row_n-1 slots). ``drawn`` marks it for QA."""
+    quad_fw = _drawn_fw(pos, row_n, n_melds)
+    quad_or = P.fullwarp_to_original(quad_fw, H_full_inv)
+    return {"tile": "back", "slot": row_n, "drawn": True,
+            "poly_fullwarp": [[round(float(x), 1) for x in p] for p in quad_fw],
+            "poly_original": [[round(float(x), 1) for x in p] for p in quad_or]}
 
 
 def _patch_stats(img: np.ndarray, quad_orig) -> tuple | None:
@@ -213,19 +238,24 @@ def back_boxes(img: np.ndarray, state, hom: dict):
             rec[str(pos)] = []
             continue
         n = state.concealed_counts[seat]
-        if n % 3 == 2:                       # drawn tile up: sort gap is GT-underivable
-            rec[str(pos)] = []
-            flags.append(f"pos{pos}:backs_holding")
-            continue
-        row_n = n
         n_melds = len(state.melds[seat])
-        if 1 <= row_n <= 13 and sorting_suspect(img, pos, row_n, n_melds, Hinv):
-            rec[str(pos)] = []           # post-tedashi compaction mid-flight (see gate doc)
+        holding = (n % 3 == 2)               # just drew, drawn tile still up
+        row_n = n - 1 if holding else n      # the concealed ROW omits the drawn tile
+        if not (1 <= row_n <= 13):
+            rec[str(pos)] = []
+            if row_n:
+                flags.append(f"pos{pos}:backs_bad_row_n={row_n}")
+            continue
+        # Post-tedashi 理牌 reflow only happens on SETTLED rows (after a discard);
+        # a holding row is static (the draw slides in the separate tile, not the
+        # row), so the reflow gate is settled-only.
+        if not holding and sorting_suspect(img, pos, row_n, n_melds, Hinv):
+            rec[str(pos)] = []
             flags.append(f"pos{pos}:backs_sorting")
             continue
         boxes = generate_back_boxes(pos, row_n, n_melds, Hinv)
-        if not boxes and row_n:
-            flags.append(f"pos{pos}:backs_bad_row_n={row_n}")
+        if holding:                          # + the separated drawn-tile back
+            boxes.append(_drawn_box(pos, row_n, n_melds, Hinv))
         for b in boxes:
             p = np.float32(b["poly_original"])
             f = P._box_fill(ii, p[:, 0].min(), p[:, 1].min(), p[:, 0].max(), p[:, 1].max())

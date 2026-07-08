@@ -324,11 +324,13 @@ def main() -> None:
                else annotate_frame(frame, seq_state[seq], hom, backs=args.backs))
         rec["_seq"] = seq
 
-        # Backs experiment: a holding seat's row layout is GT-underivable, and a
-        # post-tedashi compaction (backs_sorting, pixel-gated) row misaligns the
-        # templates (see annotate/backs.py) — either way that row goes unlabeled,
-        # so drop the WHOLE frame to keep the 'back' training signal consistent
-        # rather than teach suppression.
+        # Backs experiment: a post-tedashi 理牌 reflow row (backs_sorting, pixel-
+        # gated) has its templates misaligned mid-animation (see annotate/backs.py),
+        # so that row goes unlabeled — drop the WHOLE frame to keep the 'back'
+        # training signal consistent rather than teach suppression. (Holding rows
+        # ARE labeled now — static row + drawn tile — so they are NOT dropped;
+        # backs_holding stays matched only for backward-compat with pre-STATUS-1.46
+        # annotation JSONs that still carry it.)
         if rec.get("back_boxes") is not None and any(
                 f.endswith(("backs_holding", "backs_sorting")) for f in rec.get("flags", [])):
             n_backs_hold += 1

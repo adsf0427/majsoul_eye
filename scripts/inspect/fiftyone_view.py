@@ -44,7 +44,13 @@ def label_path_for(img: Path) -> Path:
 
 
 def game_of(rel: str) -> str:
-    """datasets/precise_ai_run_1/yolo/images/000028.png -> precise_ai_run_1"""
+    """datasets/precise_ai_run_1/yolo/images/000028.png -> precise_ai_run_1.
+
+    Flat review sets name frames ``<game>__<seq>.png`` (many games in one dir), so
+    a ``__`` in the stem carries the game — prefer it over the (shared) parent dir."""
+    stem = Path(rel).stem
+    if "__" in stem:
+        return stem.rsplit("__", 1)[0]
     parts = Path(rel).parts
     if "yolo" in parts:
         i = parts.index("yolo")
