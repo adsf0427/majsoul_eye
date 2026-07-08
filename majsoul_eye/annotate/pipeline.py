@@ -458,9 +458,11 @@ def generate_discard_slots(seat: int, river: list, H_full_inv: np.ndarray,
 # Recalibrated 2026-07-08 (STATUS §1.50): pos3 corner was ~+46px (half a tile) off
 # ALONG — the stale offset parked snap_meld_strip at the aliasing midpoint (self-
 # similar equal-pitch tiles), so pos3 flipped one whole tile on ~26% of frames
-# ("上家副露严重失位"). Corner moved −45.5 along -> full-tile flips ~26%→<1%
-# (residual near-miss ~5% is per-frame snap noise on the far seat; Phase 2 round
-# consensus targets it). pos0 ALSO shows a ~+46px cross offset, but its snap locks
+# ("上家副露严重失位"). Corner moved +45.5 ALONG (inward, toward the hand: y 1797.6→1752.1
+# with along=(0,-1)) -> full-tile flips ~26%→<1% (residual near-miss ~5% is per-frame
+# snap noise on the far seat; Phase 2 round consensus targets it). pos2 (对家) is NOT
+# fixed here — its corner is well-calibrated; its adjacent-frame flicker is a per-round
+# snap issue for Phase 2. pos0 ALSO shows a ~+46px cross offset, but its snap locks
 # that correction rock-solid every frame (0% mislock) — LEFT AS-IS: recalibrating
 # pos0 only traded a benign consistent offset for per-frame scatter (0%→4.4%).
 # Re-run calibrate_annotation_model.py + verify with scripts/annotate/meld_snap_qa.py
