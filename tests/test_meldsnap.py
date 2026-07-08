@@ -15,8 +15,10 @@ def test_majority_cluster_wins_over_single_outlier():
 
 
 def test_no_feature_frames_are_ignored():
-    # n_features < MIN_FEATURES (2) are dropped; too few real samples -> None
-    assert round_meld_consensus([(0.0, 0.0, 0.0, 1)] * 8) is None
+    # score > 0 but n_features < MIN_FEATURES (2): dropped ONLY by the feature gate, so a
+    # round of these has too few confident samples -> None. (If the n-gate were removed,
+    # all 8 would survive as confident and consensus would return a value, not None.)
+    assert round_meld_consensus([(0.0, 0.0, 3.0, 1)] * 8) is None
 
 
 def test_too_few_confident_frames_returns_none():
@@ -30,10 +32,14 @@ def test_ambiguous_split_returns_none():
 
 
 def test_cross_axis_consensus():
-    # occasional cross flip: 10 at dc=24, 1 at dc=-0.5 -> consensus dc ~24
-    samples = [(1.0, 24.0, 4.0, 5)] * 10 + [(1.0, -0.5, 3.0, 6)]
+    # Same d_along (1.0), two d_cross groups 44px apart. Correct 2-D clustering keeps them
+    # separate and returns the majority dc=24. A broken ALONG-ONLY clustering would merge
+    # all 14 (same da) and average dc to ~11.4 -> caught by the tight tolerance.
+    samples = [(1.0, 24.0, 4.0, 5)] * 10 + [(1.0, -20.0, 4.0, 5)] * 4
     r = round_meld_consensus(samples)
-    assert r is not None and abs(r[1] - 24.0) < 2.0, r
+    assert r is not None
+    assert abs(r[1] - 24.0) < 3.0, r
+    assert abs(r[0] - 1.0) < 1.0, r
 
 
 def test_game_meld_overrides_smoke():

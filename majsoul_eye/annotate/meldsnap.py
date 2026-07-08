@@ -14,7 +14,6 @@ from __future__ import annotations
 from collections import defaultdict
 
 import cv2
-import numpy as np
 
 from majsoul_eye.annotate import pipeline as P
 from majsoul_eye.annotate.seatgt import seat_gt
