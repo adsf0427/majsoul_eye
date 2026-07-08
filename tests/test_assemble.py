@@ -201,6 +201,38 @@ def test_full_frame_roundtrip():
     assert o.zone_confidence["hand"] > 0
 
 
+def test_hud_class_detections_ignored():
+    # 56-class weights emit HUD detections (tile=None: scores, wall count,
+    # reach sticks, buttons). Tile assembly must skip them entirely — they are
+    # assemble_hud's domain. Regression: they used to route as tiles, producing
+    # "stray detection None" violations (far boxes) or corrupting a meld-strip
+    # parse (near boxes like a reach stick), rejecting every real frame.
+    from majsoul_eye.hud import DET_NAMES
+    from majsoul_eye.recognize.assemble import assemble
+    hand = ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m",
+            "1p", "2p", "3p", "4p"]
+    dets = _hand_dets(hand) + _dora_dets(["5s"]) + _river_dets(0, ["9p", "1s"])
+    dets += _meld_dets(2, [_gt("pon", ["P", "P", "P"], called="P",
+                               from_seat_rel=2, seat=2)])
+    base = assemble(list(dets), REGION)
+    assert base.violations == []
+
+    def hud_det(name, box):
+        (x0, y0), (x1, y1) = box
+        return Detection(xyxy=(x0, y0, x1, y1), name=name, tile=None,
+                         cls=DET_NAMES.index(name), score=0.9,
+                         poly=((x0, y0), (x1, y0), (x1, y1), (x0, y1)))
+
+    dets.append(hud_det("score_self", ((880, 620), (1040, 660))))   # far off-zone
+    dets.append(hud_det("wall_count", ((760, 460), (820, 500))))    # center panel
+    dets.append(hud_det("reach_stick", ((900, 430), (1020, 445))))  # near the felt zones
+    o = assemble(dets, REGION)
+    assert o.violations == []
+    assert o.hero_hand == base.hero_hand
+    assert [t.pai for t in o.rivers[0]] == [t.pai for t in base.rivers[0]]
+    assert o.melds[2][0].type == "pon"
+
+
 def test_full_frame_feeds_reconstruct():
     from majsoul_eye.recognize.assemble import assemble
     from majsoul_eye.state.reconstruct import reconstruct

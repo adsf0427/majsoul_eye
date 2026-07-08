@@ -225,6 +225,8 @@ def assemble(dets, region: BoardRegion) -> ObservedState:
         conf.setdefault(zone, []).append(det.score)
 
     for det in dets:
+        if det.tile is None:       # HUD-class detection (56-class head) — assemble_hud's domain
+            continue
         x0, y0, x1, y1 = det.xyxy
         nb = region.px_to_norm_box(x0, y0, x1, y1)
         if DORA_STRIP.x0 <= nb.cx <= DORA_STRIP.x1 and \
