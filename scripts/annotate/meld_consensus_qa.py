@@ -20,6 +20,7 @@ from majsoul_eye.capture.gtframes import build_seq_state, load_frames
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sources", nargs="+", default=["captures/raw/ai_session"])
+    ap.add_argument("--max-lowconf", type=float, default=0.25)
     args = ap.parse_args()
     hom = build_homographies(1920, 1080)
     caps = []
@@ -27,6 +28,7 @@ def main():
         caps += sorted(glob.glob(os.path.join(root, "run_*", "game*", "game*.jsonl")))
     bad = 0
     n_rounds = 0
+    low_conf = 0
     for cap in caps:
         try:
             ss = build_seq_state(cap)
@@ -45,9 +47,12 @@ def main():
             if len(vals) != 1:
                 bad += 1
                 print(f"NONUNIFORM {os.path.basename(os.path.dirname(cap))} {key}: {vals}")
-    print(f"rounds checked={n_rounds} nonuniform={bad}")
-    if bad:
-        print("FAIL: consensus is not uniform per round.")
+            elif vals == {None}:
+                low_conf += 1
+    frac = low_conf / n_rounds if n_rounds else 0.0
+    print(f"rounds checked={n_rounds} nonuniform={bad} low_conf_rounds={low_conf} ({frac:.3f})")
+    if bad or frac > args.max_lowconf:
+        print(f"FAIL: nonuniform={bad}, low_conf_frac={frac:.3f} (>{args.max_lowconf})")
         sys.exit(1)
     print("OK")
 

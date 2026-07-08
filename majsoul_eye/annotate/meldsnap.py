@@ -91,7 +91,10 @@ def game_meld_overrides(seq_states, seq_frames, hom):
         img = cv2.imread(seq_frames[seq])
         if img is None:
             continue
-        if img.shape[1] != 1920:
+        h, w = img.shape[:2]
+        if abs(w / h - 16 / 9) > 0.02:      # letterboxed: precise geometry invalid (parity with build_dataset)
+            continue
+        if w != 1920:
             img = cv2.resize(img, (1920, 1080), interpolation=cv2.INTER_AREA)
         m = measure_meld_snaps(img, st, hom)
         if not m:
