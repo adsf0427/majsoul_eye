@@ -57,7 +57,8 @@ def measure(sources):
         try:
             ss = build_seq_state(cap)
             fr = load_frames(os.path.dirname(cap))
-        except Exception:
+        except Exception as e:
+            print(f"  skip {cap}: {e}")
             continue
         for s in sorted(ss):
             if s not in fr:
@@ -107,6 +108,12 @@ def main():
         damis, dcmis = round(1 - daf, 3), round(1 - dcf, 3)
         worst = max(worst, damis, dcmis)
         print(f"{pos:>3} {len(da[pos]):>5} | {dao:>7} {damis:>7} | {dco:>7} {dcmis:>7}")
+    if sum(len(da[pos]) for pos in range(4)) == 0:
+        # A safety net must never green-light on empty data (bad --sources path,
+        # nested-layout glob miss, or every capture throwing above).
+        print(f"FAIL: measured 0 confident meld frames from --sources {args.sources} "
+              f"— nothing was checked.")
+        sys.exit(1)
     print(f"worst mislock={worst:.3f} (threshold {args.max_mislock})")
     if worst > args.max_mislock:
         print("FAIL: a seat exceeds the mislock threshold — check MELD_STRIP2 corners.")

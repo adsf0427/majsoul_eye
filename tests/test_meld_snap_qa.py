@@ -2,7 +2,8 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.getcwd(), "scripts", "annotate"))
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "annotate"))
 from meld_snap_qa import dominant  # noqa: E402
 
 
