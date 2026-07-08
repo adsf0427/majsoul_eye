@@ -201,6 +201,23 @@ def test_full_frame_roundtrip():
     assert o.zone_confidence["hand"] > 0
 
 
+def test_river_hbb_fallback():
+    # HBB models carry no poly; _fw_points falls back to the xyxy box corners.
+    # Order + sideways must still recover (sideways = warped extent ratio, which
+    # an axis-aligned box preserves). Final-review coverage item: every other
+    # river/meld test goes through the OBB poly path.
+    from dataclasses import replace
+    from majsoul_eye.recognize.assemble import _assign_river, _fw_points
+    for seat in range(4):
+        dets = [replace(d, poly=None)
+                for d in _river_dets(seat, ["1m", "9p", "E", "5s"], sideways_idx=2)]
+        items = [(d, _fw_points(d, REGION, H["H_full"])) for d in dets]
+        out, viol = _assign_river(seat, items)
+        assert not viol, (seat, viol)
+        assert [t.pai for t in out] == ["1m", "9p", "E", "5s"], seat
+        assert out[2].sideways and not out[0].sideways, seat
+
+
 def test_hud_class_detections_ignored():
     # 56-class weights emit HUD detections (tile=None: scores, wall count,
     # reach sticks, buttons). Tile assembly must skip them entirely — they are

@@ -42,7 +42,8 @@ def find_captures(roots):
 def obs_key(o):
     return {
         "rivers": [[(t.pai, t.sideways) for t in r] for r in o.rivers],
-        "melds": [[(m.type, m.from_rel, tuple(sorted(m.tiles))) for m in ms]
+        "melds": [[(m.type, m.from_rel, tuple(sorted(m.tiles)),
+                    m.called_pai, m.added_pai) for m in ms]
                   for ms in o.melds],
         "hand": sorted(o.hero_hand), "drawn": o.drawn_tile,
         "dora": list(o.dora_markers), "reach": list(o.reach),
@@ -52,6 +53,27 @@ def obs_key(o):
 def diff_zones(a, b):
     ka, kb = obs_key(a), obs_key(b)
     return [z for z in ka if ka[z] != kb[z]]
+
+
+_REJECT_CATS = (            # ordered: first substring hit wins per message
+    ("stray detection", "stray"),
+    ("meld strip", "meld_parse"),          # unparsable + ambiguous
+    ("river", "river_geometry"),           # off-grid / hole / prefix / >6
+    (">4 times", "tile_gt4"),
+    ("hero hand", "hand_size"),
+    ("dora marker", "dora"),
+    ("concealed", "concealed"),
+)
+
+
+def reject_categories(violations):
+    """Violation messages of ONE rejected frame -> distinct category set, so
+    threshold calibration can see WHY frames are rejected, not just how many
+    (post-M1 final-review item). Vocabulary tracks assemble.py/observe.py."""
+    cats = set()
+    for msg in violations:
+        cats.add(next((cat for sub, cat in _REJECT_CATS if sub in msg), "other"))
+    return cats
 
 
 def run_oracle(states, report):
@@ -102,6 +124,9 @@ def run_assemble(cap, states, report, weights, device):
         gt = observed_from_board(st, include_hud=False)
         if obs.violations:
             report["rejected"] += 1
+            for cat in reject_categories(obs.violations):
+                report["rejected_reasons"][cat] = \
+                    report["rejected_reasons"].get(cat, 0) + 1
             continue
         d = diff_zones(obs, gt)
         report["frames"] += 1
@@ -111,7 +136,16 @@ def run_assemble(cap, states, report, weights, device):
             report["zone_errors"][z] = report["zone_errors"].get(z, 0) + 1
 
 
+def hero_id(events):
+    return next((e.get("id", 0) for e in events
+                 if e.get("type") == "start_game"), 0)
+
+
 def ask_engine(cmd, events, timeout=60):
+    # {seat} placeholder -> the sequence's own hero seat: truth events keep the
+    # real seat (start_game id) while reconstructed events put hero at abs seat
+    # 0 when no HUD was read — one fixed player-id cmd cannot serve both.
+    cmd = cmd.replace("{seat}", str(hero_id(events)))
     inp = "\n".join(json.dumps(e) for e in events) + "\n"
     p = subprocess.run(cmd, input=inp, capture_output=True, text=True,
                        timeout=timeout, shell=True)
@@ -166,8 +200,8 @@ def main():
 
     total = {"ok": 0, "fail": [], "mismatch": [], "skipped_violations": 0,
              "skipped_call_pending": 0, "frames": 0, "rejected": 0,
-             "zone_errors": {}, "agree": 0, "disagree": [], "engine_error": 0,
-             "engine_fail": 0}
+             "rejected_reasons": {}, "zone_errors": {}, "agree": 0,
+             "disagree": [], "engine_error": 0, "engine_fail": 0}
     for cap in caps:
         states = build_seq_state(cap)
         if args.level == "oracle":
@@ -189,7 +223,8 @@ def main():
             print("  DIFF", m)
     elif args.level == "assemble":
         print(f"[assemble] {total['ok']}/{total['frames']} frames fully match, "
-              f"{total['rejected']} rejected; zone errors: {total['zone_errors']}")
+              f"{total['rejected']} rejected {total['rejected_reasons']}; "
+              f"zone errors: {total['zone_errors']}")
     else:
         print(f"[engine] agree {total['agree']}, "
               f"disagree {len(total['disagree'])}, "
