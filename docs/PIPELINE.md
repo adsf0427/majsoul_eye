@@ -152,6 +152,9 @@
   `(S>60)|(V>110)`，任意肤色都判活）判定 dora/副露反面槽是否已渲染（fill 门），与
   `tile_back_mask`（纯饱和度 `S>70`，供 `snap_meld_strip` 做吸附阶段的 face/back 几何判别）
   是两个职责分离的 mask，互不影响（STATUS §1.33）。
+- 副露角点（`pipeline.MELD_STRIP2`）2026-07-08 重标定（pos3 沿 along +45.5，消除半张牌 aliasing
+  失锁，STATUS §1.50）；**`scripts/annotate/meld_snap_qa.py`＝逐座锁错率守卫**，warp/mask/角点改动后必跑
+  （<8% 锁错，否则副露框可能整张翻）。远座逐帧残留由 Phase 2 按局共识收敛（另案）。
 
 ### 建库（build_dataset）
 - **标注步不是必须的**：不给 `--from-annotations` 时 build_dataset 走**自足模式**（内部逐帧
