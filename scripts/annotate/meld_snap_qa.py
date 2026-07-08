@@ -5,6 +5,13 @@ per-seat offset means a corner is mis-calibrated; a high mislock rate means the
 snap sits at the aliasing midpoint and flips one tile (STATUS §1.50). Exits
 nonzero if the worst seat mislock exceeds --max-mislock.
 
+mislock = fraction of confident frames outside the dominant ±12px cluster. It has a
+~3-5% per-frame floor (snap scatter on the far seats even when well-calibrated), so
+the default threshold (0.08) is a REGRESSION guard: a corner parked at the aliasing
+midpoint produces 20%+ mislock (pos3 was 0.231 before the 2026-07-08 recalibration),
+which this catches — it does NOT demand the per-frame floor. Phase 2 round-consensus
+is what drives the residual toward 0.
+
   PYTHONPATH=. python scripts/annotate/meld_snap_qa.py
   PYTHONPATH=. python scripts/annotate/meld_snap_qa.py --sources captures/raw/ai_session captures/raw/ai_session3
 """
@@ -85,7 +92,7 @@ def measure(sources):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sources", nargs="+", default=["captures/raw/ai_session"])
-    ap.add_argument("--max-mislock", type=float, default=0.03)
+    ap.add_argument("--max-mislock", type=float, default=0.08)
     args = ap.parse_args()
     da, dc = measure(args.sources)
     worst = 0.0

@@ -455,11 +455,21 @@ def generate_discard_slots(seat: int, river: list, H_full_inv: np.ndarray,
 # σ≈0.9px, across-round σ≈4px → the strip is fixed per round and floats a few px
 # between rounds; the annotator's per-frame snap absorbs the residual).
 # w/d = the measured tile face (~70.5×92.5, same plane as the rivers).
+# Recalibrated 2026-07-08 (STATUS §1.50): pos3 corner was ~+46px (half a tile) off
+# ALONG — the stale offset parked snap_meld_strip at the aliasing midpoint (self-
+# similar equal-pitch tiles), so pos3 flipped one whole tile on ~26% of frames
+# ("上家副露严重失位"). Corner moved −45.5 along -> full-tile flips ~26%→<1%
+# (residual near-miss ~5% is per-frame snap noise on the far seat; Phase 2 round
+# consensus targets it). pos0 ALSO shows a ~+46px cross offset, but its snap locks
+# that correction rock-solid every frame (0% mislock) — LEFT AS-IS: recalibrating
+# pos0 only traded a benign consistent offset for per-frame scatter (0%→4.4%).
+# Re-run calibrate_annotation_model.py + verify with scripts/annotate/meld_snap_qa.py
+# after any warp/mask change (guard catches a corner regressing toward aliasing).
 MELD_STRIP2 = {
     0: {"corner": (2388.2, 1889.5), "along": (-1.0, 0.0), "cross": (0.0, -1.0), "w": 70.2, "d": 92.1, "gap": 0.0},
     1: {"corner": (2454.0, 153.0),  "along": (0.0, 1.0),  "cross": (-1.0, 0.0), "w": 70.5, "d": 93.4, "gap": 0.0},
     2: {"corner": (685.0, 135.0),   "along": (1.0, 0.0),  "cross": (0.0, 1.0),  "w": 70.4, "d": 92.2, "gap": 0.0},
-    3: {"corner": (625.0, 1797.6),  "along": (0.0, -1.0), "cross": (1.0, 0.0),  "w": 71.0, "d": 93.0, "gap": 0.0},
+    3: {"corner": (624.5, 1752.1),  "along": (0.0, -1.0), "cross": (1.0, 0.0),  "w": 71.0, "d": 93.0, "gap": 0.0},
 }
 # Which meld sits at the corner. Majsoul anchors the FIRST (oldest) meld at the
 # fixed near corner (verified §1.9); walking from the corner therefore reverses
