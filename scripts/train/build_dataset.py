@@ -234,6 +234,7 @@ def main() -> None:
     from majsoul_eye.state.replay import check_invariants, is_deal_window, is_call_window, is_score_anim_window
     from majsoul_eye.capture.gtframes import build_seq_state, load_frames
     from majsoul_eye.annotate import build_homographies, annotate_frame, iter_tile_boxes, crop_box
+    from majsoul_eye.annotate import meldsnap as _meldsnap
 
     # seq -> frame path (keep 'timeout' frames as before)
     frames = load_frames(args.frames_dir, statuses=("ok", "timeout"))
@@ -254,11 +255,13 @@ def main() -> None:
         seq_state = build_seq_state(args.capture)
         hom = None
         seqs = sorted(recs)
+        meld_overrides = {}
         print(f"reuse: {len(recs)} records <- {ann_path}")
     else:
         seq_state = build_seq_state(args.capture)
         hom = build_homographies(1920, 1080)
         seqs = sorted(seq_state)
+        meld_overrides = _meldsnap.game_meld_overrides(seq_state, frames, hom)
 
     crops_dir = os.path.join(args.out, "crops")
     img_dir = os.path.join(args.out, "yolo", "images")
@@ -321,7 +324,8 @@ def main() -> None:
                 h, w = 1080, 1920
 
         rec = (recs[seq] if args.from_annotations
-               else annotate_frame(frame, seq_state[seq], hom, backs=args.backs))
+               else annotate_frame(frame, seq_state[seq], hom, backs=args.backs,
+                                   meld_snap_override=meld_overrides.get(seq)))
         rec["_seq"] = seq
 
         # Backs experiment: a post-tedashi 理牌 reflow row (backs_sorting, pixel-

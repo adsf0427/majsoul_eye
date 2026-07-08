@@ -48,6 +48,7 @@ import numpy as np
 from majsoul_eye.annotate import pipeline as P
 from majsoul_eye import paths
 from majsoul_eye.annotate.frame import annotate_frame, crop_quad
+from majsoul_eye.annotate import meldsnap as _meldsnap
 from majsoul_eye.capture.gtframes import build_seq_state, load_frames
 from majsoul_eye.state.replay import is_deal_window, is_call_window
 
@@ -107,6 +108,7 @@ def _process_capture(cap, cfg):
         from majsoul_eye.recognize.classifier import TileClassifier
         clf = TileClassifier("majsoul_eye/recognize/tile_classifier.pt")
     hom = P.build_homographies(1920, 1080)
+    overrides = _meldsnap.game_meld_overrides(seq_state, frames, hom)
 
     try:
         # Drop deal-in and call-animation frames: deal window (start_kyoku .. first
@@ -128,7 +130,8 @@ def _process_capture(cap, cfg):
                     continue
                 if img.shape[1] != 1920:
                     img = cv2.resize(img, (1920, 1080), interpolation=cv2.INTER_AREA)
-                rec = annotate_frame(img, seq_state[seq], hom, backs=cfg["backs"])
+                rec = annotate_frame(img, seq_state[seq], hom, backs=cfg["backs"],
+                                     meld_snap_override=overrides.get(seq))
                 rec["capture"] = name
                 rec["seq"] = seq
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")

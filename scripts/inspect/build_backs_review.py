@@ -31,6 +31,7 @@ import cv2
 
 from majsoul_eye import paths
 from majsoul_eye.annotate import annotate_frame, build_homographies, iter_tile_boxes
+from majsoul_eye.annotate import meldsnap as _meldsnap
 from majsoul_eye.annotate.seatgt import SEAT_POS, _screen_to_seat
 from majsoul_eye.capture.gtframes import build_seq_state, load_frames
 from majsoul_eye.hud import DET_NAMES
@@ -113,6 +114,7 @@ def build(sel, out_root):
         gname = paths.ai_game_name(cap)
         fr = load_frames(os.path.dirname(cap))
         ss = build_seq_state(cap)
+        overrides = _meldsnap.game_meld_overrides(ss, fr, hom)
         for seq in seqs:
             st = ss.get(seq)
             if seq not in fr or st is None or is_deal_window(st) or is_call_window(st) \
@@ -126,7 +128,7 @@ def build(sel, out_root):
             if img.shape[1] != 1920:
                 img = cv2.resize(img, (1920, 1080), interpolation=cv2.INTER_AREA)
             h, w = img.shape[:2]
-            rec = annotate_frame(img, st, hom, backs=True)
+            rec = annotate_frame(img, st, hom, backs=True, meld_snap_override=overrides.get(seq))
             rec["_seq"] = seq
             if any(f.endswith(("backs_sorting", "backs_holding")) for f in rec.get("flags", [])):
                 dropped += 1
