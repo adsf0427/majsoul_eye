@@ -37,27 +37,36 @@ def test_cross_axis_consensus():
 
 
 def test_game_meld_overrides_smoke():
+    from collections import defaultdict
     from majsoul_eye.annotate import build_homographies
     from majsoul_eye.annotate.meldsnap import game_meld_overrides
     from majsoul_eye.capture.gtframes import build_seq_state, load_frames
-    caps = glob.glob("captures/raw/ai_session/run_*/game*/game*.jsonl")
+    caps = sorted(glob.glob("captures/raw/ai_session/run_*/game*/game*.jsonl"))
     assert caps, "no AI captures found — run from repo root"
-    cap = sorted(caps)[0]
-    ss = build_seq_state(cap)
-    fr = load_frames(os.path.dirname(cap))
-    ov = game_meld_overrides(ss, fr, build_homographies(1920, 1080))
-    # every override value is a dict {pos: (da,dc) | None}; within one kyoku+pos all
-    # non-None overrides are IDENTICAL (that is the whole point — one offset per round).
-    from collections import defaultdict
-    by_round = defaultdict(set)
-    for seq, per_pos in ov.items():
-        st = ss[seq]
-        for pos, val in per_pos.items():
-            if val is not None:
-                by_round[(st.bakaze, st.kyoku, st.honba, pos)].add(val)
-    for key, vals in by_round.items():
-        assert len(vals) == 1, f"{key} has non-uniform override {vals}"
-    print("game_meld_overrides smoke OK:", len(ov), "frames")
+    hom = build_homographies(1920, 1080)
+    exercised = 0
+    for cap in caps:
+        ss = build_seq_state(cap)
+        fr = load_frames(os.path.dirname(cap))
+        ov = game_meld_overrides(ss, fr, hom)
+        by_round = defaultdict(set)
+        by_round_n = defaultdict(int)
+        for seq, per_pos in ov.items():
+            st = ss[seq]
+            for pos, val in per_pos.items():
+                if val is not None:
+                    key = (st.bakaze, st.kyoku, st.honba, pos)
+                    by_round[key].add(val)
+                    by_round_n[key] += 1
+        # within a (kyoku,pos) round every non-None override must be IDENTICAL
+        for key, vals in by_round.items():
+            assert len(vals) == 1, f"{key} has non-uniform override {vals}"
+            if by_round_n[key] >= 2:
+                exercised += 1
+        if exercised >= 3:            # enough multi-frame rounds actually checked; stop
+            break
+    assert exercised >= 1, "smoke test never exercised a multi-frame meld round (vacuous)"
+    print("game_meld_overrides smoke OK: exercised", exercised, "multi-frame rounds")
 
 
 if __name__ == "__main__":
