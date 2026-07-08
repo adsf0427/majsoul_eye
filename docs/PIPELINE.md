@@ -154,7 +154,11 @@
   是两个职责分离的 mask，互不影响（STATUS §1.33）。
 - 副露角点（`pipeline.MELD_STRIP2`）2026-07-08 重标定（pos3 沿 along +45.5，消除半张牌 aliasing
   失锁，STATUS §1.50）；**`scripts/annotate/meld_snap_qa.py`＝逐座锁错率守卫**，warp/mask/角点改动后必跑
-  （<8% 锁错，否则副露框可能整张翻）。远座逐帧残留由 Phase 2 按局共识收敛（另案）。
+  （<8% 锁错，否则副露框可能整张翻）。
+- 副露框放置现走**按局共识**（`annotate.meldsnap.game_meld_overrides` → `annotate_frame(meld_snap_override=)`，
+  STATUS §1.51），build 因此**两遍扫描**（先 measure 每帧 snap → 每局共识 → 再 annotate）取代逐帧各自吸附；
+  guard `scripts/annotate/meld_consensus_qa.py`（断言同局同座只有唯一偏移，非唯一即回归）。低置信局（样本
+  不足或无主簇）meld 框标 `reliable=False`，不硬套不可信偏移。
 
 ### 建库（build_dataset）
 - **标注步不是必须的**：不给 `--from-annotations` 时 build_dataset 走**自足模式**（内部逐帧
