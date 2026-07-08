@@ -137,6 +137,46 @@ def test_is_deal_window_false_after_round_ends():
     assert is_deal_window(s) is False
 
 
+def test_is_call_pending_true_between_pon_and_forced_discard():
+    # Real-capture edge case (eval_reconstruction.py oracle run, 2026-07-05): a
+    # frame taken between a chi/pon/(dai)minkan call and the caller's mandatory
+    # immediate discard shows the meld with no matching discard yet -> a single
+    # frame there is genuinely under-determined for reconstruction. is_call_pending
+    # flags it (mirrors is_deal_window for the very first turn).
+    from majsoul_eye.state.replay import is_call_pending
+    rp = Replayer()
+    for ev in _events()[:7]:                            # up through the pon (index 6)
+        rp.apply(ev)
+    assert rp.state.last_event == "pon" and rp.state.awaiting_discard == 0
+    assert is_call_pending(rp.state) is True
+    rp.apply(_events()[7])                              # hero's forced tedashi (9s)
+    assert rp.state.awaiting_discard == -1
+    assert is_call_pending(rp.state) is False
+
+
+def test_is_call_pending_spans_the_kan_rinshan_draw():
+    # A kan's forced discard follows an interposed rinshan draw; pending must
+    # stay True across that draw and only clear on the actual dahai.
+    from majsoul_eye.state.replay import is_call_pending
+    rp = Replayer()
+    rp.apply({"type": "start_game", "id": 0})
+    hand = ["1m", "1m", "1m", "1m", "2p", "3p", "4p", "5p", "6p", "7p", "8p", "1s", "2s"]
+    rp.apply({**_events()[1], "tehais": [hand, ["?"] * 13, ["?"] * 13, ["?"] * 13]})
+    rp.apply({"type": "tsumo", "actor": 0, "pai": "3s"})
+    assert is_call_pending(rp.state) is False
+    rp.apply({"type": "ankan", "actor": 0, "consumed": ["1m", "1m", "1m", "1m"]})
+    assert is_call_pending(rp.state) is True and rp.state.awaiting_discard == 0
+    rp.apply({"type": "tsumo", "actor": 0, "pai": "9m"})            # rinshan draw
+    assert is_call_pending(rp.state) is True                        # still owed
+    rp.apply({"type": "dahai", "actor": 0, "pai": "9m", "tsumogiri": True})
+    assert is_call_pending(rp.state) is False
+
+
+def test_is_call_pending_false_in_steady_state():
+    from majsoul_eye.state.replay import is_call_pending
+    assert is_call_pending(_run()) is False
+
+
 def test_hero_tsumo_tracks_drawn_tile():
     # The hero's freshly-drawn tile renders in a separated slot on screen; the
     # labeler needs to know WHICH tile it is (hero_hand is sorted, so the draw is

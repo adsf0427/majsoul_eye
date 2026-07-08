@@ -300,6 +300,7 @@ bash scripts/train/launch_detector.sh obb --dataset v2 --gpus 4,5,6,7
 | `captures/intermediate/gt/` | **已退役删除**（AI 采集直接写 GTRecord，无转换产物） |
 | `label/`（`autolabel.py`） | 仅剩 hero 手牌+dora 框供 `annotate_frame` 调用；river/meld 旧几何已删 |
 | `scripts/inspect/count_dora_glow.py` | **现役一次性诊断工具**（非管线环节）：统计每个 tile 类别的「发光实例/总实例」覆盖，判断是否需要为宝牌闪光加专门增强。读 GT 采集（Akagi-free），纯 stdout。见 `docs/superpowers/specs/2026-07-05-dora-glow-aug-design.md` |
+| `scripts/eval/eval_reconstruction.py` | **QA 工具**（非管线环节，局面复原验收）：三层评测——oracle（GT `BoardState` → `ObservedState` → `reconstruct` → `Replayer` 往返一致性，无 GPU 依赖）/ assemble（真实帧 → `TileDetector` → `assemble` 装配 vs GT 投影，按 zone 报错）/ engine（真实 mjai 前缀 vs 复原序列各喂 `--engine-cmd` 指定的任意 mjai bot，比较最终决策，stdin/stdout JSON lines 契约）。oracle 在全量 `captures/raw/ai_session` 上验收 ≥99%（实测见 STATUS §1.52）。spec: `docs/superpowers/specs/2026-07-05-board-reconstruction-design.md` |
 
 ## 5. 数据与权重现状快照（2026-07-06）
 

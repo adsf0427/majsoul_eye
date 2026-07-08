@@ -96,6 +96,10 @@ class BoardState:
     pending_ops: Optional[list[int]] = None
     in_round: bool = False
     ended: bool = False
+    # Seat that owes the MANDATORY immediate discard following a chi/pon/daiminkan/
+    # ankan/kakan, until their next dahai clears it (-1 = nobody owes one). Drives
+    # is_call_pending — see its docstring.
+    awaiting_discard: int = -1
 
     def copy(self) -> "BoardState":
         s = copy.copy(self)
@@ -205,6 +209,8 @@ class Replayer:
         )
         if riichi_flag:
             self._pending_reach[actor] = False
+        if self.state.awaiting_discard == actor:
+            self.state.awaiting_discard = -1
         self.state.last_actor = actor
 
     def _on_reach(self, ev: dict) -> None:
@@ -246,6 +252,7 @@ class Replayer:
             self.state.drawn_tile = None          # chi/pon/daiminkan claim another's discard
             for c in consumed:
                 _remove_one(self.state.hero_hand, c)
+        self.state.awaiting_discard = actor       # mandatory discard follows (rinshan first for kan)
         self.state.last_actor = actor
 
     def _on_ankan(self, ev: dict) -> None:
@@ -257,6 +264,7 @@ class Replayer:
             self.state.drawn_tile = None          # declared instead of discarding; rinshan re-sets it
             for c in consumed:
                 _remove_one(self.state.hero_hand, c)
+        self.state.awaiting_discard = actor       # mandatory discard follows the rinshan draw
         self.state.last_actor = actor
 
     def _on_kakan(self, ev: dict) -> None:
@@ -280,6 +288,7 @@ class Replayer:
         if actor == self.state.hero_seat:
             self.state.drawn_tile = None          # declared instead of discarding; rinshan re-sets it
             _remove_one(self.state.hero_hand, pai)
+        self.state.awaiting_discard = actor       # mandatory discard follows the rinshan draw
         self.state.last_actor = actor
 
     def _on_nukidora(self, ev: dict) -> None:  # 3P only
@@ -355,6 +364,21 @@ def is_score_anim_window(state) -> bool:
     if types & frozenset(_REACH_EVENT_TYPES):
         return True
     return getattr(state, "last_event", None) in _REACH_EVENT_TYPES
+
+
+def is_call_pending(s: BoardState) -> bool:
+    """True in the split-second between a chi/pon/daiminkan/ankan/kakan and the
+    caller's MANDATORY immediate discard: mahjong rules force a discard right
+    after any of these (kan via an interposed rinshan draw), so a frame captured
+    in that gap (the ``quiet`` debounce firing before the forced ``dahai`` event
+    arrives) shows a meld already updated with no matching discard yet — that
+    seat's "float" tile has no on-screen slot the way hero's own ``drawn_tile``
+    does, so it is genuinely un-reconstructable from this single frame. Mirrors
+    ``is_deal_window``'s role for the very first turn of a kyoku (found via real
+    capture: ~2% of oracle-eval frames — 209/10330, of which 11 were outright
+    infeasible — see ``scripts/eval/eval_reconstruction.py``).
+    """
+    return s is not None and s.in_round and s.awaiting_discard >= 0
 
 
 # --- invariants -------------------------------------------------------------
