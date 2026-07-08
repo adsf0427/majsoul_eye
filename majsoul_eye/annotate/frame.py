@@ -38,12 +38,17 @@ def _fill(ii: np.ndarray, poly) -> float:
 
 
 def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False,
-                   backs: bool = False) -> dict:
+                   backs: bool = False, meld_snap_override: dict | None = None) -> dict:
     """Full annotation record for one frame. `hand_suspect` marks frames right
     after a kyoku start, where the deal/sort animation may not match GT order.
     `backs` (EXPERIMENTAL, opt-in — see annotate/backs.py) additionally emits
     the three opponents' concealed hand-row tile-back boxes as
-    ``rec["back_boxes"]`` (str(pos) -> box list; holding seats skipped+flagged)."""
+    ``rec["back_boxes"]`` (str(pos) -> box list; holding seats skipped+flagged).
+    `meld_snap_override` (Phase 2, STATUS §1.51): {pos: (d_along, d_cross) | None}
+    from annotate.meldsnap.game_meld_overrides — when given, place each seat's meld
+    strip at the per-round consensus offset instead of the per-frame snap; pos->None
+    (round had no confident consensus) places at the raw template and marks those
+    boxes reliable=False."""
     Hinv = hom["H_full_inv"]
     full = P.warp_to_full(img, hom["H_full"], hom["full_size"])
     hsv_full = cv2.cvtColor(full, cv2.COLOR_BGR2HSV)   # one conversion feeds all 3 masks
@@ -76,8 +81,17 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
 
         boxes = P.generate_meld_boxes_v2(pos, melds, Hinv)
         if boxes:
-            da, dc, diag = P.snap_meld_strip(mw, mb, boxes, pos)
-            if diag["n_along"] + diag["n_cross"] >= 2:
+            low_conf = False
+            if meld_snap_override is not None:
+                ov = meld_snap_override.get(pos)
+                if ov is None:
+                    da, dc, applied, low_conf = 0.0, 0.0, False, True
+                else:
+                    da, dc, applied = float(ov[0]), float(ov[1]), True
+            else:
+                da, dc, diag = P.snap_meld_strip(mw, mb, boxes, pos)
+                applied = diag["n_along"] + diag["n_cross"] >= 2
+            if applied:
                 da = float(np.clip(da, -SNAP_MAX_ALONG, SNAP_MAX_ALONG))
                 dc = float(np.clip(dc, -SNAP_MAX_CROSS, SNAP_MAX_CROSS))
                 boxes = P.shift_boxes(boxes, pos, da, dc, Hinv)
@@ -86,10 +100,15 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
                 f = _fill(ii, b["poly_fullwarp"])
                 b["fill"] = round(f, 3)
                 b["snap"] = (round(da, 1), round(dc, 1))
+                if low_conf:
+                    b["reliable"] = False
+                    b["low_conf"] = True
                 if f < FILL_OK:
                     b["reliable"] = False
                     b["low_conf"] = True
                     rec["flags"].append(f"pos{pos}:meld[{b['tile']}]:low_fill={f:.2f}")
+            if low_conf:
+                rec["flags"].append(f"pos{pos}:meld:low_round_conf")
         rec["meld_boxes"][str(pos)] = boxes
 
     # hero hand via the calibrated HandModel (settled 13-tile states only)

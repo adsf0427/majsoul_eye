@@ -92,6 +92,50 @@ def test_crop_box_sizes():
     assert crop_quad(img, quad.poly_original, 48).shape == (48, 48, 3)
 
 
+def test_meld_snap_override_shifts_and_flags():
+    import glob
+    import numpy as np
+    from majsoul_eye.annotate import annotate_frame, build_homographies
+    from majsoul_eye.capture.gtframes import build_seq_state, load_frames
+    import cv2, os
+
+    # find a settled frame with an opponent meld (some captures have none, e.g. a
+    # short/empty game; scan captures in sorted order for the first that qualifies)
+    ss = fr = seq = None
+    for cap in sorted(glob.glob("captures/raw/ai_session/run_*/game*/game*.jsonl")):
+        ss_c = build_seq_state(cap); fr_c = load_frames(os.path.dirname(cap))
+        seq_c = next((s for s in sorted(ss_c) if s in fr_c
+                      and any(ss_c[s].melds[seat] for seat in range(4))), None)
+        if seq_c is not None:
+            ss, fr, seq = ss_c, fr_c, seq_c
+            break
+    assert seq is not None, "no capture with a settled meld frame found"
+    hom = build_homographies(1920, 1080)
+    img = cv2.imread(fr[seq])
+    if img.shape[1] != 1920:
+        img = cv2.resize(img, (1920, 1080), interpolation=cv2.INTER_AREA)
+    # which pos has melds
+    from majsoul_eye.annotate.seatgt import seat_gt
+    pos = next(p for p in range(4) if seat_gt(ss[seq], p)[2])
+
+    # override (0,0) => boxes exactly at the template (no snap); a given (da,dc) shifts them
+    base = annotate_frame(img, ss[seq], hom, meld_snap_override={pos: (0.0, 0.0)})
+    shifted = annotate_frame(img, ss[seq], hom, meld_snap_override={pos: (10.0, 0.0)})
+    b0 = np.float32(base["meld_boxes"][str(pos)][0]["poly_fullwarp"])
+    b1 = np.float32(shifted["meld_boxes"][str(pos)][0]["poly_fullwarp"])
+    from majsoul_eye.annotate import pipeline as P
+    along = np.array(P.MELD_STRIP2[pos]["along"])
+    moved = (b1 - b0).mean(axis=0)
+    assert abs(float(np.dot(moved, along)) - 10.0) < 0.5, moved  # moved +10 along
+    assert base["meld_boxes"][str(pos)][0]["snap"] == (0.0, 0.0)
+
+    # override None => template + reliable False + low_round_conf flag
+    lc = annotate_frame(img, ss[seq], hom, meld_snap_override={pos: None})
+    assert all(b.get("reliable") is False for b in lc["meld_boxes"][str(pos)])
+    assert any(f == f"pos{pos}:meld:low_round_conf" for f in lc["flags"])
+    print("meld_snap_override OK")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
