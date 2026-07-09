@@ -371,6 +371,68 @@ def test_full_frame_feeds_reconstruct():
     assert r.ok, r.reason
 
 
+# --- HUD fill via hud_reader (spec 2026-07-09 §1/§2) --------------------------
+import numpy as np
+
+from majsoul_eye.hud import DET_NAMES
+from majsoul_eye.normalize import locate_fullscreen
+from majsoul_eye.recognize.assemble import assemble
+from majsoul_eye.recognize.detector import Detection
+from majsoul_eye.tiles import TILE_NAMES
+
+
+def _D(name, box):
+    cls = DET_NAMES.index(name)
+    return Detection(xyxy=tuple(float(v) for v in box), name=name,
+                     tile=name if cls < len(TILE_NAMES) else None,
+                     cls=cls, score=0.9)
+
+
+class _StubReader:
+    def __init__(self, answers): self.answers = answers
+    def read(self, crop, cls): return self.answers[cls]
+
+
+_frame = np.zeros((1080, 1920, 3), np.uint8)
+_region = locate_fullscreen(_frame)
+_hud_dets = [
+    _D("round_label", (905, 350, 1015, 385)),
+    _D("wall_count", (925, 385, 995, 415)),
+    _D("score_self", (900, 460, 1000, 500)), _D("score_right", (1030, 400, 1080, 470)),
+    _D("score_across", (900, 300, 1000, 340)), _D("score_left", (840, 400, 890, 470)),
+    _D("riichi_stick_count", (200, 60, 280, 100)), _D("honba_count", (235, 135, 315, 185)),
+    _D("seat_wind_self", (830, 470, 890, 530)),
+    _D("btn_riichi", (1200, 740, 1360, 790)),
+    _D("reach_stick", (900, 500, 1020, 530)),      # below anchor -> rel seat 0 (self)
+]
+_reader = _StubReader({"round_label": "S3", "wall_count": "余42",
+                       "score_self": "24000", "score_right": "31000",
+                       "score_across": "20000", "score_left": "24000",
+                       "riichi_stick_count": "x1", "honba_count": "x2",
+                       "seat_wind_self": "W"})
+
+o = assemble(_hud_dets, _region, frame_bgr=_frame, hud_reader=_reader)
+assert o.bakaze == "S" and o.kyoku == 3
+assert o.left_tile_count == 42 and o.kyotaku == 1 and o.honba == 2
+assert o.scores == [24000, 31000, 20000, 24000]
+assert o.seat_wind_self == "W"
+assert o.pending_buttons == ["btn_riichi"]
+assert o.reach == [True, False, False, False]      # stick below anchor -> self
+assert "hud" in o.zone_confidence
+
+# graceful degrade: no reader -> HUD detections dropped, fields stay None
+o2 = assemble(_hud_dets, _region)
+assert o2.scores is None and o2.bakaze is None and o2.pending_buttons is None
+assert o2.reach == [False] * 4 and "hud" not in o2.zone_confidence
+
+# partial scores (one seat unread) -> whole scores list stays None
+_bad = _StubReader({**_reader.answers, "score_left": ""})
+o3 = assemble(_hud_dets, _region, frame_bgr=_frame, hud_reader=_bad)
+assert o3.scores is None and o3.kyoku == 3         # other fields still fill
+
+print("test_assemble hud fill OK")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -10,6 +10,7 @@ import numpy as np
 
 from majsoul_eye.annotate import pipeline as P
 from majsoul_eye.normalize import BoardRegion
+from majsoul_eye.recognize.hudstate import assemble_hud
 from majsoul_eye.state.observe import ObservedMeld, ObservedRiverTile
 from majsoul_eye.tiles import red_to_normal
 
@@ -221,28 +222,57 @@ def _parse_melds(seat: int, items):
     return parses[0], []
 
 
+_REL_KEYS = ("self", "right", "across", "left")
+
+
+def _fill_hud(o, hud: dict) -> None:
+    """assemble_hud dict -> ObservedState HUD slots (spec 2026-07-09 §2).
+    scores are all-or-nothing (reconstruct needs the full relative list);
+    reach ORs the stick attribution over the sideways-derived flags."""
+    sc = hud["scores"]
+    if all(sc[k] is not None for k in _REL_KEYS):
+        o.scores = [sc[k] for k in _REL_KEYS]
+    if hud["round"]:
+        o.bakaze, o.kyoku = hud["round"][0], int(hud["round"][1])
+    o.left_tile_count = hud["wall"]
+    o.kyotaku = hud["kyotaku"]
+    o.honba = hud["honba"]
+    o.seat_wind_self = hud["seat_wind"]
+    o.pending_buttons = hud["buttons"]
+    for r, k in enumerate(_REL_KEYS):
+        if hud["riichi"][k]:
+            o.reach[r] = True
+
+
 from majsoul_eye.coords import DORA_STRIP, HAND
 from majsoul_eye.state.observe import ObservedState, check_observed
 
 HAND_MIN_H = 0.11            # hand tiles are ~0.141 canon-high; hero meld tiles ~0.083
 
 
-def assemble(dets, region: BoardRegion) -> ObservedState:
-    """One frame's detections -> ObservedState. HUD fields stay None (their
-    readers are the 2026-07-04 spec). 'back' detections only ever route to MELD
-    zones (ankan renders back/face/face/back); opponents' concealed rows sit off
-    the felt plane, land outside every calibrated zone after the homography and
-    are dropped silently (concealed_counts stays None — cross-check only)."""
+def assemble(dets, region: BoardRegion, frame_bgr=None, hud_reader=None) -> ObservedState:
+    """One frame's detections -> ObservedState.
+
+    HUD fields fill when BOTH frame_bgr and hud_reader are given and the frame is
+    not wide (region.ox == 0 — the HUD detector is only trained on the 16:9
+    layout; wide phone frames keep HUD fields None, spec 2026-07-09 §5).
+
+    'back' detections only ever route to MELD zones (ankan renders
+    back/face/face/back); opponents' concealed rows sit off the felt plane, land
+    outside every calibrated zone after the homography and are dropped silently
+    (concealed_counts stays None — cross-check only)."""
     o = ObservedState()
     Hs = P.build_homographies(CANON_W, CANON_H)
     hand_cand, dora_cand, table, wide_dora = [], [], [], []
+    hud_dets = []
     conf: dict[str, list] = {}
 
     def note(zone, det):
         conf.setdefault(zone, []).append(det.score)
 
     for det in dets:
-        if det.tile is None:       # HUD-class detection (56-class head) — assemble_hud's domain
+        if det.tile is None:       # HUD-class detection — routed to assemble_hud below
+            hud_dets.append(det)
             continue
         x0, y0, x1, y1 = det.xyxy
         nb = region.px_to_norm_box(x0, y0, x1, y1)
@@ -345,6 +375,11 @@ def assemble(dets, region: BoardRegion) -> ObservedState:
         o.melds[seat] = melds
         o.violations.extend(v1 + v2)
         o.reach[seat] = any(t.sideways for t in o.rivers[seat])
+    if frame_bgr is not None and hud_reader is not None and hud_dets \
+            and region.ox == 0:
+        _fill_hud(o, assemble_hud(hud_dets, hud_reader, frame_bgr))
+        for det in hud_dets:
+            note("hud", det)
     o.zone_confidence = {z: min(s) for z, s in conf.items()}
     o.violations.extend(check_observed(o))
     return o
