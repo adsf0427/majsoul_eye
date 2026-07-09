@@ -286,6 +286,35 @@ def test_standing_concealed_backs_filtered_from_meld_strips():
     assert all(o.melds[s] == [] for s in (1, 2, 3))
 
 
+def test_meld_sideways_by_edge_orientation_not_extents():
+    # Regression fixture from a real off-domain screenshot (samples/1.png,
+    # 2302x1288 phone capture): seat2 strip with two chis (1p2p3p + 5m6m7m).
+    # Upright cells' warped OBBs are near-square (ext_along 99-101 vs
+    # ext_cross 92), so the old ext_a > ext_c rule judged 4 upright cells
+    # sideways and the strip became unparsable. The OBB's own LONG-EDGE
+    # direction separates cleanly (upright long edge ~93 runs cross-wise,
+    # sideways ~103 runs along) and must be the discriminator.
+    import numpy as np
+    from majsoul_eye.recognize.assemble import _parse_melds
+
+    class _D:  # _parse_melds only reads .tile
+        def __init__(self, tile): self.tile = tile
+
+    quads = [
+        ("2p", [[767.1, 220.6], [752.2, 128.4], [665.8, 128.3], [682.4, 220.6]]),
+        ("1p", [[836.3, 220.7], [822.7, 128.4], [737.1, 128.4], [752.3, 220.6]]),
+        ("3p", [[924.6, 198.1], [915.7, 128.3], [813.1, 128.3], [823.5, 198.1]]),
+        ("7m", [[996.8, 220.7], [986.2, 128.0], [903.6, 128.1], [915.8, 220.9]]),
+        ("5m", [[1066.1, 220.5], [1056.9, 127.9], [975.4, 128.0], [986.2, 220.7]]),
+        ("6m", [[1154.8, 198.1], [1149.2, 128.5], [1049.8, 128.6], [1056.8, 198.2]]),
+    ]
+    items = [(_D(t), np.float32(q)) for t, q in quads]
+    melds, viol = _parse_melds(2, items)
+    assert viol == [], viol
+    assert [(m.type, tuple(m.tiles), m.called_pai) for m in melds] == \
+        [("chi", ("1p", "2p", "3p"), "3p"), ("chi", ("5m", "6m", "7m"), "6m")]
+
+
 def test_full_frame_feeds_reconstruct():
     from majsoul_eye.recognize.assemble import assemble
     from majsoul_eye.state.reconstruct import reconstruct

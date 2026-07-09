@@ -28,6 +28,23 @@ def _fw_points(det, region: BoardRegion, H_full) -> np.ndarray:
     return P.original_to_fullwarp(canon, H_full)
 
 
+def _long_edge_sideways(pts, u, v) -> bool:
+    """True if the quad's LONG edge (the tile's d-side) runs along axis ``u``
+    — i.e. the tile is rotated 90° (riichi discard / called meld tile).
+    Edge orientation is robust where extent comparison is not: an upright
+    cell's warped OBB is near-square in strip/row coordinates (measured
+    ext_along 99-101 vs ext_cross 92 on an off-aspect screenshot), so
+    ``ext_u > ext_v`` flips on slight perspective/aspect changes, while the
+    OBB's own edge directions do not. For HBB fallbacks (axis-aligned quads)
+    this degrades to the same aspect comparison as before."""
+    e0, e1 = pts[1] - pts[0], pts[2] - pts[1]
+    le = e0 if float(np.hypot(*e0)) >= float(np.hypot(*e1)) else e1
+    n = float(np.hypot(*le))
+    if n < 1e-6:
+        return False
+    return abs(float(np.dot(le, u))) > abs(float(np.dot(le, v)))
+
+
 def _river_frame(seat: int):
     g = P.DISCARD_GRID[seat]
     rd = P.DISCARD_READ[seat]
@@ -60,9 +77,8 @@ def _assign_river(seat: int, items):
             viol.append(f"seat{seat} river det off-grid (row residual {v - offs[r]:.0f}px)")
             continue
         u = float(np.dot(c - disc0, colu))
-        ext_col = float(np.ptp(pts @ colu))
-        ext_row = float(np.ptp(pts @ rowu))
-        rows[r].append((u, ObservedRiverTile(det.tile, sideways=ext_col > ext_row)))
+        rows[r].append((u, ObservedRiverTile(
+            det.tile, sideways=_long_edge_sideways(pts, colu, rowu))))
     out: list[ObservedRiverTile] = []
     for r in (0, 1, 2):
         rows[r].sort(key=lambda t: t[0])
@@ -94,10 +110,9 @@ def _strip_cells(seat: int, items):
         c = pts.mean(axis=0)
         a = float(np.dot(c - corner, along))
         cr = float(np.dot(c - corner, cross))
-        ext_a = float(np.ptp(pts @ along))
-        ext_c = float(np.ptp(pts @ cross))
         raw.append({"a": a, "c": cr, "label": det.tile,
-                    "sideways": ext_a > ext_c, "stacked_on": None})
+                    "sideways": _long_edge_sideways(pts, along, cross),
+                    "stacked_on": None})
     raw.sort(key=lambda x: x["a"])
     cells, i = [], 0
     while i < len(raw):
