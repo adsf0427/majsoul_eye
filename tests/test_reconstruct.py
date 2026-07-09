@@ -256,6 +256,40 @@ def test_upstream_violations_block_reconstruction():
     assert not r.ok and "unparsable" in r.reason
 
 
+def test_hero_call_pending_pon_ends_at_call():
+    # hero pon'd P from toimen and hasn't made the mandatory discard yet:
+    # hand shows 11 tiles + the meld (14 accounting), no drawn slot. All
+    # information is visible, and the legal sequence simply ENDS at the pon —
+    # a real decision point (a bot's reaction to it IS the pending discard).
+    o = _obs(hero_hand=list(H13[:11]),
+             melds=[[ObservedMeld("pon", ["P", "P", "P"], called_pai="P",
+                                  from_rel=2)], [], [], []],
+             rivers=[[ObservedRiverTile("9p")], [ObservedRiverTile("E")],
+                     [ObservedRiverTile("S")], [ObservedRiverTile("W")]])
+    r = _roundtrip(o)
+    assert r.events[-1] == {"type": "pon", "actor": 0, "target": 2,
+                            "pai": "P", "consumed": ["P", "P"]}
+    assert r.diagnostics.get("hero_call_pending") is True
+    # fabricated haipai still exactly 13: 11 visible + 2 consumed by the pon
+    sk = r.events[1]
+    assert sorted(sk["tehais"][0]) == sorted(H13[:11] + ["P", "P"])
+
+
+def test_hero_call_pending_chi_from_kamicha():
+    # every seat needs one visible discard: kamicha's claimed 7s is its SECOND
+    # discard, so the turn order must pass through everyone once first
+    o = _obs(hero_hand=list(H13[:11]),
+             melds=[[ObservedMeld("chi", ["6s", "7s", "8s"], called_pai="7s",
+                                  from_rel=3)], [], [], []],
+             rivers=[[ObservedRiverTile("9p")], [ObservedRiverTile("E")],
+                     [ObservedRiverTile("S")], [ObservedRiverTile("W")]])
+    r = _roundtrip(o)
+    assert r.events[-1]["type"] == "chi" and r.events[-1]["actor"] == 0
+    # the ghost discard feeding the chi comes from kamicha right before it
+    assert r.events[-2] == {"type": "dahai", "actor": 3, "pai": "7s",
+                            "tsumogiri": False}
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

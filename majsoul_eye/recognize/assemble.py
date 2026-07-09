@@ -145,6 +145,8 @@ def _hypotheses(group):
     if stacked is not None:
         called, added = stacked["label"], stacked["stacked"][0]
         tiles = [c["label"] for c in group] + [added]
+        if len({red_to_normal(t) for t in tiles}) != 1:
+            return []          # illegal kakan: the added tile must match the pon
         for rel in (1, 2, 3):
             out.append(("kakan", tiles, called, added, rel))
         return out

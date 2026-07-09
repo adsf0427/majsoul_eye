@@ -100,6 +100,18 @@ def test_meld_parse_kans():
     assert melds[2].from_rel == 2 and melds[2].added_pai == "W"
 
 
+def test_meld_parse_rejects_illegal_kakan():
+    # A stacked cell whose top tile is a DIFFERENT kind than the base (e.g. a
+    # misdetected 2p on a 4p pon — seen on a real phone screenshot) is not a
+    # legal kakan; the strip must be refused, not returned as a fantasy meld.
+    from majsoul_eye.recognize.assemble import _fw_points, _parse_melds
+    gt = [_gt("kakan", ["4p", "4p", "4p", "2p"], called="4p", added="2p",
+              from_seat_rel=3, seat=0)]
+    items = [(d, _fw_points(d, REGION, H["H_full"])) for d in _meld_dets(0, gt)]
+    melds, viol = _parse_melds(0, items)
+    assert melds == [] and viol
+
+
 def test_meld_parse_flags_garbage():
     from majsoul_eye.recognize.assemble import _fw_points, _parse_melds
     gt = [_gt("pon", ["P", "P", "P"], called="P", from_seat_rel=2, seat=0)]

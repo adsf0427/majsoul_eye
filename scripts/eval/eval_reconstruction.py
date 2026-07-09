@@ -24,7 +24,7 @@ import sys
 from majsoul_eye.capture.gtframes import build_seq_state, load_frames
 from majsoul_eye import paths
 from majsoul_eye.state.observe import check_observed, observed_from_board
-from majsoul_eye.state.reconstruct import reconstruct
+from majsoul_eye.state.reconstruct import _hero_call_pending, reconstruct
 from majsoul_eye.state.replay import Replayer, is_call_pending, is_deal_window
 
 
@@ -84,12 +84,16 @@ def run_oracle(states, report):
         if check_observed(obs):
             report["skipped_violations"] += 1
             continue
-        if is_call_pending(st):
-            # KNOWN real-capture edge case: frame taken between a chi/pon/
-            # (dai)minkan/ankan/kakan and the caller's mandatory immediate
-            # discard (see is_call_pending's docstring in state/replay.py) —
-            # genuinely un-reconstructable from this single frame, so it is a
-            # counted skip rather than a reconstruction failure.
+        if is_call_pending(st) and not (st.awaiting_discard == st.hero_seat
+                                        and _hero_call_pending(obs)):
+            # KNOWN real-capture edge case: frame taken between a call and the
+            # caller's mandatory immediate discard (see is_call_pending's
+            # docstring in state/replay.py). An OPPONENT's gap is genuinely
+            # un-reconstructable (their withheld discard is invisible) — a
+            # counted skip. HERO's chi/pon gap is fully visible and now
+            # reconstructs (sequence ends at the call), so it falls through;
+            # hero KAN gaps (13-count shape, indistinguishable from steady)
+            # stay skipped.
             report["skipped_call_pending"] += 1
             continue
         r = reconstruct(obs)

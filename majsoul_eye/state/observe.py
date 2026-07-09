@@ -89,7 +89,14 @@ def check_observed(o: ObservedState) -> list[str]:
             v.append(f"tile {kind} seen {n}>4 times across visible zones")
 
     n_melds = len(o.melds[0])
-    if len(o.hero_hand) + 3 * n_melds != 13:
+    total = len(o.hero_hand) + 3 * n_melds
+    # total == 14 with no drawn slot and a trailing hero chi/pon = the frame
+    # sits in the call -> mandatory-discard gap. Hero's side of that gap is
+    # fully visible (unlike an opponent's), so it is a VALID single-frame
+    # state — reconstruct ends the sequence at the call (hero_call_pending).
+    call_pending = (total == 14 and o.drawn_tile is None and n_melds > 0
+                    and o.melds[0][-1].type in ("chi", "pon"))
+    if total != 13 and not call_pending:
         v.append(f"hero hand {len(o.hero_hand)} + 3*{n_melds} melds != 13")
 
     if not o.dora_markers:

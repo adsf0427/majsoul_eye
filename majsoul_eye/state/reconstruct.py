@@ -73,6 +73,17 @@ def _items_for(obs: ObservedState):
     return creation, kakans
 
 
+def _hero_call_pending(obs: ObservedState) -> bool:
+    """The call -> mandatory-discard gap, HERO side (check_observed's twin):
+    hand + 3*melds == 14 with no drawn slot and a trailing hero chi/pon.
+    Unlike an opponent's gap (their withheld discard is invisible — gated by
+    replay.is_call_pending), hero's side is fully visible: the legal sequence
+    simply ENDS at the call, which is a genuine decision point."""
+    return (obs.drawn_tile is None and bool(obs.melds[0])
+            and obs.melds[0][-1].type in ("chi", "pon")
+            and len(obs.hero_hand) + 3 * len(obs.melds[0]) == 14)
+
+
 def _search(obs: ObservedState, oya_rel: int) -> Optional[list]:
     """Ops: ("draw",rel) ("discard",rel,idx) ("ghost",rel,pai,reach)
     ("call",_Item) ("ankan",_Item) ("kakan",_Item). Canonical branch order:
@@ -82,6 +93,9 @@ def _search(obs: ObservedState, oya_rel: int) -> Optional[list]:
     creation, kakans = _items_for(obs)
     ncre = [len(c) for c in creation]
     failed: set = set()
+    # hero call-pending terminal: hero's LAST chi/pon must be the sequence's
+    # FINAL event (no forced discard after it) — see _hero_call_pending.
+    pending_it = creation[0][-1] if _hero_call_pending(obs) else None
 
     # precompute per-seat sideways visible index (None if no riichi shown)
     side_idx = [next((i for i, t in enumerate(rivers[r]) if t.sideways), None)
@@ -159,6 +173,10 @@ def _search(obs: ObservedState, oya_rel: int) -> Optional[list]:
             for reach_here in variants:
                 nrg = rghost | (1 << actor) if reach_here else rghost
                 pre = [("ghost", actor, it.pai, reach_here), ("call", it)]
+                if it is pending_it:
+                    if all_done(cur, tuple(ncidx), kkmask):
+                        return pre       # terminal: hero now owes the discard
+                    continue             # the pending call must come last
                 if it.kind == "daiminkan":
                     rest = decide(cur, tuple(ncidx), kkmask, nrg, o, drew=True)
                     if rest is not None:
@@ -318,6 +336,8 @@ def reconstruct(obs: ObservedState) -> ReconstructionResult:
     fabricated = {"haipai": tehais[hero_abs],
                   "defaults": [k for k in ("scores", "bakaze", "kyoku", "honba", "kyotaku")
                                if getattr(obs, k) is None]}
+    diagnostics = {"feasible_oya_rel": feasible, "oya_rel": chosen}
+    if _hero_call_pending(obs):
+        diagnostics["hero_call_pending"] = True
     return ReconstructionResult(True, events=events, fabricated=fabricated,
-                                diagnostics={"feasible_oya_rel": feasible,
-                                             "oya_rel": chosen})
+                                diagnostics=diagnostics)

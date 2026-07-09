@@ -39,6 +39,28 @@ def test_hand_size_vs_melds():
     assert check_observed(o2) == []                            # 10 + 3*1 == 13
 
 
+def test_hero_call_pending_shape_allowed():
+    # hero just chi/pon'd, mandatory discard not yet made: 11 tiles + 1 meld
+    # (14 accounting), no drawn slot — fully visible, a real decision point.
+    o = _minimal()
+    o.hero_hand = o.hero_hand[:11]
+    o.melds[0] = [ObservedMeld("pon", ["P", "P", "P"], called_pai="P", from_rel=2)]
+    assert check_observed(o) == []
+    # ... but only for a trailing chi/pon: an "extra tile" next to an ankan
+    # (which can't be awaiting a call-discard) stays a violation
+    o2 = _minimal()
+    o2.hero_hand = o2.hero_hand[:11]
+    o2.melds[0] = [ObservedMeld("ankan", ["C", "C", "C", "C"])]
+    o2.dora_markers = ["5s", "6s"]
+    assert any("hand" in m for m in check_observed(o2))
+    # ... and not with a drawn tile too (can't be both mid-call and mid-draw)
+    o3 = _minimal()
+    o3.hero_hand = o3.hero_hand[:11]
+    o3.melds[0] = [ObservedMeld("pon", ["P", "P", "P"], called_pai="P", from_rel=2)]
+    o3.drawn_tile = "9s"
+    assert any("hand" in m for m in check_observed(o3))
+
+
 def test_drawn_tile_is_extra():
     o = _minimal()
     o.drawn_tile = "9s"
