@@ -315,6 +315,38 @@ def test_meld_sideways_by_edge_orientation_not_extents():
         [("chi", ("1p", "2p", "3p"), "3p"), ("chi", ("5m", "6m", "7m"), "6m")]
 
 
+def test_wide_frame_dora_rescued_from_screen_corner():
+    # Ultrawide phone screenshots (2.17:1): the 3D table is a centered 16:9
+    # rect but the dora indicator is 2D HUD anchored near the SCREEN's
+    # top-left corner — outside the board rect, at a device-dependent inset
+    # (iPhone safe-area differs from Android), so no fixed box works. Rescue:
+    # after zone routing, stray TILE detections forming a horizontal row in
+    # the screen's top-left region are the dead-wall dora row.
+    from majsoul_eye.normalize import BoardRegion
+    from majsoul_eye.recognize.assemble import assemble
+    ox, scale = 261, 2346 / 1920.0          # board rect of a 2868x1320 frame
+    region_w = BoardRegion(ox, 0, 2346, 1320, 2868, 1320)
+
+    def widen(d):
+        x0, y0, x1, y1 = d.xyxy
+        poly = tuple((px * scale + ox, py * scale) for px, py in d.poly)
+        from dataclasses import replace
+        return replace(d, xyxy=(x0 * scale + ox, y0 * scale, x1 * scale + ox,
+                                y1 * scale), poly=poly)
+
+    hand = ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m",
+            "1p", "2p", "3p", "4p"]
+    dets = [widen(d) for d in _hand_dets(hand) + _river_dets(0, ["9p"])]
+    # dora row at the real iPhone-sample position: marker 6m + a back,
+    # left of the board rect (x < 261+), one horizontal row
+    dets.append(_det_from_poly([[221, 78], [290, 78], [290, 176], [221, 176]], "6m"))
+    dets.append(_det_from_poly([[289, 77], [359, 77], [359, 176], [289, 176]], "back"))
+    o = assemble(dets, region_w)
+    assert o.violations == []
+    assert o.dora_markers == ["6m"]
+    assert o.hero_hand == hand
+
+
 def test_full_frame_feeds_reconstruct():
     from majsoul_eye.recognize.assemble import assemble
     from majsoul_eye.state.reconstruct import reconstruct

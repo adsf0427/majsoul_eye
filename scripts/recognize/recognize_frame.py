@@ -47,7 +47,8 @@ def main():
                          "tile_detector_obb_*.pt by mtime)")
     ap.add_argument("--device", default="cpu", help="cpu (default) or cuda")
     ap.add_argument("--letterbox", action="store_true",
-                    help="screenshot is letterboxed (not full-frame 16:9)")
+                    help="force letterbox trim (default auto-detects by aspect: "
+                         "~16:9 fullscreen / wider phone / narrower letterbox)")
     ap.add_argument("--no-reconstruct", action="store_true",
                     help="stop after ObservedState (skip mjai synthesis)")
     ap.add_argument("--pretty", action="store_true", help="indent JSON output")
@@ -60,13 +61,15 @@ def main():
           file=sys.stderr)
 
     import cv2
-    from majsoul_eye.normalize import locate_fullscreen, locate_letterbox
+    from majsoul_eye.normalize import locate_auto, locate_letterbox
     from majsoul_eye.recognize.assemble import assemble
     from majsoul_eye.recognize.detector import TileDetector
     from majsoul_eye.state.reconstruct import reconstruct
 
     det = TileDetector(weights, device=args.device)
-    locate = locate_letterbox if args.letterbox else locate_fullscreen
+    # auto: ~16:9 -> fullscreen, wider (phones) -> centered-16:9 board with
+    # screen-corner dora rescue, narrower -> letterbox trim
+    locate = locate_letterbox if args.letterbox else locate_auto
 
     for path in args.images:
         out = {"file": path, "ok": False, "violations": None,

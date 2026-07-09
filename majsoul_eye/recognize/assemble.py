@@ -233,7 +233,7 @@ def assemble(dets, region: BoardRegion) -> ObservedState:
     are dropped silently (concealed_counts stays None — cross-check only)."""
     o = ObservedState()
     Hs = P.build_homographies(CANON_W, CANON_H)
-    hand_cand, dora_cand, table = [], [], []
+    hand_cand, dora_cand, table, wide_dora = [], [], [], []
     conf: dict[str, list] = {}
 
     def note(zone, det):
@@ -291,9 +291,21 @@ def assemble(dets, region: BoardRegion) -> ObservedState:
                 if best is None or dist < best[0]:
                     best = (dist, kind, seat)
         if best[0] > 60.0:
-            if det.tile != "back":     # opponents' concealed rows are expected strays
-                o.violations.append(
-                    f"stray detection {det.tile} ({best[0]:.0f}px off-zone)")
+            if det.tile == "back":     # opponents' concealed rows are expected strays
+                continue
+            if region.ox > 0:
+                # Wide (>16:9) frame: the dora indicator is 2D HUD anchored
+                # near the SCREEN top-left corner at a device-dependent inset
+                # (iPhone safe-area != Android) — outside the board rect and
+                # any fixed box. Real dead-wall tiles are the only tile
+                # detections up there; hold them for the row-rescue below.
+                x0, y0, x1, y1 = det.xyxy
+                cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+                if cx < 0.35 * region.frame_w and cy < 0.25 * region.frame_h:
+                    wide_dora.append((cx, cy, y1 - y0, det))
+                    continue
+            o.violations.append(
+                f"stray detection {det.tile} ({best[0]:.0f}px off-zone)")
             continue
         if det.tile == "back" and best[1] == "meld" and best[2] != 0:
             # Backs-trained detectors see opponents' STANDING concealed hands,
@@ -310,6 +322,20 @@ def assemble(dets, region: BoardRegion) -> ObservedState:
                 continue
         (per_river if best[1] == "river" else per_meld)[best[2]].append((det, pts))
         note(f"{best[1]}{best[2]}", det)
+
+    # wide-frame dora rescue: the held screen-corner strays must form ONE
+    # horizontal row (the dead-wall display); row members become dora markers
+    # in left-to-right order, anything off-row is a genuine stray.
+    if wide_dora:
+        med_y = float(np.median([cy for _, cy, _, _ in wide_dora]))
+        med_h = float(np.median([hh for _, _, hh, _ in wide_dora]))
+        row = [(cx, d) for cx, cy, _, d in wide_dora if abs(cy - med_y) < 0.6 * med_h]
+        for cx, cy, _, d in wide_dora:
+            if abs(cy - med_y) >= 0.6 * med_h:
+                o.violations.append(f"stray detection {d.tile} (off dora row)")
+        o.dora_markers += [d.tile for _, d in sorted(row, key=lambda t: t[0])]
+        for _, d in row:
+            note("dora", d)
 
     for seat in range(4):
         o.rivers[seat], v1 = _assign_river(seat, per_river[seat])

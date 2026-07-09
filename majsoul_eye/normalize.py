@@ -8,8 +8,11 @@ are then placed relative to that region.
 - :func:`locate_fullscreen` — assume the whole frame IS the 16:9 board (clean
   fullscreen capture). The simplest, correct case for our own captures.
 - :func:`locate_letterbox` — trim black bars (browser/letterboxed captures).
-- ``AnchorLocator`` — TODO: detect UI landmarks and fit a transform for arbitrary
-  external screenshots (needs real frames to build).
+- :func:`locate_wide` — wider-than-16:9 phone screenshots: centered 16:9 board
+  rect (the 3D table); the screen-corner dora HUD is rescued detection-side.
+- :func:`locate_auto` — dispatch between the three by aspect ratio.
+- ``AnchorLocator`` — TODO: detect UI landmarks and fit a transform for
+  arbitrary external screenshots beyond the aspect heuristics above.
 """
 
 from __future__ import annotations
@@ -24,11 +27,26 @@ from .coords import NormBox
 
 @dataclass(frozen=True)
 class BoardRegion:
-    """The board's pixel rect within a frame: offset (ox,oy) + size (bw,bh)."""
+    """The board's pixel rect within a frame: offset (ox,oy) + size (bw,bh).
+
+    ``fw``/``fh`` are the FULL frame dims (0 = unknown, treated as the board
+    rect itself) — consumers that place screen-anchored 2D-HUD elements (which
+    do NOT live inside the 16:9 board rect on wide phone screenshots) need
+    them; pure board-relative ROIs ignore them."""
     ox: int
     oy: int
     bw: int
     bh: int
+    fw: int = 0
+    fh: int = 0
+
+    @property
+    def frame_w(self) -> int:
+        return self.fw or self.ox + self.bw
+
+    @property
+    def frame_h(self) -> int:
+        return self.fh or self.oy + self.bh
 
     def norm_to_px(self, box: NormBox) -> tuple[int, int, int, int]:
         return (self.ox + round(box.x0 * self.bw), self.oy + round(box.y0 * self.bh),
@@ -54,7 +72,30 @@ class BoardRegion:
 def locate_fullscreen(frame: np.ndarray) -> BoardRegion:
     """Treat the entire frame as the 16:9 board."""
     h, w = frame.shape[:2]
-    return BoardRegion(0, 0, w, h)
+    return BoardRegion(0, 0, w, h, w, h)
+
+
+def locate_wide(frame: np.ndarray) -> BoardRegion:
+    """Wider-than-16:9 screenshot (phones, 2.17:1 etc.): the 3D table renders
+    as a CENTERED 16:9 rect (verified on real 2.17/2.20 phone samples — hand /
+    rivers / melds align once cropped); the extra width holds only 2D HUD.
+    NOTE the dora indicator lives OUTSIDE this rect (screen-corner anchored,
+    device-dependent inset) — assemble rescues it from stray detections."""
+    h, w = frame.shape[:2]
+    bw = round(h * 16 / 9)
+    return BoardRegion((w - bw) // 2, 0, bw, h, w, h)
+
+
+def locate_auto(frame: np.ndarray, tol: float = 0.02) -> BoardRegion:
+    """Dispatch by aspect: ~16:9 -> fullscreen, wider -> wide (centered 16:9
+    table), narrower -> letterbox (trim bars)."""
+    h, w = frame.shape[:2]
+    aspect = w / h if h else 0.0
+    if aspect > (16 / 9) * (1 + tol):
+        return locate_wide(frame)
+    if aspect < (16 / 9) * (1 - tol):
+        return locate_letterbox(frame)
+    return locate_fullscreen(frame)
 
 
 def locate_letterbox(frame: np.ndarray, black_thresh: int = 16) -> BoardRegion:
@@ -72,7 +113,8 @@ def locate_letterbox(frame: np.ndarray, black_thresh: int = 16) -> BoardRegion:
         return locate_fullscreen(frame)
     x0, x1 = int(cols[0]), int(cols[-1]) + 1
     y0, y1 = int(rows[0]), int(rows[-1]) + 1
-    return BoardRegion(x0, y0, x1 - x0, y1 - y0)
+    h, w = frame.shape[:2]
+    return BoardRegion(x0, y0, x1 - x0, y1 - y0, w, h)
 
 
 class AnchorLocator:
