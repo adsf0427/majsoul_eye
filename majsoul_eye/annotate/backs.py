@@ -185,26 +185,28 @@ def _patch_stats(img: np.ndarray, quad_orig) -> tuple | None:
 def sorting_suspect(img: np.ndarray, pos: int, row_n: int, n_melds: int, H_full_inv) -> bool:
     """Post-tedashi 理牌 (row-compaction) gate for a GT-SETTLED row.
 
-    After an opponent discards from hand the client re-compacts the row (~0.5-1s)
-    while GT is already settled; the capture stability ROI (roi_diff.TABLE_ROI)
-    does NOT cover the hand rows, so canonical frames can catch the compaction
-    mid-flight (~3.5% measured) — template boxes then misalign (user-spotted on
-    the OBB sample). Two pixel signatures, both phases covered:
-      * some ROW SLOT is empty — phase A: the pulled tile's gap is still open
-        mid-row; phase B: the gap closed toward the anchor, leaving the LAST
-        slot empty (the separated drawn tile rides the visual row end, so it
-        sits between the 13-row and 12-row drawn positions — checking one fixed
-        drawn slot alone misses phase B, verified on a real frame).
-      * the 13-row DRAWN slot is occupied (early phase A robustness).
-    Patches are classified by (gray mean, std) distance to the row's own tile
-    median vs an empty-felt reference sampled 1.15 tiles past the drawn slot —
-    relative comparisons survive skins (the absolute live-mask fill check is
-    blind on saturated cloth). 0.7 margins keep both verdicts conservative."""
+    After an opponent discards from hand the client re-compacts the row
+    (~0.5-1s) while GT is already settled; the capture stability ROI
+    (roi_diff.TABLE_ROI) does NOT cover the hand rows, so canonical frames can
+    catch the compaction mid-flight — template boxes then misalign. Signature:
+    some ROW SLOT reads as bare felt (the pulled tile's gap, open mid-row or
+    at the anchor-far end after closing). Patches are classified by (gray
+    mean, std) distance to the row's own tile median vs an empty-felt
+    reference sampled 1.15 tiles past the drawn slot — relative comparisons
+    survive skins. Fires on 0.4-3% of settled seat-frames (the real reflow
+    rate).
+
+    A second signature ("the 13-row DRAWN slot reads occupied", Condition B of
+    STATUS §1.48) was REMOVED 2026-07-10: its patch straddles the last-tile
+    edge, and on dark skins the row's tile median ≈ that edge mean, so it
+    false-fired on ~100% of skinned settled rows (253/256 firings on
+    ai_session4/run_5/game1) and 17.6% of eligible frames dataset-wide —
+    each one a WHOLE-FRAME drop in build_dataset (the largest frame-drop
+    cause in the pipeline; see spec 2026-07-10)."""
     k = _meld_k(pos, row_n, n_melds)
     slots = [_patch_stats(img, P.fullwarp_to_original(
         _stretch_quad(BACK_SLOT_QUADS[pos][i], pos, k), H_full_inv)) for i in range(row_n)]
     slots = [s for s in slots if s]
-    drawn = _patch_stats(img, P.fullwarp_to_original(_drawn_fw(pos, row_n, n_melds), H_full_inv))
     empty = _patch_stats(img, P.fullwarp_to_original(_drawn_fw(pos, row_n, n_melds, 1.15), H_full_inv))
     if len(slots) < 3 or empty is None:
         return False
@@ -213,9 +215,7 @@ def sorting_suspect(img: np.ndarray, pos: int, row_n: int, n_melds: int, H_full_
     def dist(a, b):
         return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
-    if any(dist(s, empty) < 0.7 * dist(s, tm) for s in slots):
-        return True                                   # a row slot reads as bare felt
-    return drawn is not None and dist(drawn, tm) < 0.7 * dist(drawn, empty)
+    return any(dist(s, empty) < 0.7 * dist(s, tm) for s in slots)
 
 
 def back_boxes(img: np.ndarray, state, hom: dict):

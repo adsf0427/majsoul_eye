@@ -119,6 +119,56 @@ def test_annotate_frame_backs_opt_in():
     assert len(ob) == 39 and all(b.tile == "back" for b in ob)
 
 
+_TILE_STATS, _FELT_STATS = (100.0, 40.0), (30.0, 5.0)
+
+
+def _quad_keyed_patch_stats(felt_quads):
+    """Stub for backs._patch_stats keyed on WHICH quad is probed (robust to
+    call order and to whether the drawn slot is probed at all): quads in
+    `felt_quads` read like bare felt, everything else like a tile back."""
+    felt = [np.float32(q) for q in felt_quads]
+
+    def stub(img, quad):
+        q = np.float32(quad)
+        if any(f.shape == q.shape and np.allclose(q, f, atol=0.5) for f in felt):
+            return _FELT_STATS
+        return _TILE_STATS
+    return stub
+
+
+def test_sorting_suspect_condition_b_removed():
+    # Condition-B signature: every ROW slot AND the drawn slot read like tiles,
+    # only the empty reference reads like felt. The old "drawn slot occupied"
+    # verdict false-fired on 253/256 firings of a dark-skin game and 17.6% of
+    # eligible frames dataset-wide, and build_dataset drops the WHOLE frame
+    # (spec 2026-07-10). A fully tile-like row must NOT be called mid-sort.
+    import majsoul_eye.annotate.backs as B_mod
+    img = np.zeros((8, 8, 3), np.uint8)                  # stub ignores pixels
+    empty_q = P.fullwarp_to_original(B_mod._drawn_fw(1, 13, 0, 1.15), HINV)
+    orig = B_mod._patch_stats
+    try:
+        B_mod._patch_stats = _quad_keyed_patch_stats([empty_q])
+        assert B_mod.sorting_suspect(img, 1, 13, 0, HINV) is False
+    finally:
+        B_mod._patch_stats = orig
+
+
+def test_sorting_suspect_condition_a_survives():
+    # Condition-A signature: one ROW slot reads like the empty-felt reference
+    # -> the row really is mid-compaction; the gate must still fire.
+    import majsoul_eye.annotate.backs as B_mod
+    img = np.zeros((8, 8, 3), np.uint8)
+    k = B_mod._meld_k(1, 13, 0)
+    gap_q = P.fullwarp_to_original(B_mod._stretch_quad(BACK_SLOT_QUADS[1][6], 1, k), HINV)
+    empty_q = P.fullwarp_to_original(B_mod._drawn_fw(1, 13, 0, 1.15), HINV)
+    orig = B_mod._patch_stats
+    try:
+        B_mod._patch_stats = _quad_keyed_patch_stats([gap_q, empty_q])
+        assert B_mod.sorting_suspect(img, 1, 13, 0, HINV) is True
+    finally:
+        B_mod._patch_stats = orig
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
