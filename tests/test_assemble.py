@@ -430,6 +430,18 @@ _bad = _StubReader({**_reader.answers, "score_left": ""})
 o3 = assemble(_hud_dets, _region, frame_bgr=_frame, hud_reader=_bad)
 assert o3.scores is None and o3.kyoku == 3         # other fields still fill
 
+# wide (>16:9 phone) frame: HUD fills there too — the region.ox gate was
+# lifted 2026-07-09 after the samples/ probe measured 16/16 detection with
+# exact reads (center panel renders identically to 16:9).
+from majsoul_eye.normalize import locate_auto
+
+_wframe = np.zeros((1320, 2868, 3), np.uint8)
+_wregion = locate_auto(_wframe)
+assert _wregion.ox > 0                             # sanity: really the wide path
+o4 = assemble(_hud_dets, _wregion, frame_bgr=_wframe, hud_reader=_reader)
+assert o4.kyoku == 3 and o4.scores == [24000, 31000, 20000, 24000]
+assert o4.left_tile_count == 69 and o4.reach[0] is True
+
 print("test_assemble hud fill OK")
 
 

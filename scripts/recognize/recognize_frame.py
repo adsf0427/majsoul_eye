@@ -11,8 +11,8 @@ One JSON object per input image on stdout (JSON lines; --pretty to indent):
   {"file": ..., "ok": bool,            # ok = frame accepted AND reconstructed
    "violations": [...],                # non-empty => frame rejected, rest null
    "observed": {...} | null,           # ObservedState (hand/rivers/melds/dora/reach;
-                                       #  HUD fields read by HudReader (--no-hud to
-                                       #  disable; wide phone frames keep them null))
+                                       #  HUD fields read by HudReader on all frame
+                                       #  shapes incl. wide (--no-hud to disable))
    "mjai": [...] | null,               # start_game..now; hero abs seat = start_game.id
    "fabricated": {...} | null,         # what reconstruct invented (haipai, defaults)
    "reason": str | null}               # why reconstruct failed (ok=false, no violations)

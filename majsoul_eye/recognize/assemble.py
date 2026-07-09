@@ -253,9 +253,12 @@ HAND_MIN_H = 0.11            # hand tiles are ~0.141 canon-high; hero meld tiles
 def assemble(dets, region: BoardRegion, frame_bgr=None, hud_reader=None) -> ObservedState:
     """One frame's detections -> ObservedState.
 
-    HUD fields fill when BOTH frame_bgr and hud_reader are given and the frame is
-    not wide (region.ox == 0 — the HUD detector is only trained on the 16:9
-    layout; wide phone frames keep HUD fields None, spec 2026-07-09 §5).
+    HUD fields fill when BOTH frame_bgr and hud_reader are given. Wide (>16:9
+    phone) frames included: the center-panel fields render identically to the
+    16:9 layout (measured 16/16 detection with exact reads on the samples/
+    set, 2026-07-09), and the score/wall conservation checks in check_observed
+    backstop any layout-driven misread. Untested on wide: reach_stick (no
+    riichi sample yet); buttons under-recall on dark skins.
 
     'back' detections only ever route to MELD zones (ankan renders
     back/face/face/back); opponents' concealed rows sit off the felt plane, land
@@ -375,8 +378,7 @@ def assemble(dets, region: BoardRegion, frame_bgr=None, hud_reader=None) -> Obse
         o.melds[seat] = melds
         o.violations.extend(v1 + v2)
         o.reach[seat] = any(t.sideways for t in o.rivers[seat])
-    if frame_bgr is not None and hud_reader is not None and hud_dets \
-            and region.ox == 0:
+    if frame_bgr is not None and hud_reader is not None and hud_dets:
         _fill_hud(o, assemble_hud(hud_dets, hud_reader, frame_bgr))
         for det in hud_dets:
             note("hud", det)
