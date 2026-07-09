@@ -80,6 +80,33 @@ def _parse_result(res) -> list:
     return out
 
 
+def _dedup_overlaps(dets: list, iou_thresh: float = 0.8) -> list:
+    """Class-agnostic overlap pass over the per-class NMS output. ultralytics
+    suppresses duplicates only WITHIN a class, so one physical tile can carry
+    a second lower-score box of another class (seen in the wild: a 4p double-
+    detected as N on the same box — the phantom tile inflated a river by one
+    and made an otherwise valid frame turn-infeasible). Keep the higher-score
+    box of any pair with axis-aligned IoU >= iou_thresh; legitimate neighbours
+    (adjacent river slots, kakan stacks) overlap far below it."""
+    kept: list = []
+    for d in sorted(dets, key=lambda d: d.score, reverse=True):
+        x0, y0, x1, y1 = d.xyxy
+        area = max(0.0, x1 - x0) * max(0.0, y1 - y0)
+        for k in kept:
+            kx0, ky0, kx1, ky1 = k.xyxy
+            iw = min(x1, kx1) - max(x0, kx0)
+            ih = min(y1, ky1) - max(y0, ky0)
+            if iw <= 0 or ih <= 0:
+                continue
+            inter = iw * ih
+            karea = max(0.0, kx1 - kx0) * max(0.0, ky1 - ky0)
+            if inter / (area + karea - inter) >= iou_thresh:
+                break
+        else:
+            kept.append(d)
+    return kept
+
+
 class TileDetector:
     """Inference wrapper: one BGR frame -> list[Detection]. Accepts standard (HBB)
     and oriented (OBB) tile-detector weights; OBB detections carry a 4-corner
@@ -96,4 +123,4 @@ class TileDetector:
     def predict(self, bgr: np.ndarray) -> list:
         res = self.model.predict(bgr, imgsz=self.imgsz, conf=self.conf,
                                  device=self.device, verbose=False)[0]
-        return _parse_result(res)
+        return _dedup_overlaps(_parse_result(res))

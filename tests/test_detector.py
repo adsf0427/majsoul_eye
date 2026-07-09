@@ -293,6 +293,28 @@ def test_detector_wrapper_smoke():
         assert d.tile in TILE_NAMES and 0.0 <= d.score <= 1.0
 
 
+def test_cross_class_duplicate_suppressed():
+    # ultralytics NMS is per-class, so one physical tile can carry a second
+    # lower-score box of ANOTHER class. Real case (phone screenshot): a 4p at
+    # (1226,541)-(1323,589) also detected as N @0.531 on the SAME box — the
+    # phantom N inflated kamicha's river to 6 tiles and made an otherwise
+    # valid frame turn-infeasible ("no legal turn order"). predict() must run
+    # a class-agnostic overlap pass keeping only the higher-score box.
+    from majsoul_eye.recognize.detector import Detection, _dedup_overlaps
+
+    def det(name, xyxy, score):
+        return Detection(xyxy=xyxy, name=name, tile=name,
+                         cls=TILE_NAMES.index(name), score=score)
+
+    tile = det("4p", (1226., 541., 1323., 589.), 0.933)
+    ghost = det("N", (1226., 541., 1323., 589.), 0.531)     # same box, IoU 1.0
+    neigh = det("C", (1233., 488., 1328., 534.), 0.965)     # adjacent, no overlap
+    part = det("1p", (1270., 560., 1370., 610.), 0.9)       # mild overlap, kept
+    kept = _dedup_overlaps([ghost, tile, neigh, part])
+    assert tile in kept and neigh in kept and part in kept
+    assert ghost not in kept
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
