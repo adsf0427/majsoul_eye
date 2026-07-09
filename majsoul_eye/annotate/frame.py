@@ -190,8 +190,14 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
         region = locate_fullscreen(img)
         boxes = HUD.hud_field_boxes(img, state, region) + HUD.reach_stick_boxes(img, state, region)
         if is_score_anim_window(state):
+            # The animation makes the TEXT untrustworthy, not the geometry:
+            # fixed-seed boxes stay valid and ink-snap follows the glyphs
+            # actually rendered (a truly blank field already came back
+            # reliable=False from ink_snap). reach_stick carries no text and
+            # keeps its own in-window fill gate (hud.REACH_FILL_OK).
             for b in boxes:
-                b["reliable"] = False
+                if "text" in b:
+                    b["text_reliable"] = False
             rec["flags"].append("hud:score_anim")
         rec["hud_boxes"] = boxes + HUD.button_boxes(img, state, region, btn_bg=btn_bg)
     except Exception as e:                       # HUD is best-effort like dora

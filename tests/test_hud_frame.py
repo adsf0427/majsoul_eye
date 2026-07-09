@@ -67,5 +67,36 @@ def test_score_anim_window_bundling_integration():
     assert is_score_anim_window(rp.state) is True              # bundling-proof
 
 
+def test_score_anim_marks_text_not_geometry():
+    """A score-anim frame keeps HUD geometry labels (detector) and only marks
+    the TEXT unreliable (reader): fixed-seed boxes stay valid and ink-snap
+    follows the glyphs actually rendered, so the old blanket reliable=False
+    deleted 410 correct train labels (spec 2026-07-10). reach_stick has no
+    text and keeps its own in-window fill gate."""
+    from majsoul_eye.state.replay import Replayer
+
+    rp = Replayer(hero_seat=0)
+    rp.apply({"type": "start_game", "id": 0})
+    rp.apply({"type": "start_kyoku", "bakaze": "E", "dora_marker": "1m", "honba": 0,
+              "kyoku": 1, "kyotaku": 0, "oya": 0, "scores": [25000] * 4,
+              "tehais": [["1m"] * 13, ["?"] * 13, ["?"] * 13, ["?"] * 13]})
+    st = rp.state
+    st.last_event_types = frozenset({"reach", "dahai"})   # bundled reach record
+    st.reach = [True, False, False, False]
+    img2 = np.full((1080, 1920, 3), 200, np.uint8)        # bright: ink + stick render
+    rec2 = annotate_frame(img2, st, hom)
+    assert "hud:score_anim" in rec2["flags"]
+    fields = [b for b in rec2["hud_boxes"] if "text" in b]
+    sticks = [b for b in rec2["hud_boxes"] if b["name"] == "reach_stick"]
+    assert fields and sticks
+    for b in fields:
+        assert b.get("reliable", True), b                 # geometry label survives
+        assert b.get("text_reliable", True) is False, b   # text flagged for the reader
+    for b in sticks:
+        assert "text_reliable" not in b                   # no text; own fill gate rules
+        assert b.get("reliable", True)                    # gray 200 >= REACH_FILL_OK
+
+
 test_score_anim_window_bundling_integration()
+test_score_anim_marks_text_not_geometry()
 print("test_hud_frame OK")
