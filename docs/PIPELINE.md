@@ -171,9 +171,12 @@
   （`build_dataset.has_unlabeled_buttons`）——按钮就在画面上，只是没定位到，
   留下图像却不带按钮标签等于把它当背景负样本训练（这正是旧链路 val 上
   "被丢弃但已渲染"的按钮 recall 0/92、而已标注按钮 99.3% 的原因）。分类器裁剪不受影响。立直宣言/分数滚动窗口（`replay.is_score_anim_window`）
-  只把 HUD 框标记不可靠、不丢整帧（牌面标签不受影响）；立直棒的逐框亮度 fill 门也**只在该窗口内**
-  生效——settled 帧一律信 GT（暗色皮肤棒 fill 常年 <0.35，无条件门曾把 across/left 槽 16.7%/13.8%
-  的棒当背景训练，STATUS §1.47）。
+  只把**文本**标记不可靠（`text_reliable=False`）——HUD 框几何在动画中依然有效（固定 seed 不动、
+  ink-snap 跟随实际渲染的字形），YOLO 标签照常发出，仅跳过 `hud/` 读取器裁剪（2026-07-10 前是
+  整帧跳过 HUD 标签，410 训练帧把渲染完好的 HUD 当背景负样本训练，正是 val 上 riichi_stick_count/
+  honba_count 各 19 个假 FP 的来源）；立直棒的逐框亮度 fill 门**只在该窗口内**生效且现在是窗内
+  唯一防线——settled 帧一律信 GT（暗色皮肤棒 fill 常年 <0.35，无条件门曾把 across/left 槽
+  16.7%/13.8% 的棒当背景训练，STATUS §1.47）。
 - 牌背（`back`）可靠性门是**去皮肤化**的：`pipeline.tile_live_mask`（饱和度或亮度
   `(S>60)|(V>110)`，任意肤色都判活）判定 dora/副露反面槽是否已渲染（fill 门），与
   `tile_back_mask`（纯饱和度 `S>70`，供 `snap_meld_strip` 做吸附阶段的 face/back 几何判别）
@@ -237,11 +240,14 @@
   局名，OBB 目录＝`<dir>__obb`。已建的 HBB 版本可 `--hbb --obb --resume` **原地补 OBB**（跳过已验证的
   HBB 与标注，只增量建 OBB 标签＋重装两套 split，快）。
 - **对手牌背（实验，默认关）**：`build_datasets.py --backs` 额外标注三家对手暗牌行的 `back` 框
-  （手摸切识别的前置；`majsoul_eye/annotate/backs.py`，标定于 run_8 真实帧，fullwarp 均匀 pitch +
-  玩家左手端锚点 + 副露收缩 bias，跨皮肤/分辨率已验证）。透传路径：`--backs` →
+  （手摸切识别的前置；`majsoul_eye/annotate/backs.py`，标定于 run_8 真实帧，人工 per-slot
+  fullwarp 模板 + 玩家左手端锚点，跨皮肤/分辨率已验证）。透传路径：`--backs` →
   `annotate_ai_session.py --backs`（记录多出 `back_boxes`）→ `build_dataset.py`（YOLO 出 `back`
-  类框、**不出分类器 crop**；任何带 `backs_holding` flag 的帧——该座位摸牌中、理牌插槽位置
-  GT 不可知——**整帧丢弃**保证 back 信号一致，实测约丢 40–56% 帧）。⚠️ 勿混入主线 v1/v2 版本，
+  类框、**不出分类器 crop**）。像素门只剩 `sorting_suspect` Condition A（理牌空槽信号，实测
+  0.4–3%，`backs_sorting` flag 仍整帧丢弃）；逐框 fill 可靠性门与 Condition B（摸牌槽占用信号）
+  已于 2026-07-10 移除——前者对侧视手牌行零判别力（空毡任何桌面都读 1.00、暗色牌背 0.24，正类
+  低于负类），后者在暗皮肤 settled 行上 ~100% 误触发且整帧丢弃（数据集最大丢帧原因，17.6% 合格帧；
+  `fill` 字段保留为 QA 诊断，STATUS §1.56）。⚠️ 勿混入主线 v1/v2 版本，
   用独立版本名（样例：`datasets/backs_sample/`，单局 68 帧，`detector/`(HBB)+`detector_obb/`(OBB)
   双 split；`fiftyone_view.py` 已支持 9 字段 OBB 标签渲染（Polylines），侧座建议看 OBB——HBB 会把
   倾斜 quad 坍缩成大幅重叠的轴对齐盒）。几何来源＝**人工 per-slot 模板**：`scripts/annotate/

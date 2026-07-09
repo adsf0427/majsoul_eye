@@ -1451,6 +1451,53 @@ h 66–105（中位 89）、area 6379–18373；**相邻牌子最小间距 39px*
 稀缺，靠 `--op-delay`/multishot 定向采集 + 按钮帧过采样 + 横幅 copy-paste 合成解决。**必须在本轮
 修复之后做**：否则新增正样本会被那 1009 个负样本按住。
 
+### 1.56 再删两个"把画面上的东西标成背景"的门：backs fill / sorting-B / score-anim HUD（2026-07-10）
+
+与 §1.33（皮肤 dora 背）、§1.47（立直棒 fill）、§1.55（按钮亮度阈）同一病族：按默认皮肤标定的
+像素门把画面上明明存在的对象从标签里删掉、帧却留在数据集里 ⇒ 对象被当背景负样本训练。本轮由
+最新 OBB 权重（`tile_detector_obb_20260709_055509`）在 v5 val 的逐类指标反查出来——`back` P=0.989
+的 625 个"FP"和 HUD 字段各 13–19 个"FP"经目验全部是**模型对、标签缺**。
+设计 spec：`docs/superpowers/specs/2026-07-10-backs-hud-label-gates-design.md`。
+
+- **D1 `sorting_suspect` Condition B 从未落地**（§1.48 记了移除、代码里还在）且是**数据集最大
+  丢帧原因**：12 局跨 session 抽样（每 3 帧取 1、排除 deal/call 窗口后 1266 合格帧）帧级触发
+  24.4%，其中 **17.6% 是 B 单独造成**（暗皮肤局 253/256）；`backs_sorting` 在 build 里是**整帧
+  丢弃**，v5 因此只留 32,283/47,965 帧。被丢帧里装着最稀缺的类（两局抽查即含 btn_kan×2、
+  btn_tsumo×2、reach_stick×155、赤5×164）。→ 删 Condition B，保留 Condition A（真理牌信号，
+  0.4–3%）。
+- **D2 `FILL_OK_BACKS` 门零判别力且暗皮肤下方向颠倒**：`tile_live_mask` 是给 dora/副露格标定的
+  （紧贴、负类读黑，该角色至今健康）；对手暗牌行是侧视斜 quad 的轴对齐 bbox、大半是毡布，而
+  任何毡布都是"有色或亮"⇒ 空毡永远读 1.00，暗色 RML 背（S≈59/V≈55 双双差一点）读 0.24——正类
+  低于负类，任何阈值都分不开。亮桌上牌背 0.99/空毡 1.00 ⇒ 门从未起过作用。皮肤局对手背仅 5%
+  存活并整行喂成背景负样本（v5 有 6 局 <30 backs/帧，其一 `ai_session4_run_5_game1` 在 val，
+  正是 625 假 FP 的来源）。→ 删门与常量，`fill` 保留为 QA 诊断；GT-leads-render 由
+  deal/call 窗口 + Condition A 兜底。
+- **D3 score-anim 整帧跳过 HUD 标签、图却留下**：`build_dataset` 的帧级 `is_score_anim_window`
+  跳过使 410 训练帧 + 19 val 帧把渲染完好的 HUD 教成背景（目验 run_8_game1/000129：HUD 静止
+  完整、标签 0 框、模型 conf 0.93–0.97 全检出）。动画只影响**文本**不影响**几何**（固定 seed
+  不动、ink-snap 跟随实际渲染字形、真空白已有 ink_snap→None 兜底）。→ `annotate.frame` 窗内改设
+  `text_reliable=False`（几何标签保留），`hud_emit` 据此只跳读取器裁剪；立直棒窗内 fill 门
+  （§1.47）升为窗内唯一防线。
+- **真实数据回归**（探针局端到端重建，含 §1.55 按钮修复）：
+
+  | 局 | 帧保留 | backs/帧 |
+  |---|---|---|
+  | ai_session4_run_5_game1（暗皮肤，**在 v5 val**） | 16% → **92%** | 15.2 → **38.9** |
+  | ai_session2_run_6_game9（浅色桌） | 92% → 94% | 5.6 → **41.9** |
+  | ai_session2_run_1_game1（亮桌对照） | 80% → 89%（B 找回） | 43.4 → 43.2（−0.5%，门本就无效） |
+
+  目验（3 帧×2 局放大）：行内 quad 全部贴牌；已知遗留——**带副露 holding 行的分离摸牌槽外推
+  偶发偏移约半张牌**（000671 对家，`BACK_DRAWN_QUADS` 只在满 13 行标定过，先于本轮、不阻塞）。
+- **测试**：`test_backs.py` 新增 quad-keyed `_patch_stats` 桩测试（B 删除/A 存活）、暗背可靠性、
+  常量移除断言，黑帧断言翻转；`test_hud_frame.py` 新增窗内"几何保留/文本标记"断言；
+  `test_hud_dataset.py` 新增 `text_reliable=False` ⇒ 有 YOLO 行无裁剪。全套 54 文件绿。
+  顺手修：`build_dataset.py --help` argparse 崩溃（帮助文本裸 `%`）。
+- **数据影响**：v1–v5 的 backs+HUD 标签全部过时；重建搭 §1.55 已排定的
+  `--backs` 重标注 + `build_datasets.py <name> --force` + 重训同一趟车。预期全量 ~+7.5k 帧
+  （+23%），`back`≈39/帧全局一致，val 假 FP 消失。
+- **兼容**：旧 annotations（本轮前生成）在 score-anim 框上带的是旧 blanket `reliable=False`，
+  `--from-annotations` 复用时维持旧行为（整体跳过），不误发标签。
+
 ---
 
 ## 二、关键经验（实测结论）
