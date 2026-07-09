@@ -1,6 +1,7 @@
 """Assemble detector HUD boxes + micro-reader outputs into one structured dict
 (the HUD half of the recognized 场况; tile half comes from detector/classifier).
-Crop->rotate-upright->read happens here so runtime matches the training crops."""
+Takes runtime Detection objects from the detector. Crop->rotate-upright->read happens
+here so runtime matches the training crops."""
 from __future__ import annotations
 
 from typing import Optional
@@ -43,7 +44,9 @@ def assemble_hud(dets, reader, frame_bgr: np.ndarray) -> dict:
     anchor = None            # center of round_label detection (preferred)
     anchor_fallback = None   # center of wall_count detection (fallback)
     stick_centers = []       # (cx, cy) of every `reach_stick` detection
-    for cls, (x0, y0, x1, y1) in dets:
+    for det in dets:
+        cls = det.name
+        x0, y0, x1, y1 = (int(round(v)) for v in det.xyxy)
         if cls not in HUD_NAMES:
             continue
         if cls.startswith("btn_"):
