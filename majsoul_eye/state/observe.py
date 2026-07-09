@@ -1,8 +1,8 @@
 """Single-frame OBSERVED board state — the vision-side mirror of replay.BoardState.
 
 ObservedState is what one screenshot shows a human (spec 2026-07-05 §3.1):
-tiles zones are recognizable today; 2D-HUD fields are Optional slots filled once
-the HUD micro-readers (spec 2026-07-04) land. Seats are SCREEN-RELATIVE
+tiles zones are recognizable today; 2D-HUD fields are Optional slots filled by
+the HUD micro-readers when available. Seats are SCREEN-RELATIVE
 (0=self 1=right 2=across 3=left, counter-clockwise = turn order).
 hero_hand EXCLUDES drawn_tile (the separated tsumo slot is its own field).
 Pure data + checks; no cv2/numpy/Akagi imports at module level.
@@ -119,6 +119,25 @@ def check_observed(o: ObservedState) -> list[str]:
                 v.append(f"seat {r} {m.type} from_rel {m.from_rel} invalid")
             if m.type == "chi" and m.from_rel != 3:
                 v.append(f"seat {r} chi from_rel {m.from_rel} != 3 (kamicha only)")
+
+    # --- HUD x vision cross-checks (fields are None unless a HUD reader ran) --
+    n_reach = sum(1 for x in o.reach if x)
+    if o.kyotaku is not None and o.kyotaku < n_reach:
+        # every accepted riichi put a stick on the table; the counter can
+        # only lag during the declaration animation — reject that window.
+        v.append(f"kyotaku {o.kyotaku} < visible riichi count {n_reach}")
+    if o.scores is not None and o.kyotaku is not None \
+            and sum(o.scores) + 1000 * o.kyotaku != 100000:
+        v.append(f"scores sum {sum(o.scores)} + 1000*{o.kyotaku} kyotaku != 100000")
+    if o.left_tile_count is not None:
+        # Conservation: each discard implies one draw except the post-chi/pon
+        # forced one; a called-away discard's draw cancels against exactly that
+        # exemption; each kan nets -1 (replacement). +-1 absorbs an opponent's
+        # in-flight draw and the §1.53 pixel=GT-1 counter timing.
+        pred = 70 - sum(len(r) for r in o.rivers) - o.n_kans() \
+            - (1 if o.drawn_tile else 0)
+        if abs(pred - o.left_tile_count) > 1:
+            v.append(f"wall count {o.left_tile_count} vs predicted {pred} (>1 off)")
     return v
 
 

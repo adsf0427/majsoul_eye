@@ -151,6 +151,56 @@ def test_projection_without_hud():
     assert o.dora_markers == ["1m"]           # dora strip is detectable, not an HUD slot
 
 
+# --- HUD x vision cross-checks (spec 2026-07-09 §3) --------------------------
+
+def _hud_obs(**kw):
+    o = ObservedState()
+    o.hero_hand = ["1m"] * 4 + ["2m"] * 4 + ["3m"] * 4 + ["4m"]   # 13, none >4
+    o.dora_markers = ["1p"]
+    for k, v in kw.items():
+        setattr(o, k, v)
+    return o
+
+assert check_observed(_hud_obs()) == []                    # HUD None -> checks dormant
+
+# kyotaku < visible riichi count -> hard violation
+bad = _hud_obs(kyotaku=0, reach=[True, False, False, False])
+assert any("kyotaku" in m for m in check_observed(bad))
+ok = _hud_obs(kyotaku=1, reach=[True, False, False, False])
+assert not any("kyotaku" in m for m in check_observed(ok))
+carry = _hud_obs(kyotaku=2, reach=[False] * 4)             # carryover only: fine
+assert not any("kyotaku" in m for m in check_observed(carry))
+
+# score conservation: sum(scores) + 1000*kyotaku == 100000
+bad = _hud_obs(scores=[25000, 25000, 25000, 25000], kyotaku=1)
+assert any("scores sum" in m for m in check_observed(bad))
+ok = _hud_obs(scores=[24000, 25000, 25000, 25000], kyotaku=1,
+              reach=[True, False, False, False])
+assert not any("scores sum" in m for m in check_observed(ok))
+# scores present but kyotaku unread -> conservation check stays dormant
+half = _hud_obs(scores=[25000, 25000, 25000, 25000])
+assert not any("scores sum" in m for m in check_observed(half))
+
+# wall conservation: pred = 70 - sum(rivers) - n_kans - (1 if drawn)
+o = _hud_obs(left_tile_count=70)
+assert not any("wall count" in m for m in check_observed(o))
+o = _hud_obs(left_tile_count=69)                           # +-1 tolerance
+assert not any("wall count" in m for m in check_observed(o))
+o = _hud_obs(left_tile_count=68)
+assert any("wall count" in m for m in check_observed(o))
+o = _hud_obs(left_tile_count=68, drawn_tile="9p")          # pred 69 -> |69-68|<=1
+assert not any("wall count" in m for m in check_observed(o))
+o = _hud_obs(left_tile_count=68)                           # a kan drops pred to 69
+o.melds[1] = [ObservedMeld("ankan", ["9s", "9s", "9s", "9s"])]
+assert not any("wall count" in m for m in check_observed(o))
+o = _hud_obs(left_tile_count=64)
+o.rivers[0] = [ObservedRiverTile("1s")] * 3
+o.rivers[2] = [ObservedRiverTile("2s")] * 2                # pred = 70-5 = 65
+assert not any("wall count" in m for m in check_observed(o))
+
+print("test_observe hud cross-checks OK")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

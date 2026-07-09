@@ -77,7 +77,7 @@ def test_hud_fields_flow_into_start_kyoku():
     o = _obs(rivers=[[], [ObservedRiverTile("E")], [ObservedRiverTile("S")],
                      [ObservedRiverTile("W")]],
              bakaze="S", kyoku=3, honba=2, kyotaku=1, seat_wind_self="N",
-             scores=[24000, 26000, 25000, 25000])
+             scores=[24000, 25000, 25000, 25000])
     # seat_wind N -> oya_rel = (4 - 3) % 4 = 1; kyoku 3 -> oya_abs 2 -> hero_abs 1
     r = _roundtrip(o)
     sk = r.events[1]
