@@ -109,16 +109,13 @@ def flat_from_hud(hud: dict) -> dict:
 
 
 def det_to_hud_pairs(dets) -> list:
-    """Detector output -> assemble_hud's `dets` arg: (cls_name, px_box) pairs,
-    HUD classes only (id >= tiles.NUM_CLASSES). Uses `.name` (valid for all 55
-    classes, incl. HUD ids), NOT `.tile` (None for HUD-class detections --
-    see `recognize.detector.Detection`)."""
-    out = []
-    for d in dets:
-        if d.cls < NUM_CLASSES:
-            continue
-        out.append((d.name, tuple(int(v) for v in d.xyxy)))
-    return out
+    """Detector output -> assemble_hud's `dets` arg: Detection objects, HUD
+    classes only (id >= tiles.NUM_CLASSES). assemble_hud now reads `.name`/
+    `.xyxy` straight off the Detection (valid for all 56 classes, incl. HUD
+    ids -- NOT `.tile`, which is None for HUD-class detections; see
+    `recognize.detector.Detection`), so this just filters out tile-class
+    detections and passes the Detection objects through unchanged."""
+    return [d for d in dets if d.cls >= NUM_CLASSES]
 
 
 # --- --selftest oracle stand-ins --------------------------------------------
