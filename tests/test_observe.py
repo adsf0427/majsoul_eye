@@ -227,6 +227,17 @@ assert _o.reach[1] is True                # ...but the accepted riichi is stick-
 print("test_observe reach projection OK")
 
 
+# --- riichi requires a closed hand (ankan-only) -------------------------------
+bad = _hud_obs(reach=[False, True, False, False])
+bad.melds[1] = [ObservedMeld("pon", ["5p", "5p", "5p"], called_pai="5p", from_rel=3)]
+assert any("riichi with open melds" in m for m in check_observed(bad))
+
+ok = _hud_obs(reach=[False, True, False, False])
+ok.melds[1] = [ObservedMeld("ankan", ["9s", "9s", "9s", "9s"])]
+assert not any("riichi with open melds" in m for m in check_observed(ok))
+print("test_observe riichi closed-hand guard OK")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

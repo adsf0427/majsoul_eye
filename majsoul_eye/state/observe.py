@@ -138,6 +138,15 @@ def check_observed(o: ObservedState) -> list[str]:
             - (1 if o.drawn_tile else 0)
         if abs(pred - o.left_tile_count) > 1:
             v.append(f"wall count {o.left_tile_count} vs predicted {pred} (>1 off)")
+
+    # Riichi requires a closed hand (ankan is the only meld type allowed under
+    # riichi). A reach flag on a seat holding open melds (chi/pon/daiminkan/
+    # kakan) is detector noise (phantom reach stick / misread sideways tile),
+    # not a legal state — reject rather than emit illegal mjai. Not HUD-gated:
+    # fires whenever reach[r] is True regardless of source (sideways or stick).
+    for r in range(4):
+        if o.reach[r] and any(m.type != "ankan" for m in o.melds[r]):
+            v.append(f"seat {r} riichi with open melds")
     return v
 
 
