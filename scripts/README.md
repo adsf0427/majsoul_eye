@@ -79,6 +79,23 @@ Legend: ★ current pipeline step · 🔁 recurring tool · ⚙️ one-off / inf
 
 ---
 
+## `eval/` — board-reconstruction acceptance (QA, not pipeline stages)
+
+| script | role |
+|---|---|
+| `eval_reconstruction.py` 🔁 | 3-layer GT eval: oracle (GT→ObservedState→reconstruct round-trip) / assemble (real frame→detector→assemble vs GT, per-zone errors + `rejected_reasons`) / engine (true vs reconstructed mjai prefix → an mjai bot, decision agreement). |
+| `mortal_stdin.py` 🔴 | mjai stdin/stdout wrapper around `../auto/mycv`'s Mortal for the engine layer (`--engine-cmd "python scripts/eval/mortal_stdin.py {seat}"`). |
+
+---
+
+## `recognize/` — runtime-chain CLI entrypoints (Akagi-free)
+
+| script | role |
+|---|---|
+| `recognize_frame.py` 🔁 | screenshot(s) → `TileDetector`+`assemble`+`reconstruct` → JSON lines (ObservedState + legal mjai sequence; rejected frames report violations). `--weights` defaults to the newest `weights/detector/tile_detector_obb_*.pt`. |
+
+---
+
 ## Dependencies (mind these when moving files)
 
 The import/exec graph is intentionally shallow:
