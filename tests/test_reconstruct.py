@@ -290,6 +290,38 @@ def test_hero_call_pending_chi_from_kamicha():
                             "tsumogiri": False}
 
 
+# --- stick-authoritative reach (spec 2026-07-09 §4) ---------------------------
+# seat1 declared riichi; the declaration tile 5p was pon'd away by seat2 and
+# seat1 has not discarded since -> no sideways tile anywhere for seat1, only
+# the stick (obs.reach[1]). The search must bind seat1's reach to its ghost.
+o = ObservedState()
+o.hero_hand = ["1m"] * 3 + ["2m"] * 3 + ["3m"] * 3 + ["4m"] * 3 + ["9m"]
+o.dora_markers = ["1p"]
+o.rivers[0] = [ObservedRiverTile("1s")]
+o.rivers[2] = [ObservedRiverTile("9p")]
+o.melds[2] = [ObservedMeld("pon", ["5p", "5p", "5p"], called_pai="5p", from_rel=3)]
+o.reach = [False, True, False, False]
+r = reconstruct(o)
+assert r.ok, r.reason
+evs = r.events
+assert {"type": "reach", "actor": 1} in [
+    {k: e[k] for k in ("type", "actor")} for e in evs if e["type"] == "reach"]
+assert any(e["type"] == "reach_accepted" and e["actor"] == 1 for e in evs)
+
+# negative: stick says reach but seat1 has ONLY an upright discard and no ghost
+# (no call anywhere) -> physically contradictory, must be rejected.
+o2 = ObservedState()
+o2.hero_hand = list(o.hero_hand)
+o2.dora_markers = ["1p"]
+o2.rivers[0] = [ObservedRiverTile("1s")]
+o2.rivers[1] = [ObservedRiverTile("5p")]          # upright — NOT a declaration
+o2.reach = [False, True, False, False]
+r2 = reconstruct(o2)
+assert not r2.ok
+
+print("test_reconstruct stick reach OK")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -147,10 +147,11 @@ WINDS = ["E", "S", "W", "N"]
 def observed_from_board(state, include_hud: bool = True) -> ObservedState:
     """Project a replayed BoardState to what the SCREEN shows (eval oracle).
 
-    Relative seats: rel r == abs (hero+r)%4. reach[] is derived from the
-    VISIBLE sideways tile, not state.reach — a riichi whose declaration tile was
-    called away with no later discard is invisible in a single frame, and the
-    projection must be fair to the vision side (known static limitation).
+    Relative seats: rel r == abs (hero+r)%4. reach[] = VISIBLE sideways tile OR
+    state.reach — a riichi whose declaration tile was called away with no later
+    discard has no sideways tile in a single frame, but its on-table stick is
+    still visible, so state.reach[a] (accepted riichi) also counts (matches
+    what the vision side sees via the detected reach stick; spec 2026-07-09 §4).
     Lazy-imports annotate.pipeline for river_sideways_index (keeps this module
     cv2-free unless projecting).
     """
@@ -177,7 +178,9 @@ def observed_from_board(state, include_hud: bool = True) -> ObservedState:
         o.melds[r] = [ObservedMeld(m.type, list(m.tiles), m.called_pai, m.added_pai,
                                    from_rel=((m.from_seat - a) % 4))
                       for m in state.melds[a] if m.type != "nukidora"]
-        o.reach[r] = any(t.sideways for t in o.rivers[r])
+        # sideways tile OR the on-table stick: an accepted riichi whose
+        # declaration tile was called away is still visible via its stick.
+        o.reach[r] = any(t.sideways for t in o.rivers[r]) or state.reach[a]
         o.concealed_counts[r] = None if r == 0 else state.concealed_counts[a]
     if include_hud:
         o.scores = [state.scores[(hero + r) % 4] for r in range(4)]

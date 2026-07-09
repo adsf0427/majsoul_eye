@@ -1,6 +1,6 @@
 """ObservedState schema + single-frame consistency checks (spec 2026-07-05 §3.1)."""
 from majsoul_eye.state.observe import (
-    ObservedMeld, ObservedRiverTile, ObservedState, check_observed)
+    ObservedMeld, ObservedRiverTile, ObservedState, check_observed, observed_from_board)
 
 
 def _minimal():
@@ -199,6 +199,32 @@ o.rivers[2] = [ObservedRiverTile("2s")] * 2                # pred = 70-5 = 65
 assert not any("wall count" in m for m in check_observed(o))
 
 print("test_observe hud cross-checks OK")
+
+
+# --- reach projection: stick-visible riichi survives a called-away tile ------
+from majsoul_eye.state.replay import Replayer
+
+_rp = Replayer()
+for _ev in [
+    {"type": "start_game", "id": 0},
+    {"type": "start_kyoku", "bakaze": "E", "kyoku": 1, "honba": 0, "kyotaku": 0,
+     "oya": 0, "dora_marker": "1p", "scores": [25000] * 4,
+     "tehais": [["1m"] * 3 + ["2m"] * 3 + ["3m"] * 3 + ["4m"] * 3 + ["9m"],
+                ["?"] * 13, ["?"] * 13, ["?"] * 13]},
+    {"type": "tsumo", "actor": 0, "pai": "1s"},
+    {"type": "dahai", "actor": 0, "pai": "1s", "tsumogiri": True},
+    {"type": "tsumo", "actor": 1, "pai": "?"},
+    {"type": "reach", "actor": 1},
+    {"type": "dahai", "actor": 1, "pai": "5p", "tsumogiri": False},
+    {"type": "reach_accepted", "actor": 1},
+    {"type": "pon", "actor": 2, "target": 1, "pai": "5p", "consumed": ["5p", "5p"]},
+    {"type": "dahai", "actor": 2, "pai": "9p", "tsumogiri": False},
+]:
+    _rp.apply(_ev)
+_o = observed_from_board(_rp.state)
+assert _o.rivers[1] == []                 # declaration tile called away
+assert _o.reach[1] is True                # ...but the accepted riichi is stick-visible
+print("test_observe reach projection OK")
 
 
 if __name__ == "__main__":

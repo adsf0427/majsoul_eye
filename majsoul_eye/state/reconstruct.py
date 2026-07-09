@@ -101,19 +101,26 @@ def _search(obs: ObservedState, oya_rel: int) -> Optional[list]:
     side_idx = [next((i for i, t in enumerate(rivers[r]) if t.sideways), None)
                 for r in range(4)]
 
+    # riichi known from the HUD reach stick but declaration tile invisible
+    # (called away with no later discard): the search MUST bind that seat's
+    # reach to one of its ghosts, and may not finish until it has.
+    must_reach = [bool(obs.reach[r]) and side_idx[r] is None for r in range(4)]
+
     def declared(r, cur, rghost):
         if side_idx[r] is None:
             return bool(rghost >> r & 1)
         return cur[r] > side_idx[r] or bool(rghost >> r & 1)
 
-    def all_done(cur, cidx, kkmask):
-        return list(cur) == n and list(cidx) == ncre and kkmask == (1 << len(kakans)) - 1
+    def all_done(cur, cidx, kkmask, rghost):
+        return (list(cur) == n and list(cidx) == ncre
+                and kkmask == (1 << len(kakans)) - 1
+                and all(rghost >> r & 1 for r in range(4) if must_reach[r]))
 
     def go(cur, cidx, kkmask, rghost, actor):
         key = (cur, cidx, kkmask, rghost, actor)
         if key in failed:
             return None
-        if all_done(cur, cidx, kkmask):
+        if all_done(cur, cidx, kkmask, rghost):
             if obs.drawn_tile is not None:
                 return [("draw", 0)] if actor == 0 else None
             return []
@@ -125,7 +132,7 @@ def _search(obs: ObservedState, oya_rel: int) -> Optional[list]:
 
     def decide(cur, cidx, kkmask, rghost, actor, drew):
         if (drew and actor == 0 and obs.drawn_tile is not None
-                and all_done(cur, cidx, kkmask)):
+                and all_done(cur, cidx, kkmask, rghost)):
             return []
         # (a) plain visible discard
         if cur[actor] < n[actor]:
@@ -167,14 +174,16 @@ def _search(obs: ObservedState, oya_rel: int) -> Optional[list]:
             ncidx = list(cidx)
             ncidx[o] += 1
             variants = [False]
-            if side_idx[actor] is not None and cur[actor] == side_idx[actor] \
-                    and not declared(actor, cur, rghost):
-                variants.append(True)          # bind the reach to this ghost
+            if not declared(actor, cur, rghost):
+                if side_idx[actor] is not None and cur[actor] == side_idx[actor]:
+                    variants.append(True)      # bind the reach to this ghost
+                elif must_reach[actor]:
+                    variants.append(True)      # stick-known riichi, tile called away
             for reach_here in variants:
                 nrg = rghost | (1 << actor) if reach_here else rghost
                 pre = [("ghost", actor, it.pai, reach_here), ("call", it)]
                 if it is pending_it:
-                    if all_done(cur, tuple(ncidx), kkmask):
+                    if all_done(cur, tuple(ncidx), kkmask, nrg):
                         return pre       # terminal: hero now owes the discard
                     continue             # the pending call must come last
                 if it.kind == "daiminkan":
