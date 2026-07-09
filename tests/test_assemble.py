@@ -405,7 +405,7 @@ _hud_dets = [
     _D("btn_riichi", (1200, 740, 1360, 790)),
     _D("reach_stick", (900, 500, 1020, 530)),      # below anchor -> rel seat 0 (self)
 ]
-_reader = _StubReader({"round_label": "S3", "wall_count": "余42",
+_reader = _StubReader({"round_label": "S3", "wall_count": "余69",
                        "score_self": "24000", "score_right": "31000",
                        "score_across": "20000", "score_left": "24000",
                        "riichi_stick_count": "x1", "honba_count": "x2",
@@ -413,7 +413,7 @@ _reader = _StubReader({"round_label": "S3", "wall_count": "余42",
 
 o = assemble(_hud_dets, _region, frame_bgr=_frame, hud_reader=_reader)
 assert o.bakaze == "S" and o.kyoku == 3
-assert o.left_tile_count == 42 and o.kyotaku == 1 and o.honba == 2
+assert o.left_tile_count == 69 and o.kyotaku == 1 and o.honba == 2
 assert o.scores == [24000, 31000, 20000, 24000]
 assert o.seat_wind_self == "W"
 assert o.pending_buttons == ["btn_riichi"]
