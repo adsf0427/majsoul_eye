@@ -11,7 +11,8 @@ One JSON object per input image on stdout (JSON lines; --pretty to indent):
   {"file": ..., "ok": bool,            # ok = frame accepted AND reconstructed
    "violations": [...],                # non-empty => frame rejected, rest null
    "observed": {...} | null,           # ObservedState (hand/rivers/melds/dora/reach;
-                                       #  HUD fields null until HudReader lands)
+                                       #  HUD fields read by HudReader (--no-hud to
+                                       #  disable; wide phone frames keep them null))
    "mjai": [...] | null,               # start_game..now; hero abs seat = start_game.id
    "fabricated": {...} | null,         # what reconstruct invented (haipai, defaults)
    "reason": str | null}               # why reconstruct failed (ok=false, no violations)
@@ -51,6 +52,11 @@ def main():
                          "~16:9 fullscreen / wider phone / narrower letterbox)")
     ap.add_argument("--no-reconstruct", action="store_true",
                     help="stop after ObservedState (skip mjai synthesis)")
+    ap.add_argument("--hud-weights", default=None,
+                    help="HudReader weights (default: packaged "
+                         "majsoul_eye/recognize/hud_reader.pt)")
+    ap.add_argument("--no-hud", action="store_true",
+                    help="skip HUD reading (HUD fields stay null)")
     ap.add_argument("--pretty", action="store_true", help="indent JSON output")
     args = ap.parse_args()
 
@@ -67,6 +73,15 @@ def main():
     from majsoul_eye.state.reconstruct import reconstruct
 
     det = TileDetector(weights, device=args.device)
+    reader = None
+    if not args.no_hud:
+        from majsoul_eye.recognize.hudreader import HudReader
+        try:
+            reader = HudReader(args.hud_weights, device=args.device)
+        except FileNotFoundError:
+            print("[recognize_frame] hud_reader weights not found — HUD fields "
+                  "disabled", file=sys.stderr)
+    print(f"[recognize_frame] hud: {'on' if reader else 'off'}", file=sys.stderr)
     # auto: ~16:9 -> fullscreen, wider (phones) -> centered-16:9 board with
     # screen-corner dora rescue, narrower -> letterbox trim
     locate = locate_letterbox if args.letterbox else locate_auto
@@ -78,7 +93,8 @@ def main():
         if img is None:
             out["reason"] = "cannot read image"
         else:
-            obs = assemble(det.predict(img), locate(img))
+            obs = assemble(det.predict(img), locate(img),
+                           frame_bgr=img, hud_reader=reader)
             out["violations"] = obs.violations
             out["observed"] = dataclasses.asdict(obs)
             if obs.violations:
