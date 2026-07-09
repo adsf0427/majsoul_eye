@@ -215,8 +215,80 @@ BTN_ORDER_LTR = True   # display order left->right == buttons_for_ops order —
                        # matches buttons_for_ops's HUD_NAMES-order output.
 
 
+# --- plate segmentation (2026-07-10, STATUS §1.55) --------------------------
+# The brightness gate below is SKIN-DEPENDENT and was silently dropping 46.1% of
+# all GT button frames (92.8% of which had the banner plainly rendered). Those
+# frames kept their image but lost their button labels, so the detector trained
+# them as background: val recall 0/92 on rendered-but-dropped buttons vs 99.3%
+# on labeled ones. Two failure modes, both intrinsic to thresholding gray:
+#   * bright/busy tablecloth or 立绘 -> the mask floods, blobs merge, the merged
+#     blob exceeds BTN_MAX_W and is rejected -> zero candidates;
+#   * a skin whose glyph is DARK (IMG_1964's 吃) -> the glyph never reaches 140.
+#
+# A button is an OVERLAY on an otherwise static zone, so the skin-agnostic signal
+# is |frame - background|, where the background is that game's own median of the
+# zone over frames GT says have no buttons (annotate/btnbg.py). That segments the
+# PLATE (not the glyph), which is what we want to label anyway.
+#
+# CALIBRATED on 30 games of datasets/v5 (mixed skins, ja/zh-Hans/zh-Hant):
+#   plate components measured w 151-248 (median 205), h 66-105 (median 89),
+#   area 6379-18373 (median 12757); minimum gap between adjacent plates 39px, so
+#   a 21-wide closing kernel cannot bridge two buttons. Bounds are widened past
+#   the measured range because a partially-blended plate edge shrinks the
+#   component -- a too-tight bound would silently recreate the very bug this
+#   replaces. Recall 94.8% (count-matched), false positives on no-button frames
+#   0.06%; the ~5% miss is dominated by the genuine not-yet-rendered frames.
+PLATE_DIFF = 30        # gray delta vs background that counts as "overlay here"
+PLATE_MIN_AREA = 5000  # px² @1080p; smallest measured plate component 5647
+PLATE_MIN_W, PLATE_MAX_W = 120, 300
+PLATE_MIN_H, PLATE_MAX_H = 55, 130
+
+
+def locate_button_plates(img, region, bg) -> list[tuple[int, int, int, int]]:
+    """Banner PLATES inside BTN_ZONE by overlay-difference against `bg` (that
+    game's zone background median, gray float32, zone-shaped). x-sorted
+    original-px boxes. Empty list = nothing rendered over the background."""
+    x0, y0, x1, y1 = region.norm_to_px(BTN_ZONE)
+    roi = img[y0:y1, x0:x1]
+    g = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    if g.shape != bg.shape:
+        raise ValueError(f"btn background {bg.shape} != zone {g.shape}; "
+                         "it must be built for this frame geometry")
+    m = (np.abs(g - bg) > PLATE_DIFF).astype(np.uint8) * 255
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((11, 21), np.uint8))
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((7, 7), np.uint8))
+    n, _, stats, _ = cv2.connectedComponentsWithStats(m, 8)
+    out = []
+    for i in range(1, n):
+        # int(): connectedComponentsWithStats yields np.int32, which json.dumps
+        # rejects — these boxes are written straight into the annotation JSONL.
+        x, y, w, h, area = (int(v) for v in stats[i][:5])
+        if (area >= PLATE_MIN_AREA and w > h
+                and PLATE_MIN_W <= w <= PLATE_MAX_W
+                and PLATE_MIN_H <= h <= PLATE_MAX_H):
+            out.append((x0 + x, y0 + y, x0 + x + w, y0 + y + h))
+    return sorted(out)
+
+
+def plate_banner_box(plate_box) -> tuple[int, int, int, int]:
+    """Fixed-size banner (click-area) box centered on a PLATE component.
+
+    Unlike banner_box(), which anchors on the bright-glyph centroid and so
+    inherits its language dependence (measured: the skip box sat 11px further
+    right in ja than in zh-Hans, and 16px right of the true plate center), the
+    plate center is language- and skin-invariant (measured cx: ja 0.6784,
+    zh-Hans 0.6784, zh-Hant 0.6786)."""
+    x0, y0, x1, y1 = plate_box
+    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+    return (cx - BTN_BANNER_W // 2, cy - BTN_BANNER_H // 2,
+            cx + BTN_BANNER_W // 2, cy + BTN_BANNER_H // 2)
+
+
 def locate_button_candidates(img, region) -> list[tuple[int, int, int, int]]:
-    """Bright banner blobs inside BTN_ZONE, x-sorted, as original-px boxes."""
+    """LEGACY brightness gate -- bright GLYPH blobs inside BTN_ZONE, x-sorted, as
+    original-px boxes. Superseded by locate_button_plates(); kept only for callers
+    with no per-game background model (overlay/inspect tools). Do not use it to
+    build training labels: see the calibration note above."""
     x0, y0, x1, y1 = region.norm_to_px(BTN_ZONE)
     roi = img[y0:y1, x0:x1]
     g = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
@@ -232,15 +304,23 @@ def locate_button_candidates(img, region) -> list[tuple[int, int, int, int]]:
     return sorted(out)
 
 
-def button_boxes(img, state, region) -> list[dict]:
+def button_boxes(img, state, region, btn_bg=None) -> list[dict]:
     """GT-expected buttons matched to located candidates by order; emitted
-    px_box is the fixed-size BANNER (click area) anchored on each glyph blob
-    (see BTN_BANNER_* calibration above). Count mismatch -> every box
-    unreliable + flagged (frame contributes no button labels; 宁缺毋滥)."""
+    px_box is the fixed-size BANNER (click area). Count mismatch -> every box
+    unreliable + flagged (frame contributes no button labels; 宁缺毋滥, and
+    build_dataset then drops the frame from the detector set entirely).
+
+    With `btn_bg` (this game's zone background median, see annotate/btnbg.py)
+    the plate segmentation is used and the box centers on the plate. Without it
+    the legacy brightness gate runs, which is skin- and language-biased -- the
+    pipeline always passes btn_bg."""
     expected = buttons_for_ops(state.pending_ops or [])
     if not expected:
         return []
-    cands = [banner_box(c) for c in locate_button_candidates(img, region)]
+    if btn_bg is not None:
+        cands = [plate_banner_box(p) for p in locate_button_plates(img, region, btn_bg)]
+    else:
+        cands = [banner_box(c) for c in locate_button_candidates(img, region)]
     ordered = expected if BTN_ORDER_LTR else expected[::-1]
     if len(cands) != len(expected):
         return [{"name": n,

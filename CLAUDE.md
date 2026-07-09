@@ -123,10 +123,17 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   `hud.py` = GT-driven HUD field/button boxes: `hud_field_boxes` (seed ROI + per-frame ink-snap on
   numeric fields — EXCEPT `wall_count`, a fixed box with zero-padded text `余09` and a presence-only
   ink probe), `button_boxes` (op-GT class assignment against `BTN_ZONE` candidates; emitted boxes are
-  the fixed 250×96 BANNER click area, not the language-dependent glyph blob; oversized/merged
-  candidates rejected; count-mismatch → whole-frame drop), `reach_stick_boxes` (fill gate applies
+  the fixed 250×96 BANNER click area, not the language-dependent glyph blob; count-mismatch → that
+  frame emits NO button labels AND `build_dataset.has_unlabeled_buttons` keeps it out of the detector
+  set entirely — a visible-but-unlabeled button is a background negative, STATUS §1.55),
+  `reach_stick_boxes` (fill gate applies
   only inside the reach window — settled frames trust GT so dark skinned sticks aren't dropped;
   STATUS §1.47). `annotate_frame` calls all three into `rec["hud_boxes"]`.
+  `btnbg.py` = per-game BTN_ZONE background median (`game_btn_background`, from GT-no-button frames);
+  `annotate_frame(..., btn_bg=)` threads it into `hud.locate_button_plates`, which segments the button
+  PLATE as an overlay difference. This REPLACED the `gray>=140` glyph gate, which was skin-dependent
+  and silently dropped 46% of rendered buttons (§1.55). Both pipeline entry points build it per game;
+  omitting it falls back to the legacy gate (inspect tools only).
   `backs.py` = EXPERIMENTAL opt-in (`annotate_frame(..., backs=True)` / `build_datasets.py --backs`,
   default OFF, not in v1/v2): opponent concealed-hand tile-back boxes from GT counts + a calibrated
   fullwarp row grid (手摸切 groundwork; holding seats skipped + flagged, builds drop those frames whole).

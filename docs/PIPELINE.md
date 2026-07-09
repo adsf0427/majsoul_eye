@@ -4,7 +4,15 @@
 > 只要影响 采集/标注/建库/训练 任何一环，**必须同步更新本文**（维护规约见 §8）。
 > 历史沿革与实测结论见 [STATUS.md](STATUS.md)；设计论证见 [DESIGN.md](DESIGN.md)。
 >
-> 最后更新：2026-07-09（**HUD 读取器首训落地**，STATUS §1.53：`hud_reader.pt` 在 v4（100 局，
+> 最后更新：2026-07-10（**按钮标签根因修复**，STATUS §1.55：按钮定位由亮度阈换成
+> **叠加层差分的牌子分割**（`annotate/btnbg.py` 逐局背景中值 + `hud.locate_button_plates`），
+> 并新增数据卫生规则 `build_dataset.has_unlabeled_buttons`——`count_mismatch` 帧**整帧不进检测器集**。
+> 旧亮度阈丢掉 46.1% 的 GT 按钮帧（92.8% 其实已渲染），这些帧却带着图像留在训练集里，
+> 把可见按钮当背景负样本训练：val 上"被丢弃但已渲染"按钮 recall **0/92**，已标注按钮 **99.3%**。
+> 实测标注侧召回 53.9% → **94.9%**，无按钮帧误报 0.06%。
+> ⚠️ **`datasets/v1`–`v5` 的按钮标签全部 STALE**——需 re-annotate + `build_datasets.py <v> --force` + 重训检测器。）
+>
+> 前次：2026-07-09（**HUD 读取器首训落地**，STATUS §1.53：`hud_reader.pt` 在 v4（100 局，
 > 含 ai_session4；manifest 曾因 run_5 信箱两局 0 帧卡在 stage-3，重跑 `deletterbox --inplace` 后
 > `--resume` 补齐）训练完成——CTC exact 0.9692（wall_count 全部为像素=GT−1 时序标签噪声，真误读 0）、
 > round/wind top1 1.0；端到端 `qa_hud.py`（56 类检测器 + assemble_hud，val 局 906 帧）除 wall_count
@@ -148,10 +156,21 @@
   只在余字子区探测是否渲染——旧 42px 收紧种子曾把数字截出全部标签，STATUS §1.47）。
   按钮框：`state.pending_ops`（`state/ops.py` 从 `raw_liqi.data.data.operation.
   operationList` 提取）经 `hud.buttons_for_ops` 得到期望类别集合，与 `BTN_ZONE` 内定位到的
-  候选按 x 序一一对应，发出的框是**恒定 250×96 banner（实际点击区，跨显示语言不变）**而非
-  文字字形框；候选超尺寸（`BTN_MAX_W/H`，并排 banner/特效黏连块）直接拒绝；
+  候选按 x 序一一对应，发出的框是**恒定 250×96 banner（实际点击区）**而非文字字形框。
+  候选定位走**叠加层差分分割**（`annotate/hud.py locate_button_plates`，STATUS §1.55）：按钮是
+  画在静态桌面上的 overlay，故用 `|frame − 本局 BTN_ZONE 背景中值|`（`annotate/btnbg.py
+  game_btn_background`，取该局 GT 无按钮帧的中值，逐局一次）分割出**牌子本体**，再按
+  实测尺寸带（`PLATE_*`：w 120–300、h 55–130、area≥5000，闭核宽 21 < 相邻牌子最小间距 39px）筛选，
+  框心取牌子质心（`plate_banner_box`）。**不再用亮度阈**——旧的 `locate_button_candidates`
+  （`gray≥140` 抓字形亮斑）是皮肤相关的，在花桌布/立绘上掩膜泛滥粘连、在暗字形皮肤上字不过阈，
+  实测丢掉 46.1% 的 GT 按钮帧（其中 92.8% 按钮清晰渲染），且字形锚点带来 ~16px 语言相关偏移；
+  它仅作为无背景模型时的**退化兜底**保留（overlay/inspect 工具）。实测：标注侧按钮召回
+  53.9% → 94.9%，无按钮帧误报 0.06%，牌子质心跨语言一致（ja/zh-Hans/zh-Hant 均 0.678）。
   **检出数 ≠ 期望数则整帧按钮标签丢弃**（`flag:count_mismatch`，
-  宁缺毋滥，与旧 river/meld 门同哲学）。立直宣言/分数滚动窗口（`replay.is_score_anim_window`）
+  宁缺毋滥，与旧 river/meld 门同哲学），且该帧**整帧不进检测器数据集**
+  （`build_dataset.has_unlabeled_buttons`）——按钮就在画面上，只是没定位到，
+  留下图像却不带按钮标签等于把它当背景负样本训练（这正是旧链路 val 上
+  "被丢弃但已渲染"的按钮 recall 0/92、而已标注按钮 99.3% 的原因）。分类器裁剪不受影响。立直宣言/分数滚动窗口（`replay.is_score_anim_window`）
   只把 HUD 框标记不可靠、不丢整帧（牌面标签不受影响）；立直棒的逐框亮度 fill 门也**只在该窗口内**
   生效——settled 帧一律信 GT（暗色皮肤棒 fill 常年 <0.35，无条件门曾把 across/left 槽 16.7%/13.8%
   的棒当背景训练，STATUS §1.47）。
@@ -309,7 +328,7 @@ bash scripts/train/launch_detector.sh obb --dataset v2 --gpus 4,5,6,7
 | `scripts/inspect/count_dora_glow.py` | **现役一次性诊断工具**（非管线环节）：统计每个 tile 类别的「发光实例/总实例」覆盖，判断是否需要为宝牌闪光加专门增强。读 GT 采集（Akagi-free），纯 stdout。见 `docs/superpowers/specs/2026-07-05-dora-glow-aug-design.md` |
 | `scripts/eval/eval_reconstruction.py` | **QA 工具**（非管线环节，局面复原验收）：三层评测——oracle（GT `BoardState` → `ObservedState` → `reconstruct` → `Replayer` 往返一致性，无 GPU 依赖）/ assemble（真实帧 → `TileDetector`（+可选 `HudReader`）→ `assemble` 装配 vs GT 投影，按 zone 报错 + 拒收帧按 violation 类别计数 `rejected_reasons`——HUD 交叉校验新增 `hud_scores`/`hud_kyotaku`/`hud_wall` 三类拒收原因；另打印 HUD 逐字段核对报告 `hud_ok`/`hud_err`/`hud_missing` + `score_anim_rejected` 计数，`--no-hud` 关闭整条 HUD 装配只测 tile-board）/ engine（真实 mjai 前缀 vs 复原序列各喂 `--engine-cmd` 指定的任意 mjai bot，比较最终决策，stdin/stdout JSON lines 契约；`{seat}` 占位符按各序列 `start_game` 的 hero id 实例化——复原序列无 HUD 时 hero 恒在绝对座位 0，与真实序列不同）。oracle 在全量 `captures/raw/ai_session` 上验收 ≥99%（实测见 STATUS §1.52）；单帧 HUD 集成的 assemble 层回归数字见 STATUS §1.54。spec: `docs/superpowers/specs/2026-07-05-board-reconstruction-design.md`、`docs/superpowers/specs/2026-07-09-hud-integration-design.md` |
 | `scripts/eval/mortal_stdin.py` | **QA 辅助工具**（非管线环节）：mjai stdin/stdout 包装 `../auto/mycv` 的 Mortal（version=4 b24c512，`mortal.pth`，cpu），供 `eval_reconstruction --level engine --engine-cmd "python scripts/eval/mortal_stdin.py {seat}"` 用。非 shipped 识别器组件，允许触及 sibling repo |
-| `scripts/recognize/recognize_frame.py` | **🔁 现役工具**（非管线环节，运行时识别链路的 CLI 入口）：截图 → `TileDetector`+`assemble`+`reconstruct` → JSON lines（ObservedState + 合法 mjai 序列 + fabricated 说明；拒收帧给 violations）。`--weights` 默认取 `weights/detector/tile_detector_obb_*.pt` 最新者；宽高比自动分派（~16:9 全幅 / 更宽走 `locate_wide` 居中板+屏角宝牌救援 / 更窄走信箱裁剪，`--letterbox` 可强制）；`--no-reconstruct`/`--pretty`。**HUD 默认开**：自动打包加载 `majsoul_eye/recognize/hud_reader.pt`（`--no-hud` 关闭 / `--hud-weights` 换权重），`assemble(dets, region, frame_bgr, hud_reader)` 用检测框+`HudReader`+原图填充 ObservedState 的 scores/bakaze/kyoku/honba/kyotaku/left_tile_count/seat_wind_self/pending_buttons——**含宽屏手机帧**（2026-07-09 放开 `region.ox==0` 门控：中央面板在手机布局同构渲染，samples/ 16 张实测全字段检出+读数精确，分数/余牌守恒校验兜底；宽屏未验证项=立直棒，暗皮肤按钮欠召回）。Akagi-free，供外部调用/快速检视（手机截图实测可用） |
+| `scripts/recognize/recognize_frame.py` | **🔁 现役工具**（非管线环节，运行时识别链路的 CLI 入口）：截图 → `TileDetector`+`assemble`+`reconstruct` → JSON lines（ObservedState + 合法 mjai 序列 + fabricated 说明；拒收帧给 violations）。`--weights` 默认取 `weights/detector/tile_detector_obb_*.pt` 最新者；宽高比自动分派（~16:9 全幅 / 更宽走 `locate_wide` 居中板+屏角宝牌救援 / 更窄走信箱裁剪，`--letterbox` 可强制）；`--no-reconstruct`/`--pretty`。**HUD 默认开**：自动打包加载 `majsoul_eye/recognize/hud_reader.pt`（`--no-hud` 关闭 / `--hud-weights` 换权重），`assemble(dets, region, frame_bgr, hud_reader)` 用检测框+`HudReader`+原图填充 ObservedState 的 scores/bakaze/kyoku/honba/kyotaku/left_tile_count/seat_wind_self/pending_buttons——**含宽屏手机帧**（2026-07-09 放开 `region.ox==0` 门控：中央面板在手机布局同构渲染，samples/ 16 张实测全字段检出+读数精确，分数/余牌守恒校验兜底；宽屏未验证项=立直棒；暗皮肤按钮欠召回**根因已定位并修复在标注侧**（STATUS §1.55：不是类不均衡，是 46% 可见按钮被当背景负样本训练），待 re-annotate + 重训检测器后复验）。Akagi-free，供外部调用/快速检视（手机截图实测可用） |
 
 ## 5. 数据与权重现状快照（2026-07-06）
 

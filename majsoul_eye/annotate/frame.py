@@ -38,7 +38,8 @@ def _fill(ii: np.ndarray, poly) -> float:
 
 
 def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False,
-                   backs: bool = False, meld_snap_override: dict | None = None) -> dict:
+                   backs: bool = False, meld_snap_override: dict | None = None,
+                   btn_bg: np.ndarray | None = None) -> dict:
     """Full annotation record for one frame. `hand_suspect` marks frames right
     after a kyoku start, where the deal/sort animation may not match GT order.
     `backs` (EXPERIMENTAL, opt-in — see annotate/backs.py) additionally emits
@@ -48,7 +49,12 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
     from annotate.meldsnap.game_meld_overrides — when given, place each seat's meld
     strip at the per-round consensus offset instead of the per-frame snap; pos->None
     (round had no confident consensus) places at the raw template and marks those
-    boxes reliable=False."""
+    boxes reliable=False.
+    `btn_bg` (STATUS §1.55): this game's BTN_ZONE background median from
+    annotate.btnbg.game_btn_background — action buttons are then segmented as
+    overlay PLATES instead of thresholded as bright glyphs. Omitting it falls back
+    to the legacy brightness gate, which is skin- and language-biased; every
+    pipeline caller passes it."""
     Hinv = hom["H_full_inv"]
     full = P.warp_to_full(img, hom["H_full"], hom["full_size"])
     hsv_full = cv2.cvtColor(full, cv2.COLOR_BGR2HSV)   # one conversion feeds all 3 masks
@@ -187,7 +193,7 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
             for b in boxes:
                 b["reliable"] = False
             rec["flags"].append("hud:score_anim")
-        rec["hud_boxes"] = boxes + HUD.button_boxes(img, state, region)
+        rec["hud_boxes"] = boxes + HUD.button_boxes(img, state, region, btn_bg=btn_bg)
     except Exception as e:                       # HUD is best-effort like dora
         rec["flags"].append(f"hud:error:{e}")
         rec["hud_boxes"] = []

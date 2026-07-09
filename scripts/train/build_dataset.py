@@ -57,6 +57,22 @@ import os
 import shutil
 
 
+def has_unlabeled_buttons(rec) -> bool:
+    """True if GT offered a button this frame but the annotator produced no box
+    for it (`flag: count_mismatch`).
+
+    Such a frame is POISON for the detector: the banner is on screen, we just
+    failed to locate it, so writing the image with no button label teaches the
+    net that this background carries no button. Measured on v5 (STATUS §1.55):
+    1009 poisoned train frames vs 1102 properly-labeled ones, and the detector's
+    val recall on rendered-but-dropped buttons was 0/92 (vs 99.3% on labeled
+    ones). Only `count_mismatch` counts -- an unreliable numeric field or a
+    score-anim-dimmed button box leaves nothing unlabeled on screen.
+    """
+    return any(d.get("flag") == "count_mismatch"
+               for d in rec.get("hud_boxes", []))
+
+
 def gate_frame(frame, boxes, crops, clf, tau, max_bad):
     """Return the set of box indices to SKIP for occlusion/mislabel. `boxes` and
     `crops` are aligned; a whole-frame drop returns the indices of every
@@ -235,6 +251,7 @@ def main() -> None:
     from majsoul_eye.capture.gtframes import build_seq_state, load_frames
     from majsoul_eye.annotate import build_homographies, annotate_frame, iter_tile_boxes, crop_box
     from majsoul_eye.annotate import meldsnap as _meldsnap
+    from majsoul_eye.annotate import btnbg as _btnbg
 
     # seq -> frame path (keep 'timeout' frames as before)
     frames = load_frames(args.frames_dir, statuses=("ok", "timeout"))
@@ -256,12 +273,17 @@ def main() -> None:
         hom = None
         seqs = sorted(recs)
         meld_overrides = {}
+        btn_bg = None                       # records already annotated; no pixels needed
         print(f"reuse: {len(recs)} records <- {ann_path}")
     else:
         seq_state = build_seq_state(args.capture)
         hom = build_homographies(1920, 1080)
         seqs = sorted(seq_state)
         meld_overrides = _meldsnap.game_meld_overrides(seq_state, frames, hom)
+        btn_bg = _btnbg.game_btn_background(seq_state, frames)
+        if btn_bg is None:                  # too few button-free frames to model the zone
+            print("WARN: no BTN_ZONE background model — button labels fall back to the "
+                  "legacy brightness gate (skin-biased); expect count_mismatch drops")
 
     crops_dir = os.path.join(args.out, "crops")
     img_dir = os.path.join(args.out, "yolo", "images")
@@ -270,7 +292,7 @@ def main() -> None:
         os.makedirs(d, exist_ok=True)
 
     n_frames = n_crops = n_yolo = n_skip = n_letterbox = n_deal = n_call = 0
-    n_occ_box = n_occ_frame = n_backs_hold = 0
+    n_occ_box = n_occ_frame = n_backs_hold = n_btn_drop = 0
     hud_meta = []
     occ_clf = None
     if args.occlusion_gate:
@@ -325,7 +347,8 @@ def main() -> None:
 
         rec = (recs[seq] if args.from_annotations
                else annotate_frame(frame, seq_state[seq], hom, backs=args.backs,
-                                   meld_snap_override=meld_overrides.get(seq)))
+                                   meld_snap_override=meld_overrides.get(seq),
+                                   btn_bg=btn_bg))
         rec["_seq"] = seq
 
         # Backs experiment: a post-tedashi 理牌 reflow row (backs_sorting, pixel-
@@ -395,6 +418,15 @@ def main() -> None:
                     cv2.imwrite(p, crop)
                     hud_meta.append(meta)
 
+        # A frame whose buttons GT promised but the annotator could not locate must
+        # not enter the DETECTOR set: the banner IS rendered, so an image with no
+        # button label is a false negative that trains suppression (see
+        # has_unlabeled_buttons). The tile crops above are unaffected -- only the
+        # detector loses this frame.
+        if has_unlabeled_buttons(rec):
+            n_btn_drop += 1
+            yolo_lines = []
+
         if yolo_lines and not args.no_yolo:
             if frame is not None:                                        # reuse-images: image already on disk (symlinked)
                 dst = os.path.join(img_dir, f"{seq:06d}.png")
@@ -416,7 +448,8 @@ def main() -> None:
     print(f"frames labeled: {n_frames}  crops: {n_crops}  yolo-imgs: {n_yolo}  "
           f"skipped: {n_skip}  deal-skipped: {n_deal}  call-skipped: {n_call}  letterbox-skipped: {n_letterbox}  "
           f"occ-box-skipped: {n_occ_box}  occ-frame-dropped: {n_occ_frame}  "
-          f"backs-holding-dropped: {n_backs_hold}  hud-crops: {len(hud_meta)}")
+          f"backs-holding-dropped: {n_backs_hold}  btn-mismatch-dropped: {n_btn_drop}  "
+          f"hud-crops: {len(hud_meta)}")
     print(f"dataset -> {args.out}")
 
 
