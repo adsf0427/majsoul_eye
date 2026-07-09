@@ -225,7 +225,7 @@ def main() -> None:
                     help="Opt-in GT-consistency occlusion/mislabel gate (DEFAULT OFF). Runs a "
                          "classifier over every box and DELETES mismatches. Prefer capture-time "
                          "ROI-stability (see capture/roi_diff.py) to avoid occlusion at the source; "
-                         "measured residual is ~0.4%, so this heavier delete-on-build gate is opt-in.")
+                         "measured residual is ~0.4%%, so this heavier delete-on-build gate is opt-in.")
     ap.set_defaults(occlusion_gate=False)
     ap.add_argument("--occ-tau", type=float, default=OCC_TAU,
                     help="Min P(gt_cls) for a top1-mismatch box to still pass the gate.")
