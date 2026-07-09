@@ -250,6 +250,42 @@ def test_hud_class_detections_ignored():
     assert o.melds[2][0].type == "pon"
 
 
+def test_standing_concealed_backs_filtered_from_meld_strips():
+    # Backs-trained weights (2026-07-09) detect opponents' STANDING concealed
+    # hands; 10+ of those backs per seat land inside the meld-strip 60px window
+    # and used to make every strip unparsable (949/949 frames rejected).
+    # Discriminator: a standing tile's perspective smear (screen-vertical)
+    # maps to the strip's ALONG axis for side strips (seats 1/3) and CROSS
+    # axis for the far strip (seat 2) — measured lying<=96 vs standing>=120
+    # fullwarp units against d~92. Ankan lying backs must survive
+    # (test_meld_parse_kans covers that side).
+    import numpy as np, cv2
+    from majsoul_eye.recognize.assemble import assemble
+    hand = ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m",
+            "1p", "2p", "3p", "4p"]
+    dets = _hand_dets(hand) + _dora_dets(["5s"]) + _river_dets(0, ["9p"])
+    base = assemble(list(dets), REGION)
+    assert base.violations == []
+    Hinv = np.linalg.inv(H["H_full"])
+    for seat in (1, 2, 3):
+        cfg = P.MELD_STRIP2[seat]
+        corner = np.array(cfg["corner"], dtype=float)
+        u, v = np.array(cfg["along"], dtype=float), np.array(cfg["cross"], dtype=float)
+        smear = 1.5 * cfg["d"]
+        ea, ec = ((smear, 0.75 * cfg["d"]) if seat in (1, 3)
+                  else (cfg["w"], smear))          # (ext_along, ext_cross)
+        for i in range(3):
+            fw = np.float32([corner + u * (i * cfg["w"]) + v * 0,
+                             corner + u * (i * cfg["w"] + ea) + v * 0,
+                             corner + u * (i * cfg["w"] + ea) + v * ec,
+                             corner + u * (i * cfg["w"]) + v * ec])
+            quad = cv2.perspectiveTransform(fw[None], Hinv.astype(np.float64))[0]
+            dets.append(_det_from_poly(quad.tolist(), "back"))
+    o = assemble(dets, REGION)
+    assert o.violations == []
+    assert all(o.melds[s] == [] for s in (1, 2, 3))
+
+
 def test_full_frame_feeds_reconstruct():
     from majsoul_eye.recognize.assemble import assemble
     from majsoul_eye.state.reconstruct import reconstruct

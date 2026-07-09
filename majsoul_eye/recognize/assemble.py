@@ -280,6 +280,19 @@ def assemble(dets, region: BoardRegion) -> ObservedState:
                 o.violations.append(
                     f"stray detection {det.tile} ({best[0]:.0f}px off-zone)")
             continue
+        if det.tile == "back" and best[1] == "meld" and best[2] != 0:
+            # Backs-trained detectors see opponents' STANDING concealed hands,
+            # and 10+ of those backs per seat fall inside the strip window —
+            # only LYING backs (ankan) belong in a meld strip. A standing
+            # tile's perspective smear (screen-vertical) maps onto the strip's
+            # ALONG axis for the side strips (seats 1/3) and CROSS axis for
+            # the far strip (seat 2): measured lying <= 96 vs standing >= 120
+            # fullwarp units (d ~ 92) -> threshold 1.15*d. Hero (seat 0) never
+            # shows standing backs, so is exempt.
+            cfg = P.MELD_STRIP2[best[2]]
+            pu = pts @ np.array(cfg["along"] if best[2] in (1, 3) else cfg["cross"])
+            if float(pu.max() - pu.min()) > 1.15 * cfg["d"]:
+                continue
         (per_river if best[1] == "river" else per_meld)[best[2]].append((det, pts))
         note(f"{best[1]}{best[2]}", det)
 
