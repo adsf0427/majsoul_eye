@@ -28,4 +28,14 @@ assert relpath.startswith("score_self/")
 # 180° field comes out rotated-to-upright: crop of across (35px tall box +pad)
 _, img2, meta2 = crops[1]
 assert meta2["name"] == "score_across" and img2.shape[0] > 0
+
+# text_reliable=False (score-anim window): detector line still emitted, reader
+# crop skipped — geometry is right, only the rendered TEXT may lag GT.
+rec2 = {"hud_boxes": [
+    {"name": "score_self", "px_box": [900, 460, 1000, 500], "text": "25000",
+     "text_reliable": False},
+]}
+lines2, crops2 = bd.hud_emit(rec2, frame, 1920, 1080, obb=False)
+assert len(lines2) == 1 and lines2[0].startswith(f"{HUD_NAME_TO_ID['score_self']} ")
+assert crops2 == []
 print("test_hud_dataset OK")

@@ -125,11 +125,11 @@ def hud_field_boxes(img: np.ndarray, state, region) -> list[dict]:
 # (192 resp. 201 of them with fill>=0.1, i.e. rendered dim skins — measured on
 # a sword-skin frame: fill 0.264) — worse than dropped: those frames still
 # trained the detector with the stick as BACKGROUND. Off-window frames now
-# trust GT regardless of fill. In-window frames are already excluded from HUD
-# label emission wholesale by build_dataset's frame-level is_score_anim_window
-# gate (working since Task 18's last_event_types fix); this per-box check
-# remains as the finer, per-seat safety net for other consumers of the
-# annotations. NOTE the stale-fallback residual (see is_call_window docstring):
+# trust GT regardless of fill. In-window this per-box check is the PRIMARY
+# defense (2026-07-10): build_dataset no longer skips score-anim frames
+# wholesale — HUD boxes keep their YOLO lines (fields carry text_reliable=False
+# for the reader instead), so an in-window stick mid-render is dropped only by
+# this gate. NOTE the stale-fallback residual (see is_call_window docstring):
 # a zero-event record inherits the previous record's last_event_types, which
 # can only over-gate (conservative) here.
 REACH_FILL_OK = 0.35

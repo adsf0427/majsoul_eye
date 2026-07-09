@@ -23,10 +23,12 @@ HUD fields/buttons (``rec["hud_boxes"]``, from ``annotate_frame`` — see
 ``majsoul_eye.hud`` for the 17-class taxonomy) are emitted the same way: reliable
 boxes become extra YOLO lines (classes 38-54); boxes that also carry ``text``
 (numeric/round fields, not buttons) additionally get a padded, upright-rotated
-reader crop under ``hud/``. Score-roll/riichi-stick animation frames
-(``is_score_anim_window``) are skipped for HUD entirely — belt-and-suspenders on
-top of Task 8's per-box ``reliable`` flag. Old (pre-HUD) ``--from-annotations``
-records simply lack ``hud_boxes`` and silently emit no HUD labels/crops.
+reader crop under ``hud/``. Score-roll/riichi-stick animation frames keep their
+YOLO lines (geometry is valid mid-animation) and skip only the reader crops via
+the per-box ``text_reliable`` flag (annotate.frame sets it in-window). Old
+(pre-HUD) ``--from-annotations`` records simply lack ``hud_boxes`` and silently
+emit no HUD labels/crops; pre-2026-07-10 records carry the old blanket
+``reliable=False`` and keep their old (fully skipped) behavior.
 
 The precise geometry is calibrated at 1920x1080 fullscreen 16:9; frames are
 resized to that. Non-16:9 / letterboxed frames are skipped with a warning (their
@@ -164,9 +166,11 @@ def hud_emit(rec, frame, w, h, obb):
         lines.append(obb_label_line(cls, quad, w, h) if obb
                      else hbb_label_line(cls, quad, w, h))
         text = d.get("text")
-        if text is None or frame is None:
-            # frame is None under --reuse-images (label-only, no pixels loaded) — the
-            # YOLO line above still stands, but there's nothing to crop from.
+        if text is None or frame is None or not d.get("text_reliable", True):
+            # No text (buttons/reach_stick), label-only reuse mode (frame is
+            # None), or score-anim window (text_reliable=False: geometry good,
+            # rendered text may lag GT) — the YOLO line above still stands,
+            # but no reader crop.
             continue
         px, py = int((x1 - x0) * PAD), int((y1 - y0) * PAD)
         cy0, cy1 = max(0, y0 - py), min(h, y1 + py)
@@ -247,7 +251,7 @@ def main() -> None:
 
     from majsoul_eye import paths
     from majsoul_eye.tiles import NAME_TO_ID
-    from majsoul_eye.state.replay import check_invariants, is_deal_window, is_call_window, is_score_anim_window
+    from majsoul_eye.state.replay import check_invariants, is_deal_window, is_call_window
     from majsoul_eye.capture.gtframes import build_seq_state, load_frames
     from majsoul_eye.annotate import build_homographies, annotate_frame, iter_tile_boxes, crop_box
     from majsoul_eye.annotate import meldsnap as _meldsnap
@@ -405,18 +409,19 @@ def main() -> None:
                     n_crops += 1
 
         # HUD fields/buttons -> 55-class YOLO lines + reader crops (hud/<field>/<seq>.png).
-        # belt-and-suspenders with Task 8's per-box `reliable` flag: is_score_anim_window
-        # tolerates state=None (annotations-reuse path can have seqs with missing state).
-        if not is_score_anim_window(state):
-            hlines, hcrops = hud_emit(rec, frame, w, h, args.obb)
-            if not args.no_yolo:
-                yolo_lines += hlines
-            if not args.no_crops:
-                for rel, crop, meta in hcrops:
-                    p = os.path.join(args.out, "hud", rel)
-                    os.makedirs(os.path.dirname(p), exist_ok=True)
-                    cv2.imwrite(p, crop)
-                    hud_meta.append(meta)
+        # Emitted on EVERY frame: score-anim frames keep valid geometry (their
+        # boxes carry text_reliable=False, so hud_emit skips only the reader
+        # crops), and per-box `reliable` still gates everything else. The old
+        # whole-frame skip left 410 rendered HUDs as background negatives.
+        hlines, hcrops = hud_emit(rec, frame, w, h, args.obb)
+        if not args.no_yolo:
+            yolo_lines += hlines
+        if not args.no_crops:
+            for rel, crop, meta in hcrops:
+                p = os.path.join(args.out, "hud", rel)
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                cv2.imwrite(p, crop)
+                hud_meta.append(meta)
 
         # A frame whose buttons GT promised but the annotator could not locate must
         # not enter the DETECTOR set: the banner IS rendered, so an image with no
