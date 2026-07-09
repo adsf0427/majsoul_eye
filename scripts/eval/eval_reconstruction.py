@@ -57,8 +57,8 @@ def diff_zones(a, b):
 
 
 _REJECT_CATS = (            # ordered: first substring hit wins per message
+    ("scores sum", "hud_scores"),  # "scores sum" first: its message text also contains "kyotaku"
     ("kyotaku", "hud_kyotaku"),
-    ("scores sum", "hud_scores"),
     ("wall count", "hud_wall"),
     ("stray detection", "stray"),
     ("meld strip", "meld_parse"),          # unparsable + ambiguous

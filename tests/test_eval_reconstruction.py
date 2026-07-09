@@ -56,6 +56,13 @@ def test_diff_zones_sees_called_pai_and_added_pai():
     assert "melds" not in diff_zones(a, b)
 
 
+def test_reject_categories_ordering_scores_before_kyotaku():
+    # "scores sum" message text contains "kyotaku", so it must be checked FIRST.
+    assert reject_categories(["scores sum 101000 + 1000*1 kyotaku != 100000"]) == {"hud_scores"}
+    assert reject_categories(["kyotaku 0 < visible riichi count 1"]) == {"hud_kyotaku"}
+    assert reject_categories(["wall count 60 vs predicted 64 (>1 off)"]) == {"hud_wall"}
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
