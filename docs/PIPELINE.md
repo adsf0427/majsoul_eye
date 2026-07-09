@@ -4,7 +4,14 @@
 > 只要影响 采集/标注/建库/训练 任何一环，**必须同步更新本文**（维护规约见 §8）。
 > 历史沿革与实测结论见 [STATUS.md](STATUS.md)；设计论证见 [DESIGN.md](DESIGN.md)。
 >
-> 最后更新：2026-07-07（**HUD 标签三修 + v4 重建**，STATUS §1.47：`wall_count` 固定框 + GT 补零
+> 最后更新：2026-07-09（**HUD 读取器首训落地**，STATUS §1.53：`hud_reader.pt` 在 v4（100 局，
+> 含 ai_session4；manifest 曾因 run_5 信箱两局 0 帧卡在 stage-3，重跑 `deletterbox --inplace` 后
+> `--resume` 补齐）训练完成——CTC exact 0.9692（wall_count 全部为像素=GT−1 时序标签噪声，真误读 0）、
+> round/wind top1 1.0；端到端 `qa_hud.py`（56 类检测器 + assemble_hud，val 局 906 帧）除 wall_count
+> 78.3%（同一时序噪声）与按钮帧 recall 32/41（采集时序）外全字段 100%。修复两处：`train_hudreader.py`
+> 兼容 manifest `val` 列表；round/wind CE 头补 `_augment_crop` 增广（无增广时对固定取景过拟合，
+> 运行时检测框上 round 26.7%/wind 72.7% → 增广后双双 100%）。）
+> 前次：2026-07-07（**HUD 标签三修 + v4 重建**，STATUS §1.47：`wall_count` 固定框 + GT 补零
 > `余09`（旧 42px 收紧种子把数字截出了全部标签）；立直棒 fill 门限缩到声明窗口内（暗皮肤棒不再被当
 > 背景训练，across/left 各救回 16.7%/13.8%）；按钮框改恒定 250×96 banner 点击区（跨语言不变）+
 > 黏连候选上限拒绝。现役数据集 **`datasets/v4`**（71 局全量重建）。）
@@ -12,7 +19,7 @@
 > ink-snap + 按钮 op-GT 赋类 + count-mismatch 丢弃）、build 出 **56 类**（38 牌 + 17 HUD/按钮 +
 > 立直棒，`majsoul_eye/hud.py`）YOLO + `hud/` 读取器训练对、新丢帧谓词 `is_call_window`、采集侧
 > `--op-delay` + multi-shot extras（`status="extra"` 下游默认不可见、`dt` 字段）、新入口
-> `train_hudreader.py`/`eval_detector_split.py`/`qa_hud.py`——代码全通，**HUD 训练待 v2 重建后跑**
+> `train_hudreader.py`/`eval_detector_split.py`/`qa_hud.py`——代码全通，HUD 读取器已于 07-09 在 v4 训练（见上）
 > （STATUS §1.41）。dev 线：`launch_classifier.sh` 启动器、现役数据集 **`datasets/v2`**（28 局纯 AI，
 > 源根限定命名）、检测器权重版本化 + OBB 提权现役默认、一次性脚本清理（STATUS §1.32–§1.39）。
 > ⚠️ v2 建于 HUD 合并前：labels 为 38 类、无 `hud/`——**跑 HUD 训练前需以合并后代码重建 v2**。）

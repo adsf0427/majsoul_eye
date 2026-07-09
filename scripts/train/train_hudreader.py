@@ -47,11 +47,13 @@ from majsoul_eye.recognize.hudreader import DigitCTC, _strip, ctc_decode, encode
 
 # ---- dataset manifest expansion (mirrors train_classifier.py's --dataset) -----
 
-def dataset_hud_specs(ds_dir: str) -> tuple[str | None, list[tuple[str, str]]]:
+def dataset_hud_specs(ds_dir: str) -> tuple[list[str] | None, list[tuple[str, str]]]:
     """Expand a versioned dataset's ``games.json`` into ``(name, hud_dir)`` tuples
-    + the manifest's held-out ``val`` game name (whole-game hold-out, see module
-    docstring). ``hud_dir`` may not exist for datasets built before Task 9 (no HUD
-    crops emitted yet) — callers must tolerate a missing ``labels.jsonl``."""
+    + the manifest's held-out ``val`` game names (whole-game hold-out, see module
+    docstring). ``write_manifest`` stores ``val`` as a LIST (multi-val convention);
+    a legacy scalar is normalized to a one-element list. ``hud_dir`` may not exist
+    for datasets built before Task 9 (no HUD crops emitted yet) — callers must
+    tolerate a missing ``labels.jsonl``."""
     manifest = os.path.join(ds_dir, "games.json")
     if not os.path.exists(manifest):
         raise SystemExit(f"{manifest} not found — is {ds_dir!r} a dataset version built by "
@@ -59,19 +61,20 @@ def dataset_hud_specs(ds_dir: str) -> tuple[str | None, list[tuple[str, str]]]:
     m = json.load(open(manifest, encoding="utf-8"))
     specs = [(g["name"], os.path.join(ds_dir, g["dir"], "hud").replace(os.sep, "/"))
              for g in m["games"]]
-    return m.get("val"), specs
+    val = m.get("val")
+    return ([val] if isinstance(val, str) else val), specs
 
 
-def load_rows(games: list[tuple[str, str]], val_name: str) -> tuple[list[dict], list[dict]]:
+def load_rows(games: list[tuple[str, str]], val_names: list[str]) -> tuple[list[dict], list[dict]]:
     """Read every game's hud/labels.jsonl -> rows {"path","text","pad","field"},
-    split train/val by WHOLE GAME (name == val_name -> val)."""
+    split train/val by WHOLE GAME (name in val_names -> val)."""
     train, val = [], []
     for name, hud_dir in games:
         lp = os.path.join(hud_dir, "labels.jsonl")
         if not os.path.exists(lp):
             print(f"note: no {lp} — skipping game {name!r} (built before HUD crops existed?)")
             continue
-        bucket = val if name == val_name else train
+        bucket = val if name in val_names else train
         for line in open(lp, encoding="utf-8"):
             r = json.loads(line)
             bucket.append({
@@ -83,10 +86,15 @@ def load_rows(games: list[tuple[str, str]], val_name: str) -> tuple[list[dict], 
 
 # ---- CTC sub-training -----------------------------------------------------
 
-def _augment_ctc(bgr: np.ndarray, pad: float, jitter: float = 0.08) -> np.ndarray:
+def _augment_crop(bgr: np.ndarray, pad: float, jitter: float = 0.08) -> np.ndarray:
     """Random re-crop within the stored pad (simulates an imperfect detector box)
     + brightness jitter. Re-crop is bounded by min(jitter, pad) per side so it
-    never eats into the true field content when pad < jitter."""
+    never eats into the true field content when pad < jitter. Shared by the CTC
+    strips AND the round/wind CE heads: the dataset crops are fixed-ROI ink-snap
+    (near-identical framing every frame), so a head trained without this jitter
+    overfits the exact framing and collapses on the detector's tighter runtime
+    boxes (measured: round_label 26.7% / seat_wind 72.7% end-to-end vs 100%
+    crop-level before augmentation was applied to the CE heads)."""
     j = min(jitter, pad)
     h, w = bgr.shape[:2]
     x0 = int(round(w * random.uniform(0, j)))
@@ -114,7 +122,7 @@ class CtcDS(Dataset):
         r = self.rows[i]
         img = cv2.imread(r["path"])
         if self.train:
-            img = _augment_ctc(img, r["pad"])
+            img = _augment_crop(img, r["pad"])
         x = _strip(img)[0]                       # 1x32xW (drop _strip's batch dim)
         y = torch.tensor(encode_text(r["text"]), dtype=torch.long)
         return x, y, r["text"]
@@ -192,8 +200,8 @@ def train_ctc(rows_train, rows_val, epochs, batch, workers, dev):
 # ---- round / wind CE sub-trainings (share TileNet + classifier.preprocess) ----
 
 class ClsDS(Dataset):
-    def __init__(self, rows: list[dict], classes: list[str]):
-        self.rows = rows; self.classes = classes
+    def __init__(self, rows: list[dict], classes: list[str], train: bool = False):
+        self.rows = rows; self.classes = classes; self.train = train
 
     def __len__(self):
         return len(self.rows)
@@ -201,6 +209,8 @@ class ClsDS(Dataset):
     def __getitem__(self, i):
         r = self.rows[i]
         img = cv2.imread(r["path"])
+        if self.train:
+            img = _augment_crop(img, r["pad"], jitter=0.15)
         return preprocess(img), self.classes.index(r["text"])
 
 
@@ -210,7 +220,8 @@ def train_cls(tag, rows_train, rows_val, classes, epochs, batch, workers, dev):
         print(f"[{tag}] 0 train samples — skipping (checkpoint keeps random-init weights)")
         return {k: v.cpu().clone() for k, v in model.state_dict().items()}, None
 
-    tl = DataLoader(ClsDS(rows_train, classes), batch_size=batch, shuffle=True, num_workers=workers)
+    tl = DataLoader(ClsDS(rows_train, classes, train=True), batch_size=batch, shuffle=True,
+                    num_workers=workers)
     vl = (DataLoader(ClsDS(rows_val, classes), batch_size=batch, num_workers=workers)
           if rows_val else None)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
@@ -248,9 +259,9 @@ def main():
     ap.add_argument("--dataset", action="append", default=None,
                     help="versioned dataset dir with games.json (scripts/data/build_datasets.py); "
                          "repeatable — collects every game's hud/labels.jsonl.")
-    ap.add_argument("--val", default=None,
-                    help="held-out whole game name (default: the 'val' field of the LAST "
-                         "--dataset manifest that defines one).")
+    ap.add_argument("--val", action="append", default=None,
+                    help="held-out whole game name (repeatable; default: the 'val' list of "
+                         "the FIRST --dataset manifest that defines one).")
     ap.add_argument("--out", default="majsoul_eye/recognize/hud_reader.pt")
     ap.add_argument("--epochs", type=int, default=20, help="epochs for EACH of the 3 sub-trainings")
     ap.add_argument("--batch", type=int, default=64)
@@ -262,19 +273,20 @@ def main():
         ap.error("need --dataset (repeatable)")
 
     games: list[tuple[str, str]] = []
-    val_name = args.val
+    val_names = args.val
     for dsd in args.dataset:
         v, specs = dataset_hud_specs(dsd)
         games += specs
-        if val_name is None:
-            val_name = v
+        if val_names is None:
+            val_names = v
     names = [n for n, _ in games]
-    if val_name is None:
+    if not val_names:
         ap.error("no --val given and no --dataset manifest defines one")
-    if val_name not in names:
-        ap.error(f"--val {val_name!r} not among discovered games {names}")
+    missing = [v for v in val_names if v not in names]
+    if missing:
+        ap.error(f"--val {missing!r} not among discovered games {names}")
 
-    train_rows, val_rows = load_rows(games, val_name)
+    train_rows, val_rows = load_rows(games, val_names)
     ctc_train = [r for r in train_rows if r["field"] in NUMERIC_FIELDS]
     ctc_val = [r for r in val_rows if r["field"] in NUMERIC_FIELDS]
     round_train = [r for r in train_rows if r["field"] == "round_label"]
@@ -282,7 +294,7 @@ def main():
     wind_train = [r for r in train_rows if r["field"] == "seat_wind_self"]
     wind_val = [r for r in val_rows if r["field"] == "seat_wind_self"]
 
-    print(f"games={names}  val={val_name}")
+    print(f"games={names}  val={val_names}")
     print(f"ctc:   train={len(ctc_train)}  val={len(ctc_val)}  "
          f"(fields: {dict(Counter(r['field'] for r in ctc_train))})")
     print(f"round: train={len(round_train)}  val={len(round_val)}")
@@ -304,7 +316,7 @@ def main():
         "ctc": ctc_sd, "round": round_sd, "wind": wind_sd,
         "charset": CTC_CHARSET,
         "meta": {
-            "games": names, "val": val_name, "epochs": args.epochs,
+            "games": names, "val": val_names, "epochs": args.epochs,
             "ctc_exact_match": ctc_acc, "round_top1": round_acc, "wind_top1": wind_acc,
             "trained_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         },

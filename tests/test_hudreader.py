@@ -22,4 +22,27 @@ assert ctc_decode(logits) == "250"
 for s in ("25000", "余64", "x2", "-1200"):
     enc = encode_text(s)
     assert all(1 <= i <= len(CTC_CHARSET) for i in enc)
+
+# manifest expansion: build_datasets.write_manifest stores "val" as a LIST of
+# held-out game names (multi-val convention); older hand-written manifests may
+# still carry a scalar. dataset_hud_specs must yield the val names either way.
+import json
+import os
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "train"))
+from train_hudreader import dataset_hud_specs, load_rows  # noqa: E402
+
+with tempfile.TemporaryDirectory() as td:
+    for val_field, want in ((["g2"], ["g2"]), ("g2", ["g2"]), (["g1", "g2"], ["g1", "g2"])):
+        with open(os.path.join(td, "games.json"), "w", encoding="utf-8") as f:
+            json.dump({"val": val_field,
+                       "games": [{"name": "g1", "dir": "g1"}, {"name": "g2", "dir": "g2"}]}, f)
+        vals, specs = dataset_hud_specs(td)
+        assert vals == want, (val_field, vals)
+        assert [n for n, _ in specs] == ["g1", "g2"]
+    # split is by val NAME LIST (missing labels.jsonl -> both empty, but no crash)
+    train, val = load_rows(specs, ["g2"])
+    assert train == [] and val == []
 print("test_hudreader OK")
