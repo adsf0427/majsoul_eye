@@ -90,8 +90,11 @@ def test_back_boxes_labels_holding_row_plus_drawn():
     assert len(rec["2"]) == 14
     drawn = [b for b in rec["2"] if b.get("drawn")]
     assert len(drawn) == 1 and drawn[0]["slot"] == 13
-    # black frame -> every emitted box fails the live-fill check
-    assert all(b.get("reliable") is False for b in rec["1"] + rec["2"] + rec["3"])
+    # black frame: fill is still RECORDED (diagnostic) but no longer gates
+    # reliability — the gate had zero discriminative power (empty felt reads
+    # 1.00 on every table, dark backs 0.24; spec 2026-07-10).
+    assert all(b.get("reliable", True) for b in rec["1"] + rec["2"] + rec["3"])
+    assert all("fill" in b for b in rec["1"] + rec["2"] + rec["3"])
 
 
 def test_holding_row_matches_settled_geometry():
@@ -117,6 +120,25 @@ def test_annotate_frame_backs_opt_in():
     assert set(rec["back_boxes"]) == {"1", "2", "3"}
     ob = [b for b in iter_tile_boxes(rec) if b.zone == "oppback"]
     assert len(ob) == 39 and all(b.tile == "back" for b in ob)
+
+
+def test_dark_backs_stay_reliable():
+    # A dark tile back (S<=60 AND V<=110 -> tile_live_mask reads 0, e.g. the
+    # RML skin: S~59 V~55) must keep its label; fill collapses but reliability
+    # must not. This was the 5%-kept-backs bug on skinned games.
+    img = np.full((1080, 1920, 3), 55, np.uint8)         # V=55, S=0 everywhere
+    st = _state()
+    rec, flags = back_boxes(img, st, HOM)
+    boxes = rec["1"] + rec["2"] + rec["3"]
+    assert len(boxes) == 39
+    assert all(b.get("reliable", True) for b in boxes)
+    assert all(b["fill"] == 0.0 for b in boxes)          # diagnostic still recorded
+    assert not any("low_fill" in f for f in flags)
+
+
+def test_fill_ok_backs_removed():
+    import majsoul_eye.annotate.backs as B_mod
+    assert not hasattr(B_mod, "FILL_OK_BACKS")
 
 
 _TILE_STATS, _FELT_STATS = (100.0, 40.0), (30.0, 5.0)

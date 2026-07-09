@@ -34,9 +34,12 @@ kept below in BACK_ROWS as the coarse reference — see STATUS.md §1.45):
     the row is the same templates, the drawn tile sits in the fixed drawn slot
     (STATUS §1.46, correcting the earlier belief that holding was underivable;
     that reasoning actually belonged to the POST-tedashi reflow, which the
-    ``sorting_suspect`` pixel gate handles on settled frames). Only the
-    slide-in draw animation can leave the drawn tile unrendered — caught per-box
-    by the fill check, not a whole-frame drop.
+    ``sorting_suspect`` pixel gate handles on settled frames). The slide-in
+    draw animation can in principle leave the drawn tile unrendered for a
+    beat; the debounce-to-quiet capture sync makes that residual rare, and no
+    per-box pixel gate covers it since the fill gate was removed (2026-07-10 —
+    it had zero discriminative power on these edge-on rows; ``fill`` is now a
+    QA diagnostic only).
 """
 from __future__ import annotations
 
@@ -67,7 +70,6 @@ BACK_ROWS = {
         "cross": (552.0, 692.0), "anchor": "low", "meld_bias": 0.0},
 }
 DRAWN_GAP = 25.0        # fullwarp px, sprite-run edge gap (manual centroid gap ≈ 36)
-FILL_OK_BACKS = 0.25    # tile_live_mask coverage below this = not rendered / occluded
 
 
 def _axis(pos: int) -> int:
@@ -221,10 +223,16 @@ def sorting_suspect(img: np.ndarray, pos: int, row_n: int, n_melds: int, H_full_
 def back_boxes(img: np.ndarray, state, hom: dict):
     """(rec_dict, flags) for all three opponent seats of one frame.
 
-    rec_dict maps str(pos) -> box list (empty for skipped/holding seats). ``fill``
-    is skin-agnostic tile_live_mask coverage of the original-px bbox; below
-    FILL_OK_BACKS the box is flagged unreliable (GT-leads-render / occlusion),
-    matching the module-wide "reliable is only ever SET False" policy.
+    rec_dict maps str(pos) -> box list (empty for skipped seats). ``fill``
+    (tile_live_mask coverage of the original-px bbox) is recorded as a QA
+    diagnostic only. It does NOT gate reliability: for these edge-on rows the
+    skewed quad's bbox is mostly felt, and every mahjong felt is colored or
+    bright, so empty felt reads 1.00 on every table while a dark skinned back
+    reads 0.24 — the positive class scores BELOW the negative and no threshold
+    separates them (measured 2026-07-10; the mask stays valid in the dora/meld
+    role it was calibrated for). GT-leads-render protection comes from
+    is_deal_window / is_call_window (whole-frame drops) and sorting_suspect
+    (Condition A).
     """
     from majsoul_eye.annotate.seatgt import _screen_to_seat, SEAT_POS
 
@@ -259,9 +267,6 @@ def back_boxes(img: np.ndarray, state, hom: dict):
         for b in boxes:
             p = np.float32(b["poly_original"])
             f = P._box_fill(ii, p[:, 0].min(), p[:, 1].min(), p[:, 0].max(), p[:, 1].max())
-            b["fill"] = round(float(f), 3)
-            if f < FILL_OK_BACKS:
-                b["reliable"] = False
-                flags.append(f"pos{pos}:back[{b['slot']}]:low_fill={f:.2f}")
+            b["fill"] = round(float(f), 3)   # diagnostic only, never gates (see docstring)
         rec[str(pos)] = boxes
     return rec, flags

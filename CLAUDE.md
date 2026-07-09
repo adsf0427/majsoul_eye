@@ -135,8 +135,11 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   and silently dropped 46% of rendered buttons (§1.55). Both pipeline entry points build it per game;
   omitting it falls back to the legacy gate (inspect tools only).
   `backs.py` = EXPERIMENTAL opt-in (`annotate_frame(..., backs=True)` / `build_datasets.py --backs`,
-  default OFF, not in v1/v2): opponent concealed-hand tile-back boxes from GT counts + a calibrated
-  fullwarp row grid (手摸切 groundwork; holding seats skipped + flagged, builds drop those frames whole).
+  default OFF, not in v1/v2): opponent concealed-hand tile-back boxes from GT counts + manually
+  clicked fullwarp slot templates (手摸切 groundwork). Holding seats ARE labeled (static n-1 row +
+  drawn slot); the only pixel gate left is `sorting_suspect` Condition A (bare-slot reflow, 0.4-3%),
+  which build_dataset still turns into a whole-frame drop. The per-box fill gate and the
+  drawn-slot Condition B were removed 2026-07-10 (skin-dependent false drops; `fill` is QA-only).
 - **`label/`** — **legacy** NormBox annotator, now just `autolabel.py` (`label_frame`): supplies the
   hero hand + dora boxes only (`annotate_frame` calls it for those zones; `DEFAULT_ZONES = {hand}`).
   The old `river.py`/`meld.py` + `coords.RIVER_QUADS`/`MELD_STRIPS` (equal-subdivision RiverGrid) were
