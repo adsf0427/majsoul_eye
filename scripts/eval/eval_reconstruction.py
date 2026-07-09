@@ -25,7 +25,8 @@ from majsoul_eye.capture.gtframes import build_seq_state, load_frames
 from majsoul_eye import paths
 from majsoul_eye.state.observe import check_observed, observed_from_board
 from majsoul_eye.state.reconstruct import _hero_call_pending, reconstruct
-from majsoul_eye.state.replay import Replayer, is_call_pending, is_deal_window
+from majsoul_eye.state.replay import (Replayer, is_call_pending, is_deal_window,
+                                      is_score_anim_window)
 
 
 def find_captures(roots):
@@ -56,6 +57,9 @@ def diff_zones(a, b):
 
 
 _REJECT_CATS = (            # ordered: first substring hit wins per message
+    ("kyotaku", "hud_kyotaku"),
+    ("scores sum", "hud_scores"),
+    ("wall count", "hud_wall"),
     ("stray detection", "stray"),
     ("meld strip", "meld_parse"),          # unparsable + ambiguous
     ("river", "river_geometry"),           # off-grid / hole / prefix / >6
@@ -80,7 +84,9 @@ def run_oracle(states, report):
     for seq, st in states.items():
         if not st.in_round or is_deal_window(st):
             continue
-        obs = observed_from_board(st)
+        # score-anim windows: HUD numbers roll on screen right after a reach —
+        # project them away so the new HUD cross-checks don't reject GT frames.
+        obs = observed_from_board(st, include_hud=not is_score_anim_window(st))
         if check_observed(obs):
             report["skipped_violations"] += 1
             continue
@@ -111,12 +117,20 @@ def run_oracle(states, report):
             report["ok"] += 1
 
 
-def run_assemble(cap, states, report, weights, device):
+def run_assemble(cap, states, report, weights, device, hud_weights=None,
+                 no_hud=False):
     import cv2
     from majsoul_eye.normalize import locate_fullscreen
     from majsoul_eye.recognize.assemble import assemble
     from majsoul_eye.recognize.detector import TileDetector
     det = TileDetector(weights, device=device)
+    reader = None
+    if not no_hud:
+        from majsoul_eye.recognize.hudreader import HudReader
+        try:
+            reader = HudReader(hud_weights, device=device)
+        except FileNotFoundError:
+            pass
     frames = load_frames(paths.frames_dir_for(cap))
     for seq, st in states.items():
         if seq not in frames or not st.in_round or is_deal_window(st):
@@ -124,10 +138,13 @@ def run_assemble(cap, states, report, weights, device):
         img = cv2.imread(frames[seq])
         if img is None:
             continue
-        obs = assemble(det.predict(img), locate_fullscreen(img))
-        gt = observed_from_board(st, include_hud=False)
+        obs = assemble(det.predict(img), locate_fullscreen(img),
+                       frame_bgr=img, hud_reader=reader)
+        gt = observed_from_board(st)
         if obs.violations:
             report["rejected"] += 1
+            if is_score_anim_window(st):
+                report["score_anim_rejected"] += 1
             for cat in reject_categories(obs.violations):
                 report["rejected_reasons"][cat] = \
                     report["rejected_reasons"].get(cat, 0) + 1
@@ -138,6 +155,17 @@ def run_assemble(cap, states, report, weights, device):
             report["ok"] += 1
         for z in d:
             report["zone_errors"][z] = report["zone_errors"].get(z, 0) + 1
+        if reader is not None and not is_score_anim_window(st):
+            for fld in ("scores", "bakaze", "kyoku", "honba", "kyotaku",
+                        "left_tile_count", "seat_wind_self"):
+                got, want = getattr(obs, fld), getattr(gt, fld)
+                if got is None:
+                    report["hud_missing"][fld] = report["hud_missing"].get(fld, 0) + 1
+                elif got == want or (fld == "left_tile_count" and want is not None
+                                     and abs(got - want) <= 1):
+                    report["hud_ok"][fld] = report["hud_ok"].get(fld, 0) + 1
+                else:
+                    report["hud_err"][fld] = report["hud_err"].get(fld, 0) + 1
 
 
 def hero_id(events):
@@ -192,6 +220,8 @@ def main():
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--engine-cmd", default=None)
     ap.add_argument("--sample", type=int, default=20)
+    ap.add_argument("--hud-weights", default=None)
+    ap.add_argument("--no-hud", action="store_true")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -205,13 +235,16 @@ def main():
     total = {"ok": 0, "fail": [], "mismatch": [], "skipped_violations": 0,
              "skipped_call_pending": 0, "frames": 0, "rejected": 0,
              "rejected_reasons": {}, "zone_errors": {}, "agree": 0,
-             "disagree": [], "engine_error": 0, "engine_fail": 0}
+             "disagree": [], "engine_error": 0, "engine_fail": 0,
+             "hud_ok": {}, "hud_err": {}, "hud_missing": {},
+             "score_anim_rejected": 0}
     for cap in caps:
         states = build_seq_state(cap)
         if args.level == "oracle":
             run_oracle(states, total)
         elif args.level == "assemble":
-            run_assemble(cap, states, total, args.weights, args.device)
+            run_assemble(cap, states, total, args.weights, args.device,
+                         args.hud_weights, args.no_hud)
         else:
             run_engine(cap, states, total, args.engine_cmd, args.sample)
 
@@ -229,6 +262,9 @@ def main():
         print(f"[assemble] {total['ok']}/{total['frames']} frames fully match, "
               f"{total['rejected']} rejected {total['rejected_reasons']}; "
               f"zone errors: {total['zone_errors']}")
+        print(f"  hud ok {total['hud_ok']}\n  hud err {total['hud_err']}\n"
+              f"  hud missing {total['hud_missing']}; "
+              f"score-anim rejected {total['score_anim_rejected']}")
     else:
         print(f"[engine] agree {total['agree']}, "
               f"disagree {len(total['disagree'])}, "
