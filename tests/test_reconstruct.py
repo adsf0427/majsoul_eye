@@ -322,6 +322,55 @@ assert not r2.ok
 print("test_reconstruct stick reach OK")
 
 
+def test_riichi_declaration_pending():
+    # seat2 just threw its declaring tile sideways; the acceptance animation is
+    # still in flight: kyotaku reads 0 and no score was deducted (IMG_1964 /
+    # in-domain score-anim window). The sequence must END at that dahai with
+    # reach emitted but NO reach_accepted, and the backfill must not credit a
+    # 1000-point stick.
+    o = _obs(rivers=[[ObservedRiverTile("9p"), ObservedRiverTile("1s")],
+                     [ObservedRiverTile("E"), ObservedRiverTile("W")],
+                     [ObservedRiverTile("S"), ObservedRiverTile("5p", sideways=True)],
+                     [ObservedRiverTile("N")]],
+             reach=[False, False, True, False], kyotaku=0,
+             scores=[25000, 25000, 25000, 25000])
+    r = _roundtrip(o)
+    evs = r.events
+    assert evs[-1] == {"type": "dahai", "actor": 2, "pai": "5p", "tsumogiri": False}
+    assert evs[-2] == {"type": "reach", "actor": 2}
+    assert not any(e["type"] == "reach_accepted" for e in evs)
+    sk = evs[1]
+    assert sk["kyotaku"] == 0 and sk["scores"] == [25000] * 4
+    assert r.diagnostics["pending_reach_seat"] == 2
+
+
+def test_riichi_declaration_pending_infeasible_if_not_last_actor():
+    # same deficit, but with hero pinned as oya (seat_wind E) the rotation
+    # forces seat3's C AFTER seat2's declaration — acceptance must already
+    # have happened, so kyotaku 0 is contradictory and the frame is rejected.
+    o = _obs(rivers=[[ObservedRiverTile("9p"), ObservedRiverTile("1s")],
+                     [ObservedRiverTile("E"), ObservedRiverTile("W")],
+                     [ObservedRiverTile("S"), ObservedRiverTile("5p", sideways=True)],
+                     [ObservedRiverTile("N"), ObservedRiverTile("C")]],
+             reach=[False, False, True, False], kyotaku=0, seat_wind_self="E",
+             scores=[25000, 25000, 25000, 25000])
+    r = reconstruct(o)
+    assert not r.ok
+
+
+def test_riichi_settled_still_emits_accepted():
+    # regression: with a consistent kyotaku the normal acceptance path stays.
+    o = _obs(rivers=[[ObservedRiverTile("9p"), ObservedRiverTile("1s")],
+                     [ObservedRiverTile("E"), ObservedRiverTile("W")],
+                     [ObservedRiverTile("S"), ObservedRiverTile("5p", sideways=True)],
+                     [ObservedRiverTile("N")]],
+             reach=[False, False, True, False], kyotaku=1,
+             scores=[25000, 25000, 24000, 25000])
+    r = _roundtrip(o)
+    assert any(e["type"] == "reach_accepted" and e["actor"] == 2 for e in r.events)
+    assert r.events[1]["kyotaku"] == 0 and r.events[1]["scores"][2] == 25000
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

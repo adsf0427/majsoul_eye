@@ -132,6 +132,8 @@ def run_assemble(cap, states, report, weights, device, hud_weights=None,
         except FileNotFoundError:
             pass
     frames = load_frames(paths.frames_dir_for(cap))
+    skeys = sorted(states)
+    succ_of = dict(zip(skeys, skeys[1:]))
     for seq, st in states.items():
         if seq not in frames or not st.in_round or is_deal_window(st):
             continue
@@ -141,6 +143,19 @@ def run_assemble(cap, states, report, weights, device, hud_weights=None,
         obs = assemble(det.predict(img), locate_fullscreen(img),
                        frame_bgr=img, hud_reader=reader)
         gt = observed_from_board(st)
+        # Hero-draw race: the quiet-capture can fire AFTER the next record's
+        # draw animation rendered (same timing skew as the §1.53 wall_count
+        # pixel=GT-1 noise), so the frame depicts the SUCCESSOR state, not
+        # states[seq]. Accept the join correction only when it is exact:
+        # GT has no drawn tile, the frame shows one, and the successor
+        # projection matches the observation zone-for-zone.
+        if (gt.drawn_tile is None and obs.drawn_tile is not None
+                and seq in succ_of and states[succ_of[seq]].in_round):
+            succ_gt = observed_from_board(states[succ_of[seq]])
+            if succ_gt.drawn_tile == obs.drawn_tile \
+                    and not diff_zones(obs, succ_gt):
+                report["drawn_race"] += 1
+                gt, st = succ_gt, states[succ_of[seq]]
         if obs.violations:
             report["rejected"] += 1
             if is_score_anim_window(st):
@@ -237,7 +252,7 @@ def main():
              "rejected_reasons": {}, "zone_errors": {}, "agree": 0,
              "disagree": [], "engine_error": 0, "engine_fail": 0,
              "hud_ok": {}, "hud_err": {}, "hud_missing": {},
-             "score_anim_rejected": 0}
+             "score_anim_rejected": 0, "drawn_race": 0}
     for cap in caps:
         states = build_seq_state(cap)
         if args.level == "oracle":
@@ -264,7 +279,8 @@ def main():
               f"zone errors: {total['zone_errors']}")
         print(f"  hud ok {total['hud_ok']}\n  hud err {total['hud_err']}\n"
               f"  hud missing {total['hud_missing']}; "
-              f"score-anim rejected {total['score_anim_rejected']}")
+              f"score-anim rejected {total['score_anim_rejected']}; "
+              f"drawn-race rejoined {total['drawn_race']}")
     else:
         print(f"[engine] agree {total['agree']}, "
               f"disagree {len(total['disagree'])}, "

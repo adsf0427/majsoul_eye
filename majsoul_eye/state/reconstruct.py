@@ -84,10 +84,27 @@ def _hero_call_pending(obs: ObservedState) -> bool:
             and len(obs.hero_hand) + 3 * len(obs.melds[0]) == 14)
 
 
-def _search(obs: ObservedState, oya_rel: int) -> Optional[list]:
+def _pending_reach_seats(obs: ObservedState) -> list[int]:
+    """Seats whose riichi may still be inside the declaration animation
+    (stick/score/kyotaku settle only at reach_accepted): the HUD counter is
+    short by exactly one and the seat's declaring tile is still the NEWEST
+    discard of its river. Empty list = no pending declaration to model."""
+    if obs.kyotaku is None:
+        return []
+    n_reach = sum(1 for x in obs.reach if x)
+    if obs.kyotaku != n_reach - 1:
+        return []
+    return [r for r in range(4)
+            if obs.reach[r] and obs.rivers[r] and obs.rivers[r][-1].sideways]
+
+
+def _search(obs: ObservedState, oya_rel: int,
+            pending_reach: Optional[int] = None) -> Optional[list]:
     """Ops: ("draw",rel) ("discard",rel,idx) ("ghost",rel,pai,reach)
     ("call",_Item) ("ankan",_Item) ("kakan",_Item). Canonical branch order:
-    visible discard > own-turn kan > ghost/call (calls as late as feasible)."""
+    visible discard > own-turn kan > ghost/call (calls as late as feasible).
+    pending_reach: seat whose riichi declaration is still unaccepted — its
+    declaring dahai must be the sequence's FINAL event."""
     rivers = obs.rivers
     n = [len(r) for r in rivers]
     creation, kakans = _items_for(obs)
@@ -138,9 +155,16 @@ def _search(obs: ObservedState, oya_rel: int) -> Optional[list]:
         if cur[actor] < n[actor]:
             nxt = list(cur)
             nxt[actor] += 1
-            rest = go(tuple(nxt), cidx, kkmask, rghost, (actor + 1) % 4)
-            if rest is not None:
-                return [("discard", actor, cur[actor])] + rest
+            if actor == pending_reach and cur[actor] == side_idx[actor]:
+                # the unaccepted declaration: legal ONLY as the final event
+                # (any later action would have implied reach_accepted)
+                if obs.drawn_tile is None and pending_it is None \
+                        and all_done(tuple(nxt), cidx, kkmask, rghost):
+                    return [("discard", actor, cur[actor])]
+            else:
+                rest = go(tuple(nxt), cidx, kkmask, rghost, (actor + 1) % 4)
+                if rest is not None:
+                    return [("discard", actor, cur[actor])] + rest
         # (b) own-turn kans (need a fresh draw; kakan forbidden after riichi)
         if drew:
             if cidx[actor] < ncre[actor] and creation[actor][cidx[actor]].kind == "ankan":
@@ -174,7 +198,9 @@ def _search(obs: ObservedState, oya_rel: int) -> Optional[list]:
             ncidx = list(cidx)
             ncidx[o] += 1
             variants = [False]
-            if not declared(actor, cur, rghost):
+            if not declared(actor, cur, rghost) and actor != pending_reach:
+                # (a pending seat's declaration is its VISIBLE last discard —
+                #  never a ghost)
                 if side_idx[actor] is not None and cur[actor] == side_idx[actor]:
                     variants.append(True)      # bind the reach to this ghost
                 elif must_reach[actor]:
@@ -201,8 +227,12 @@ def _search(obs: ObservedState, oya_rel: int) -> Optional[list]:
 
 # --- emission -----------------------------------------------------------------
 
-def _emit(obs: ObservedState, ops: list, oya_rel: int):
-    """ops -> (mjai events after start_kyoku, info dict for backfill)."""
+def _emit(obs: ObservedState, ops: list, oya_rel: int,
+          pending_reach: Optional[int] = None):
+    """ops -> (mjai events after start_kyoku, info dict for backfill).
+    pending_reach: that seat's declaring dahai (the final op) gets reach +
+    dahai but NO reach_accepted — the 1000-point stick is not on the table
+    yet, so it must not count into the score/kyotaku backfill either."""
     events: list = []
     haipai = list(obs.hero_hand)
     reach_count = [0] * 4
@@ -256,7 +286,7 @@ def _emit(obs: ObservedState, ops: list, oya_rel: int):
                 tsumogiri = declared[r]        # post-riichi discards are forced tsumogiri
             events.append({"type": "dahai", "actor": r, "pai": pai,
                            "tsumogiri": tsumogiri})
-            if is_reach:
+            if is_reach and r != pending_reach:
                 events.append({"type": "reach_accepted", "actor": r})
                 declared[r] = True
                 reach_count[r] = 1
@@ -314,18 +344,24 @@ def reconstruct(obs: ObservedState) -> ReconstructionResult:
         cand = [(4 - WINDS.index(obs.seat_wind_self)) % 4]
     else:
         cand = [0, 1, 2, 3]
-    feasible, chosen, ops = [], None, None
+    # kyotaku short by one => exactly one riichi is mid-declaration; its seat
+    # must be one whose sideways tile is still its newest discard (candidates
+    # from _pending_reach_seats; check_observed already rejected other deficits)
+    pend_cand = _pending_reach_seats(obs) or [None]
+    feasible, chosen, ops, pending = [], None, None, None
     for oya_rel in cand:
-        got = _search(obs, oya_rel)
-        if got is not None:
-            feasible.append(oya_rel)
-            if chosen is None:
-                chosen, ops = oya_rel, got
+        for pend in pend_cand:
+            got = _search(obs, oya_rel, pending_reach=pend)
+            if got is not None:
+                if oya_rel not in feasible:
+                    feasible.append(oya_rel)
+                if chosen is None:
+                    chosen, ops, pending = oya_rel, got, pend
     if chosen is None:
         return ReconstructionResult(
             False, reason=f"no legal turn order for any oya in {cand}",
             diagnostics={"feasible_oya_rel": []})
-    body, info = _emit(obs, ops, chosen)
+    body, info = _emit(obs, ops, chosen, pending_reach=pending)
     if len(info["haipai"]) != 13:
         return ReconstructionResult(
             False, reason=f"internal: fabricated haipai {len(info['haipai'])} != 13")
@@ -348,5 +384,7 @@ def reconstruct(obs: ObservedState) -> ReconstructionResult:
     diagnostics = {"feasible_oya_rel": feasible, "oya_rel": chosen}
     if _hero_call_pending(obs):
         diagnostics["hero_call_pending"] = True
+    if pending is not None:
+        diagnostics["pending_reach_seat"] = pending
     return ReconstructionResult(True, events=events, fabricated=fabricated,
                                 diagnostics=diagnostics)

@@ -123,9 +123,17 @@ def check_observed(o: ObservedState) -> list[str]:
     # --- HUD x vision cross-checks (fields are None unless a HUD reader ran) --
     n_reach = sum(1 for x in o.reach if x)
     if o.kyotaku is not None and o.kyotaku < n_reach:
-        # every accepted riichi put a stick on the table; the counter can
-        # only lag during the declaration animation — reject that window.
-        v.append(f"kyotaku {o.kyotaku} < visible riichi count {n_reach}")
+        # Every ACCEPTED riichi put a stick on the table, but stick/score/
+        # counter all settle only at reach_accepted. A deficit of exactly one
+        # whose declaring tile is still the NEWEST discard of its river is the
+        # declaration window — a legal decision point (others may still ron/
+        # call); reconstruct must end the sequence at that dahai
+        # (pending_reach). Any other deficit is detector noise.
+        pending_ok = (o.kyotaku == n_reach - 1
+                      and any(o.reach[r] and o.rivers[r]
+                              and o.rivers[r][-1].sideways for r in range(4)))
+        if not pending_ok:
+            v.append(f"kyotaku {o.kyotaku} < visible riichi count {n_reach}")
     if o.scores is not None and o.kyotaku is not None \
             and sum(o.scores) + 1000 * o.kyotaku != 100000:
         v.append(f"scores sum {sum(o.scores)} + 1000*{o.kyotaku} kyotaku != 100000")

@@ -171,6 +171,22 @@ assert not any("kyotaku" in m for m in check_observed(ok))
 carry = _hud_obs(kyotaku=2, reach=[False] * 4)             # carryover only: fine
 assert not any("kyotaku" in m for m in check_observed(carry))
 
+# declaration window: deficit of EXACTLY one whose declaring tile is still the
+# newest discard of its river = legal (stick/score/counter settle only at
+# reach_accepted; reconstruct ends the sequence at that dahai)
+pend = _hud_obs(kyotaku=0, reach=[False, False, True, False])
+pend.rivers[2] = [ObservedRiverTile("S"), ObservedRiverTile("5p", sideways=True)]
+assert not any("kyotaku" in m for m in check_observed(pend))
+# ... but not when a later upright discard shows the declaration was accepted
+settled = _hud_obs(kyotaku=0, reach=[False, False, True, False])
+settled.rivers[2] = [ObservedRiverTile("5p", sideways=True), ObservedRiverTile("S")]
+assert any("kyotaku" in m for m in check_observed(settled))
+# ... and never for a deficit of two
+two = _hud_obs(kyotaku=0, reach=[False, True, True, False])
+two.rivers[1] = [ObservedRiverTile("E", sideways=True)]
+two.rivers[2] = [ObservedRiverTile("5p", sideways=True)]
+assert any("kyotaku" in m for m in check_observed(two))
+
 # score conservation: sum(scores) + 1000*kyotaku == 100000
 bad = _hud_obs(scores=[25000, 25000, 25000, 25000], kyotaku=1)
 assert any("scores sum" in m for m in check_observed(bad))
