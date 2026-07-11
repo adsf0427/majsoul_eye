@@ -12,8 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from majsoul_eye.state.history import ReconstructionOverrides, derive_history_baseline
 from majsoul_eye.state.observe import ObservedState, check_observed
 from majsoul_eye.tiles import red_to_normal
+from majsoul_eye.what_cut.schema import HistoryBaselineItemV1, SelectedHistoryV1, WhatCutIssueV1
 
 WINDS = ["E", "S", "W", "N"]
 
@@ -25,6 +27,9 @@ class ReconstructionResult:
     reason: str = ""
     fabricated: dict = field(default_factory=dict)
     diagnostics: dict = field(default_factory=dict)
+    issues: list[WhatCutIssueV1] = field(default_factory=list)
+    history_baseline: list[HistoryBaselineItemV1] = field(default_factory=list)
+    selected_history: SelectedHistoryV1 | None = None
 
 
 # --- search (Task 3: rotation only; Task 4 adds calls; Task 5 adds kans/riichi) ---
@@ -160,11 +165,11 @@ def _search(obs: ObservedState, oya_rel: int,
                 # (any later action would have implied reach_accepted)
                 if obs.drawn_tile is None and pending_it is None \
                         and all_done(tuple(nxt), cidx, kkmask, rghost):
-                    return [("discard", actor, cur[actor])]
+                    return [("discard", actor, cur[actor], drew)]
             else:
                 rest = go(tuple(nxt), cidx, kkmask, rghost, (actor + 1) % 4)
                 if rest is not None:
-                    return [("discard", actor, cur[actor])] + rest
+                    return [("discard", actor, cur[actor], drew)] + rest
         # (b) own-turn kans (need a fresh draw; kakan forbidden after riichi)
         if drew:
             if cidx[actor] < ncre[actor] and creation[actor][cidx[actor]].kind == "ankan":
@@ -207,7 +212,7 @@ def _search(obs: ObservedState, oya_rel: int,
                     variants.append(True)      # stick-known riichi, tile called away
             for reach_here in variants:
                 nrg = rghost | (1 << actor) if reach_here else rghost
-                pre = [("ghost", actor, it.pai, reach_here), ("call", it)]
+                pre = [("ghost", actor, it.pai, reach_here, drew, it.owner, it.mi), ("call", it)]
                 if it is pending_it:
                     if all_done(cur, tuple(ncidx), kkmask, nrg):
                         return pre       # terminal: hero now owes the discard
@@ -336,7 +341,9 @@ def _relabel(events: list, hero_abs: int) -> list:
     return out
 
 
-def reconstruct(obs: ObservedState) -> ReconstructionResult:
+def reconstruct(obs: ObservedState,
+                overrides: ReconstructionOverrides | None = None) -> ReconstructionResult:
+    overrides = overrides or ReconstructionOverrides()
     viol = list(obs.violations) + check_observed(obs)
     if viol:
         return ReconstructionResult(False, reason="; ".join(viol))
@@ -361,6 +368,8 @@ def reconstruct(obs: ObservedState) -> ReconstructionResult:
         return ReconstructionResult(
             False, reason=f"no legal turn order for any oya in {cand}",
             diagnostics={"feasible_oya_rel": []})
+    history_baseline, _ = derive_history_baseline(
+        obs, ops, overrides, pending_reach=pending)
     body, info = _emit(obs, ops, chosen, pending_reach=pending)
     if len(info["haipai"]) != 13:
         return ReconstructionResult(
@@ -386,5 +395,10 @@ def reconstruct(obs: ObservedState) -> ReconstructionResult:
         diagnostics["hero_call_pending"] = True
     if pending is not None:
         diagnostics["pending_reach_seat"] = pending
-    return ReconstructionResult(True, events=events, fabricated=fabricated,
-                                diagnostics=diagnostics)
+    return ReconstructionResult(
+        True,
+        events=events,
+        fabricated=fabricated,
+        diagnostics=diagnostics,
+        history_baseline=history_baseline,
+    )

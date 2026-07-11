@@ -342,6 +342,10 @@ def test_riichi_declaration_pending():
     sk = evs[1]
     assert sk["kyotaku"] == 0 and sk["scores"] == [25000] * 4
     assert r.diagnostics["pending_reach_seat"] == 2
+    pending_mark = next(item for item in r.history_baseline
+                        if item["itemId"] == "river:2:1")
+    assert pending_mark["baselineSource"] == "inferred"
+    assert pending_mark["baselineValue"] is False
 
 
 def test_riichi_declaration_pending_infeasible_if_not_last_actor():
