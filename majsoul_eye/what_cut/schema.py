@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from typing import Any, Literal, Mapping, TypedDict, cast
 
@@ -263,6 +264,10 @@ def _validate_tile(value: Any, path: str, *, nullable: bool) -> None:
         raise _schema_error("INVALID_DRAFT", path, f"invalid tile {value!r}")
 
 
+def _is_finite_number(value: Any) -> bool:
+    return type(value) in (int, float) and math.isfinite(value)
+
+
 def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:
     root = _require_dict(payload, "draft")
     _require_keys(root, "draft", {"schemaVersion", "draftId", "revision",
@@ -309,6 +314,17 @@ def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:
         _require_keys(recognizer, "recognizer", {"manifestVersion", "layoutId",
             "detectorSha", "classifierSha", "hudReaderSha", "eyeRevision",
             "supportStatus"})
+        for key in ("manifestVersion", "layoutId", "detectorSha", "eyeRevision"):
+            if not isinstance(recognizer[key], str):
+                raise _schema_error(
+                    "INVALID_DRAFT", f"recognizer.{key}", "expected string",
+                )
+        for key in ("classifierSha", "hudReaderSha"):
+            if recognizer[key] is not None and not isinstance(recognizer[key], str):
+                raise _schema_error(
+                    "INVALID_DRAFT", f"recognizer.{key}",
+                    "expected string or null",
+                )
         if recognizer["supportStatus"] not in ("experimental", "supported"):
             raise _schema_error(
                 "INVALID_DRAFT", "recognizer.supportStatus",
@@ -361,6 +377,33 @@ def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:
                 "INVALID_DRAFT", f"annotations.{field_path}",
                 "invalid annotation shape",
             )
+        if a["confidence"] is not None and not _is_finite_number(a["confidence"]):
+            raise _schema_error(
+                "INVALID_DRAFT", f"annotations.{field_path}.confidence",
+                "confidence must be a finite number or null",
+            )
+        if (a["confirmedRevision"] is not None
+                and type(a["confirmedRevision"]) is not int):
+            raise _schema_error(
+                "INVALID_DRAFT", f"annotations.{field_path}.confirmedRevision",
+                "confirmedRevision must be an integer or null",
+            )
+        for ci, candidate in enumerate(a["candidates"]):
+            candidate_path = f"annotations.{field_path}.candidates.{ci}"
+            c = _require_dict(candidate, candidate_path)
+            _require_keys(c, candidate_path, {"value", "confidence"})
+            if not _is_finite_number(c["confidence"]):
+                raise _schema_error(
+                    "INVALID_DRAFT", f"{candidate_path}.confidence",
+                    "candidate confidence must be a finite number",
+                )
+        for ei, evidence_id in enumerate(a["evidenceIds"]):
+            if not isinstance(evidence_id, str):
+                raise _schema_error(
+                    "INVALID_DRAFT",
+                    f"annotations.{field_path}.evidenceIds.{ei}",
+                    "evidence id must be a string",
+                )
     players = root.get("players")
     if (not isinstance(players, list)
             or [p.get("relSeat") for p in players if isinstance(p, Mapping)]
@@ -462,7 +505,12 @@ def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:
                 _validate_tile(
                     tile, f"players.{pi}.melds.{mi}.tiles.{ti}", nullable=False,
                 )
-    for di, dora in enumerate(root.get("doraMarkers") or []):
+    dora_markers = root.get("doraMarkers")
+    if not isinstance(dora_markers, list):
+        raise _schema_error(
+            "INVALID_DRAFT", "doraMarkers", "doraMarkers must be a list",
+        )
+    for di, dora in enumerate(dora_markers):
         d = _require_dict(dora, f"doraMarkers.{di}")
         _require_keys(d, f"doraMarkers.{di}", {"id", "pai"})
         take_id(d.get("id"), f"doraMarkers.{di}.id")
@@ -502,7 +550,6 @@ def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:
         raise _schema_error(
             "INVALID_DRAFT", "evidence", "evidence must be a list",
         )
-    import math
     for ei, item in enumerate(evidence):
         e = _require_dict(item, f"evidence.{ei}")
         _require_keys(e, f"evidence.{ei}", {"id", "bbox", "polygon", "zone"})
