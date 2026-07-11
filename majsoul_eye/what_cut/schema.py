@@ -274,12 +274,15 @@ def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:
         "nPlayers", "seatFrame", "source", "recognizer", "round",
         "doraMarkers", "players", "annotations", "evidence",
         "historyOverrides"})
-    if root.get("schemaVersion") != SCHEMA_VERSION:
+    schema_version = root.get("schemaVersion")
+    if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
         raise _schema_error(
             "UNSUPPORTED_SCHEMA", "schemaVersion",
             "only schemaVersion 1 is supported",
         )
-    if root.get("nPlayers") != 4 or root.get("seatFrame") != "screen-relative":
+    n_players = root.get("nPlayers")
+    if (type(n_players) is not int or n_players != 4
+            or root.get("seatFrame") != "screen-relative"):
         raise _schema_error(
             "INVALID_DRAFT", "nPlayers",
             "draft must be screen-relative four-player",
@@ -406,8 +409,9 @@ def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:
                 )
     players = root.get("players")
     if (not isinstance(players, list)
-            or [p.get("relSeat") for p in players if isinstance(p, Mapping)]
-            != [0, 1, 2, 3]):
+            or any(not isinstance(p, Mapping)
+                   or type(p.get("relSeat")) is not int for p in players)
+            or [p["relSeat"] for p in players] != [0, 1, 2, 3]):
         raise _schema_error(
             "INVALID_DRAFT", "players", "players must be ordered relSeat 0..3",
         )
@@ -486,6 +490,7 @@ def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:
             _require_keys(m, f"players.{pi}.melds.{mi}", {"id", "type", "tiles",
                 "calledPai", "addedPai", "fromOffset"})
             if (m["type"] not in ("chi", "pon", "daiminkan", "ankan", "kakan")
+                    or type(m["fromOffset"]) is not int
                     or m["fromOffset"] not in (0, 1, 2, 3)
                     or not isinstance(m["tiles"], list)):
                 raise _schema_error(
@@ -529,7 +534,8 @@ def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:
             g, f"historyOverrides.ghostDiscards.{gi}",
             {"id", "ownerRelSeat", "pai", "beforeMeldId", "tsumogiri"},
         )
-        if (g["ownerRelSeat"] not in (0, 1, 2, 3)
+        if (type(g["ownerRelSeat"]) is not int
+                or g["ownerRelSeat"] not in (0, 1, 2, 3)
                 or not isinstance(g["beforeMeldId"], str)
                 or not g["beforeMeldId"]):
             raise _schema_error(
@@ -562,8 +568,7 @@ def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:
         bbox = e.get("bbox")
         polygon = e.get("polygon")
         if (not isinstance(bbox, list) or len(bbox) != 4
-                or not all(isinstance(v, (int, float)) and math.isfinite(v)
-                           for v in bbox)):
+                or not all(_is_finite_number(v) for v in bbox)):
             raise _schema_error(
                 "INVALID_EVIDENCE", f"evidence.{ei}.bbox",
                 "bbox must contain four finite numbers",
@@ -571,8 +576,8 @@ def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:
         if polygon is not None and (
                 not isinstance(polygon, list) or len(polygon) != 4
                 or any(not isinstance(point, list) or len(point) != 2
-                       or not all(isinstance(v, (int, float)) and math.isfinite(v)
-                                  for v in point) for point in polygon)):
+                       or not all(_is_finite_number(v) for v in point)
+                       for point in polygon)):
             raise _schema_error(
                 "INVALID_EVIDENCE", f"evidence.{ei}.polygon",
                 "polygon must contain four finite [x,y] points",

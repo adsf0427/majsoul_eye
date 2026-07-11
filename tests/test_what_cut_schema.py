@@ -71,11 +71,11 @@ def valid_annotation():
     }
 
 
-def _assert_invalid(raw, path):
+def _assert_invalid(raw, path, code="INVALID_DRAFT"):
     try:
         parse_what_cut_draft(raw)
     except DraftSchemaError as exc:
-        assert exc.code == "INVALID_DRAFT"
+        assert exc.code == code
         assert exc.path == path
     else:
         raise AssertionError(f"{path} must be rejected")
@@ -225,6 +225,76 @@ def test_dora_markers_container_must_be_list():
         raw = minimal_draft()
         raw["doraMarkers"] = value
         _assert_invalid(raw, "doraMarkers")
+
+
+def test_integer_root_source_and_round_fields_reject_numeric_impostors():
+    cases = [
+        ("root", "schemaVersion", True, "schemaVersion", "UNSUPPORTED_SCHEMA"),
+        ("root", "schemaVersion", 1.0, "schemaVersion", "UNSUPPORTED_SCHEMA"),
+        ("root", "nPlayers", 4.0, "nPlayers", "INVALID_DRAFT"),
+        ("root", "revision", True, "revision", "INVALID_DRAFT"),
+        ("root", "revision", 7.0, "revision", "INVALID_DRAFT"),
+        ("source", "width", 1920.0, "source.width", "INVALID_DRAFT"),
+        ("source", "height", True, "source.height", "INVALID_DRAFT"),
+        ("round", "kyoku", 1.0, "round.kyoku", "INVALID_DRAFT"),
+        ("round", "honba", False, "round.honba", "INVALID_DRAFT"),
+        ("round", "kyotaku", 0.0, "round.kyotaku", "INVALID_DRAFT"),
+        ("round", "leftTileCount", True, "round.leftTileCount", "INVALID_DRAFT"),
+    ]
+    for container, key, value, path, code in cases:
+        raw = minimal_draft()
+        target = raw if container == "root" else raw[container]
+        target[key] = value
+        _assert_invalid(raw, path, code)
+
+    for value in (25000.0, True):
+        raw = minimal_draft()
+        raw["round"]["scores"][0] = value
+        _assert_invalid(raw, "round.scores")
+
+
+def test_player_seat_and_count_fields_require_exact_integers():
+    for player_index, value in ((0, False), (1, 1.0)):
+        raw = minimal_draft()
+        raw["players"][player_index]["relSeat"] = value
+        _assert_invalid(raw, "players")
+
+    for value in (13.0, False):
+        raw = minimal_draft()
+        raw["players"][1]["concealedCount"] = value
+        _assert_invalid(raw, "players.1.concealedCount")
+
+
+def test_meld_and_ghost_seat_literals_require_exact_integers():
+    for value in (False, 1.0):
+        raw = minimal_draft()
+        raw["players"][0]["melds"] = [{
+            "id": "meld-0-0", "type": "pon",
+            "tiles": ["1m", "1m", "1m"],
+            "calledPai": "1m", "addedPai": None, "fromOffset": value,
+        }]
+        _assert_invalid(raw, "players.0.melds.0")
+
+    for value in (True, 3.0):
+        raw = minimal_draft()
+        raw["historyOverrides"]["ghostDiscards"][0]["ownerRelSeat"] = value
+        _assert_invalid(raw, "historyOverrides.ghostDiscards.0")
+
+
+def test_evidence_coordinates_reject_booleans():
+    raw = minimal_draft()
+    raw["evidence"] = [{"id": "e-bbox", "bbox": [False, 0.0, 1.0, 1.0],
+                        "polygon": None, "zone": "hand"}]
+    _assert_invalid(raw, "evidence.0.bbox", "INVALID_EVIDENCE")
+
+    raw = minimal_draft()
+    raw["evidence"] = [{
+        "id": "e-polygon", "bbox": [0.0, 0.0, 1.0, 1.0],
+        "polygon": [[0.0, 0.0], [True, 0.0],
+                    [1.0, 1.0], [0.0, 1.0]],
+        "zone": "hand",
+    }]
+    _assert_invalid(raw, "evidence.0.polygon", "INVALID_EVIDENCE")
 
 
 if __name__ == "__main__":
