@@ -5,6 +5,10 @@ import numpy as np
 
 from majsoul_eye.recognize.runtime import RecognitionContext, RecognitionRuntime, RuntimeFailure
 from majsoul_eye.what_cut.schema import parse_what_cut_draft
+from test_assemble import _dora_dets, _gt, _hand_dets, _meld_dets, _river_dets
+
+H13 = ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m",
+       "1p", "2p", "3p", "4p"]
 
 
 class FakeDetector:
@@ -89,6 +93,69 @@ def test_original_byte_digest_must_match_context():
         assert exc.code == "INVALID_IMAGE_DIGEST"
     else:
         raise AssertionError("mismatched screenshot digest must be rejected")
+
+
+def _board_runtime():
+    """Runtime whose detector emits a coherent full board (forward fixture
+    geometry from test_assemble): hero H13 + drawn 5p, rivers
+    [[9p], [], [S], [W]], seat-2 pon of P claimed from relative seat 3."""
+    dets = (_hand_dets(H13, drawn="5p")
+            + _dora_dets(["5s"])
+            + _river_dets(0, ["9p"])
+            + _river_dets(2, ["S"])
+            + _river_dets(3, ["W"])
+            + _meld_dets(2, [_gt("pon", ["P", "P", "P"], called="P",
+                                 from_seat_rel=3, seat=2)]))
+
+    class BoardDetector:
+        def predict(self, image): return dets
+
+    instance = runtime()
+    instance.detector = BoardDetector()
+    return instance
+
+
+def test_success_chain_recognizes_reconstructs_and_decides():
+    body = png(1920, 1080)
+    context = RecognitionContext("req", "draft", hashlib.sha256(body).hexdigest(),
+                                 "majsoul-desktop-16x9-v1", True, None)
+    instance = _board_runtime()
+    data = instance.recognize_bytes(body, context)
+    assert data["issues"] == []
+    draft = parse_what_cut_draft(data["draft"])
+    ghosts = draft["historyOverrides"]["ghostDiscards"]
+    assert [g["id"] for g in ghosts] == ["ghost:2:0"]
+    assert ghosts[0]["ownerRelSeat"] == 1 and ghosts[0]["pai"] == "P"
+    # baseline sync visibly rewrote the build-time default: seat 2's post-pon
+    # discard is a FORCED tedashi (build default was inferred/False)
+    assert draft["players"][2]["rivers"][0]["tsumogiri"]["source"] == "forced"
+    assert draft["players"][2]["rivers"][0]["tsumogiri"]["baselineSource"] == "forced"
+
+    result = instance.reconstruct_draft(draft, draft["revision"])
+    assert result["ok"] is True, result["issues"]
+    assert result["mjai"] is not None and result["heroSeatAbs"] is not None
+    assert result["fabricated"] is not None
+    assert result["selectedHistory"] is not None
+    assert result["selectedHistory"]["solverVersion"] == "hidden-history-v1"
+    assert [(item["itemKind"], item["itemId"]) for item in result["historyBaseline"]] == [
+        ("river", "river:0:0"), ("river", "river:2:0"),
+        ("river", "river:3:0"), ("ghost", "ghost:2:0")]
+    decision = result["decision"]
+    assert decision is not None
+    assert decision["actorRelSeat"] == 0 and decision["kind"] == "action"
+    assert "5p" in decision["legalDiscards"] and decision["candidateCount"] >= 14
+
+
+def test_reconstruct_with_stale_revision_reports_stale_revision():
+    body = png(1920, 1080)
+    context = RecognitionContext("req", "draft", hashlib.sha256(body).hexdigest(),
+                                 "majsoul-desktop-16x9-v1", True, None)
+    instance = _board_runtime()
+    draft = instance.recognize_bytes(body, context)["draft"]
+    data = instance.reconstruct_draft(draft, draft["revision"] + 1)
+    assert data["ok"] is False
+    assert data["issues"][0]["code"] == "STALE_REVISION"
+    assert data["mjai"] is None and data["historyBaseline"] == []
 
 
 if __name__ == "__main__":
