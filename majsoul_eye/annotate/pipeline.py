@@ -484,6 +484,117 @@ MELD_WITHIN_REVERSED = True
 # display index 1 (second from the player's left). Calibratable.
 KAN_TOIMEN_SIDEWAYS_IDX = 1
 
+# --------------------------------------------------------------------------- #
+# 3-player (sanma) geometry variants + mode switch
+# --------------------------------------------------------------------------- #
+# Sanma reuses the 4P screen ring unchanged (actors 0-2 = E1 chair indices,
+# chair 3 = the would-be north seat renders empty all game — STATUS §1.59), the
+# same fullwarp homography, DISCARD_READ, foot sizes and the snap machinery.
+# Only the render metrics differ — slightly but systematically (STATUS §1.60;
+# measured by calibrate_annotation_model over 788 records / 5 games / all three
+# hero seats / plain + 2 skinned cloths; JSON: scratchpad/calib3p_run1_run2.json):
+#   * side-river column pitch -2.6..-2.9% (74.88/74.74 -> 72.72/72.77)
+#   * self-river row pitch +3.1%, across row pitch -5.2% (+6.3px row1 fold)
+#   * SELF meld corner sits 46px further inward (cross, σ=0.00) — the hero
+#     nukidora lane occupies the 4P corner position.
+DISCARD_GRID_3P = {
+    0: {"o": (1347.9, 1241.0), "dcol": (72.13, 0.0), "drow": (0.0, 112.0)},   # self  down
+    1: {"o": (1818.0, 772.1),  "dcol": (0.0, 72.72), "drow": (97.95, 0.0)},   # right rightward
+    2: {"o": (1354.5, 675.9),  "dcol": (72.61, 0.0), "drow": (0.0, -104.25)}, # across up
+    3: {"o": (1244.0, 768.3),  "dcol": (0.0, 72.77), "drow": (-98.87, 0.0)},  # left  leftward
+}
+# pos2/pos3 o carry the row1-chain fold of the 2nd calibration pass (the tool's
+# printed o comes from the edge fit alone; the residual uniform row shift is
+# folded along the row-advance direction — verify pass showed +3.3/+2.8px).
+DISCARD_ROW_OFFSETS_3P: Dict[int, list] = {
+    0: [0.0, 96.2, 194.0],
+    1: [0.0, 95.6, 195.0],
+    2: [0.0, 96.3, 189.3],
+    3: [0.0, 96.6, 193.2],
+}
+MELD_STRIP2_3P = {
+    0: {"corner": (2388.0, 1843.5), "along": (-1.0, 0.0), "cross": (0.0, -1.0), "w": 70.2, "d": 92.1, "gap": 0.0},
+    1: {"corner": (2453.5, 153.0),  "along": (0.0, 1.0),  "cross": (-1.0, 0.0), "w": 70.5, "d": 93.4, "gap": 0.0},
+    2: {"corner": (686.2, 134.5),   "along": (1.0, 0.0),  "cross": (0.0, 1.0),  "w": 70.4, "d": 92.2, "gap": 0.0},
+    3: {"corner": (625.0, 1750.1),  "along": (0.0, -1.0), "cross": (1.0, 0.0),  "w": 71.0, "d": 93.0, "gap": 0.0},
+}
+
+# Nukidora pile (3P only): face-centre anchor + per-tile step + face foot, per
+# SCREEN pos, measured by scripts/annotate/calibrate_nukidora.py over run_1+run_2
+# (n=105-306 per seat; anchor σ≤1px except SELF's ±12px per-round float along the
+# row — a fill-maximizing 1-D snap in frame.py absorbs it). The pile sits in its
+# own lane between the meld strip and the river; raw component centres include
+# the camera-side skirt, so these anchors are face-trimmed by (blob-face)/2 along
+# the radial-to-nadir direction (validated: pos2's trim lands exactly on the
+# skirt-free first-pass measurement, 349.0 vs 348.6).
+NUKI_STRIP_3P = {
+    0: {"anchor": (2034.9, 1569.5), "step": (-72.61, 0.07), "foot": (72.0, 92.0)},  # self  grow-left
+    1: {"anchor": (2180.3, 588.6),  "step": (-0.15, 85.06), "foot": (93.0, 71.0)},  # right grow-down
+    2: {"anchor": (945.6, 349.0),   "step": (72.46, 0.0),   "foot": (73.0, 92.0)},  # across grow-right
+    3: {"anchor": (860.2, 1487.4),  "step": (0.12, -78.23), "foot": (86.0, 72.0)},  # left  grow-up
+}
+
+
+def generate_nukidora_boxes(seat: int, count: int, H_full_inv: np.ndarray,
+                            along_offset: float = 0.0) -> List[Dict[str, Any]]:
+    """Face boxes for one seat's nukidora pile (3P). ``seat`` is the SCREEN pos.
+
+    Shaped like meld cells (tile + poly_fullwarp/poly_original, plus
+    ``nuki: True``) so frame.py can append them to ``rec["meld_boxes"]`` and
+    every downstream consumer (crops, YOLO, QA) treats them as regular face-up
+    N tiles. ``along_offset`` slides the pile along its step axis (the SELF
+    pile floats per round like melds do).
+    """
+    if count <= 0:
+        return []
+    cfg = NUKI_STRIP_3P[seat]
+    anchor = np.array(cfg["anchor"], float)
+    step = np.array(cfg["step"], float)
+    w, h = cfg["foot"]
+    unit = step / (np.linalg.norm(step) + 1e-9)
+    out: List[Dict[str, Any]] = []
+    for k in range(count):
+        cx, cy = anchor + k * step + along_offset * unit
+        poly = np.float32([[cx - w / 2, cy - h / 2], [cx + w / 2, cy - h / 2],
+                           [cx + w / 2, cy + h / 2], [cx - w / 2, cy + h / 2]])
+        out.append({"tile": "N", "nuki": True, "sideways": False,
+                    "poly_fullwarp": np.round(poly, 1).tolist(),
+                    "poly_original": np.round(fullwarp_to_original(poly, H_full_inv), 1).tolist()})
+    return out
+
+
+# Pristine per-mode tables, captured at import (inner containers copied so
+# mutations of the ACTIVE dicts can never corrupt them).
+def _copy_tables(grid, offs, strip):
+    return ({k: dict(v) for k, v in grid.items()},
+            {k: list(v) for k, v in offs.items()},
+            {k: dict(v) for k, v in strip.items()})
+
+_MODE_TABLES = {
+    False: _copy_tables(DISCARD_GRID, DISCARD_ROW_OFFSETS, MELD_STRIP2),
+    True:  _copy_tables(DISCARD_GRID_3P, DISCARD_ROW_OFFSETS_3P, MELD_STRIP2_3P),
+}
+_SANMA_ACTIVE = False
+
+
+def set_sanma(flag: bool) -> None:
+    """Swap the ACTIVE geometry constants between 4P and sanma, in place.
+
+    Process-global, idempotent, cheap — callers set it per frame from
+    ``BoardState.sanma`` (annotate_frame and the calibration tool do). The
+    clear+update keeps dict identity, so both ``P.DISCARD_GRID`` attribute
+    readers and ``from pipeline import DISCARD_GRID`` holders follow the swap.
+    """
+    global _SANMA_ACTIVE
+    flag = bool(flag)
+    if flag == _SANMA_ACTIVE:
+        return
+    for dst, src in zip((DISCARD_GRID, DISCARD_ROW_OFFSETS, MELD_STRIP2),
+                        _copy_tables(*_MODE_TABLES[flag])):
+        dst.clear()
+        dst.update(src)
+    _SANMA_ACTIVE = flag
+
 
 def _remove_one(lst: list, item: str) -> list:
     out = list(lst)

@@ -81,10 +81,11 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
 - **`normalize.py`** — front-end that maps an arbitrary screenshot onto the canonical frame via
   a `BoardRegion` (`locate_fullscreen` / `locate_letterbox`; `AnchorLocator` is a TODO stub).
   This is what lets fixed-slot logic survive other resolutions.
-- **`hud.py`** — the HUD-element detector taxonomy: `HUD_NAMES` (18 classes — 7 center-panel
-  fields, 2 top-left counters, 8 semantic action buttons, 1 symmetric `reach_stick`) +
-  `DET_NAMES = TILE_NAMES + HUD_NAMES` (the 56-class detector head); `OP_TO_BTN`/`buttons_for_ops`
-  (liqi op type → button class); `REACH_STICK_SLOTS` (self/right/across/left seat-attribution
+- **`hud.py`** — the HUD-element detector taxonomy: `HUD_NAMES` (19 classes — 7 center-panel
+  fields, 2 top-left counters, 9 semantic action buttons incl. the sanma `btn_babei`, 1 symmetric
+  `reach_stick`) + `DET_NAMES = TILE_NAMES + HUD_NAMES` (the 57-class detector head; `btn_babei`
+  is APPENDED as id 56 so 56-class weights stay a strict prefix); `OP_TO_BTN`/`buttons_for_ops`
+  (liqi op type → button class, incl. 11=babei); `REACH_STICK_SLOTS` (self/right/across/left seat-attribution
   vocabulary for the single symmetric class — spec §10, revised same-day from 4 classes to 1);
   `FIELD_ROT`/`NUMERIC_FIELDS`/`ROUND_CLASSES`/`WIND_CLASSES`/`CTC_CHARSET` (micro-reader
   contracts). Pure data (no cv2/numpy) — every component imports it.
@@ -97,7 +98,12 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
     `gamemeta.py` (per-game display-language `metadata.json`), `multishot.py` (`MultiShot` —
     extra-shot scheduler for uncertain-timing windows: meld→forced-dahai animation, pending
     action-button offers; purely additive `_dt{ms}.png` frames with `status="extra"` in
-    `frames.jsonl`, wired via `autoplay_ai.py --op-delay`/`--multishot-offsets`).
+    `frames.jsonl`, wired via `autoplay_ai.py --op-delay`/`--multishot-offsets`),
+    `bot3p.py` (`make_sanma_bot` — grafts the sibling Akagi `mjai_bot/mortal3p` stack
+    (new-arch `default.pth` + its 622-channel `.libriichi` featurizer pyd — NOT the
+    775-channel shinkuan `libriichi3p`) onto MJC's `BotMortalLocal` so autoplay
+    plays/observes **3-player (sanma)** games too; `--model-3p`/`--akagi`/`--join-mode`.
+    Capture-only: annotate/dataset/reconstruct are still 4P-only, see STATUS §1.58).
   - `sync.py` (`FrameSyncer`) — the top correctness risk. Protocol events fire *before* the
     animation renders, so capture is async **debounce-to-quiet**: capture one frame once no
     board event has arrived for `quiet` s (plus optional pixel-stability confirm). Decision logic
@@ -114,7 +120,12 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
 - **`annotate/`** — the **precise** GT-driven annotator; the source `build_dataset.py` now consumes.
   `pipeline.py` = a fullwarp top-down homography + data-calibrated `DISCARD_GRID`/`DISCARD_ROW_OFFSETS`
   + composition-aware melds (`generate_meld_boxes_v2`/`meld_display_cells`) + per-frame mask snap
-  (`snap_meld_strip`); GT drives class assignment (not detection). `frame.py` = `annotate_frame`
+  (`snap_meld_strip`); GT drives class assignment (not detection). **Sanma (3P) is supported**
+  (STATUS §1.59-61): `set_sanma` swaps the geometry constants IN PLACE to the `*_3P` variants
+  (driven per frame by `BoardState.sanma`; the 4P seat ring `(hero+rel)%4` holds unchanged —
+  chair 3 = the E1 north seat renders empty all game), and `generate_nukidora_boxes`/`NUKI_STRIP_3P`
+  emit the nukidora piles as `tile='N'` meld-shaped boxes (calibrated by
+  `scripts/annotate/calibrate_nukidora.py`). `frame.py` = `annotate_frame`
   (full per-frame record, original-px quads + fills/flags) plus `iter_tile_boxes`/`AnnBox`/`crop_box`
   (the crop+YOLO seam: quad crops for river/meld, px_box for hand/dora). `seatgt.py` = `seat_gt` +
   `_screen_to_seat`/`SEAT_POS` (the seat mapping, owned here); `cases.py` = the named AB validation seqs
@@ -146,9 +157,10 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   **removed** — superseded by `annotate/` (see docs/STATUS.md §1.13).
 - **`recognize/`** — the SHIPPED product: `classifier.py` (`TileNet` small CNN, 64px, 38-class +
   `TileClassifier`) and `detector.py` (`TileDetector`, YOLO HBB/OBB, lazy-loads ultralytics). The
-  detector head is now **56-class** (`hud.DET_NAMES` = 38 tiles + 17 HUD/button classes + 1
-  `reach_stick`); `Detection.name` is valid for all 56 ids while `Detection.tile` is `None` for
-  HUD-class ids (38-55) — old 38-class weights still load fine (a strict id prefix). `hudreader.py`
+  detector head is now **57-class** (`hud.DET_NAMES` = 38 tiles + 18 HUD/button classes incl.
+  the sanma `btn_babei` + 1 `reach_stick`); `Detection.name` is valid for all 57 ids while
+  `Detection.tile` is `None` for HUD-class ids (38-56) — old 38/56-class weights still load
+  fine (strict id prefixes). `hudreader.py`
   (`HudReader` — `DigitCTC` segmentation-free CRNN-CTC for numeric fields + `round_label`/
   `seat_wind_self` classifier heads reusing `TileNet`) and `hudstate.py` (`assemble_hud` —
   detector HUD boxes + `HudReader` outputs → one structured HUD state dict) are the HUD reading

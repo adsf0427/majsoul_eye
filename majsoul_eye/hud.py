@@ -1,6 +1,7 @@
-"""HUD-element detector taxonomy — the 18 classes appended after the frozen 38
-tile classes (ids 38-55; spec docs/superpowers/specs/2026-07-04-hud-detection-design.md §3,
-reach stick added in §10, then revised same day to a single class).
+"""HUD-element detector taxonomy — the 19 classes appended after the frozen 38
+tile classes (ids 38-56; spec docs/superpowers/specs/2026-07-04-hud-detection-design.md §3,
+reach stick added in §10, then revised same day to a single class; btn_babei
+appended 2026-07-11 for sanma, STATUS §1.61).
 
 Pure data (no cv2/numpy) so every component can import it. Button classes are
 SEMANTIC — CN/JP/TW glyphs are all training samples of the same class.
@@ -43,21 +44,26 @@ HUD_NAMES: list[str] = [
     "btn_tsumo", "btn_ron", "btn_kyushu", "btn_skip",
     # symmetric riichi stick (single class -- see REACH_STICK_SLOTS above)
     "reach_stick",                                      # id 55 (spec §10)
+    # sanma babei (拔北) offer button. APPENDED (id 56) so all earlier ids stay
+    # frozen — 56-class weights remain a strict prefix of this 57-class head.
+    "btn_babei",                                        # id 56 (3P; STATUS §1.61)
 ]
-DET_NAMES: list[str] = TILE_NAMES + HUD_NAMES          # 56-class detector head
+DET_NAMES: list[str] = TILE_NAMES + HUD_NAMES          # 57-class detector head
 HUD_NAME_TO_ID: dict[str, int] = {n: len(TILE_NAMES) + i for i, n in enumerate(HUD_NAMES)}
 NUM_DET_CLASSES: int = len(DET_NAMES)
-assert NUM_DET_CLASSES == 56, NUM_DET_CLASSES
+assert NUM_DET_CLASSES == 57, NUM_DET_CLASSES
 
 # liqi operation type -> button class. Wire shape verified on run_13/game1:
 # raw_liqi.data.data.operation = {seat, operationList:[{type, combination,...}], ...}.
-# type 1 = dapai (no button), 11 = babei (3p, out of scope). An/dai/ka kan share
-# ONE button. Codes follow Akagi/MahjongCopilot convention — re-check against
-# Akagi's liqi parser if a mismatch shows up in calibration (spec §3.3).
+# type 1 = dapai (no button). An/dai/ka kan share ONE button. Codes follow
+# Akagi/MahjongCopilot convention — re-check against Akagi's liqi parser if a
+# mismatch shows up in calibration (spec §3.3). 11 = babei (sanma 拔北 offer;
+# 北抜き banner verified on real 3P capture, run_1 seq 225/286).
 OP_TO_BTN: dict[int, str] = {
     2: "btn_chi", 3: "btn_pon",
     4: "btn_kan", 5: "btn_kan", 6: "btn_kan",
     7: "btn_riichi", 8: "btn_tsumo", 9: "btn_ron", 10: "btn_kyushu",
+    11: "btn_babei",
 }
 
 

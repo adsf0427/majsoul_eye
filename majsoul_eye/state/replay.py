@@ -94,6 +94,12 @@ class BoardState:
     # liqi op types offered to the hero by the LATEST applied record (None if the
     # latest record carries no offer) — drives button auto-labels; see state/ops.py.
     pending_ops: Optional[list[int]] = None
+    # 3-player (sanma) game. Set from start_kyoku (scores padded with a 0 for the
+    # phantom seat 3 — the MJC/Akagi 3P mjai convention) or by any nukidora event.
+    # Actors 0-2 ARE the E1 chair indices, so the 4P screen ring (hero+rel)%4 still
+    # applies with chair 3 (the would-be E1 north seat) permanently empty (STATUS
+    # §1.59); consumers only need this flag to switch geometry constants.
+    sanma: bool = False
     in_round: bool = False
     ended: bool = False
     # Seat that owes the MANDATORY immediate discard following a chi/pon/daiminkan/
@@ -173,6 +179,14 @@ class Replayer:
     def _on_start_kyoku(self, ev: dict) -> None:
         s = self.state
         hero = s.hero_seat
+        scores = list(ev["scores"])
+        if len(scores) < NUM_PLAYERS:            # raw 3P source without the pad
+            scores += [0] * (NUM_PLAYERS - len(scores))
+        # Points-conservation identity: total points in play are 100000 (4P,
+        # 25000x4) vs 105000 (3P, 35000x3) at EVERY kyoku start, riichi sticks
+        # included — so this never collides, unlike a bare scores[3]==0 test
+        # (a real 4P seat CAN start a kyoku at exactly 0: ai_session/run_8/game6).
+        conserved = sum(scores) + 1000 * ev["kyotaku"]
         self.state = BoardState(
             hero_seat=hero,
             bakaze=ev["bakaze"],
@@ -180,8 +194,9 @@ class Replayer:
             honba=ev["honba"],
             kyotaku=ev["kyotaku"],
             oya=ev["oya"],
-            scores=list(ev["scores"]),
+            scores=scores,
             dora_markers=[ev["dora_marker"]],
+            sanma=s.sanma or len(ev["scores"]) == 3 or conserved == 105000,
             in_round=True,
         )
         self._pending_reach = [False] * NUM_PLAYERS
@@ -293,6 +308,7 @@ class Replayer:
 
     def _on_nukidora(self, ev: dict) -> None:  # 3P only
         actor = ev["actor"]
+        self.state.sanma = True
         self.state.nukidora[actor] += 1
         self.state.concealed_counts[actor] -= 1
         if actor == self.state.hero_seat:

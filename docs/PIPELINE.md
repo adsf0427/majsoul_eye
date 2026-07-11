@@ -133,6 +133,19 @@
   不影响既有 `"ok"`/`"timeout"` 消费者（下游默认不读取、不参与标注/建库）；每行（含 `"ok"`）都新增
   `dt` 字段（本次截图相对触发事件 `last_event_t` 的秒数），供将来"从多帧里挑最佳一张"的
   best-shot selector 使用（尚未实现，见 STATUS §1.41 的 OWNED FOLLOW-UP）。
+- **三麻（3P/sanma）引擎已接入**（2026-07-10，STATUS §1.58）：bot 默认同时挂 4P+3P——
+  `--model-3p default.pth`（空串关闭）经 `majsoul_eye/capture/bot3p.py::make_sanma_bot` 引用
+  兄弟仓 Akagi 的 mortal3p 栈（new-arch 622 通道 `default.pth` + 其自带 `.libriichi`
+  featurizer pyd；**不是** shinkuan `libriichi3p` 发行版——那个是 775 通道、配旧 `mortal.pth`）；
+  `--akagi` 指 checkout（默认 `D:/code/phoenix/Akagi`），缺资产仅警告并回退 4P-only。
+  三麻局 GameState 按 seatList 自动判 MJ3P：GT 推导、截图 arm、AI 决策（含拔北点击，MJC 原生）
+  全链路可用；`--join-mode {4E,4S,3E,3S}`（默认 4E）参数化 `--autojoin` 房间；multishot 对
+  拔北 offer（liqi op 11）加拍。**三麻务必 `--randomize 0`**：3p new-arch 模型 q 值分布很平
+  （softmax 首选 ~0.13 vs 4P 的 ~0.95），默认 `--randomize 2` 会让 ~63% 的 dahai 被换成
+  top-3 其它牌（4P 下同机制几乎从不触发）——点击将与控制台 ACT 打印不一致（GT 仍正确，
+  来自 wire），但打牌强度明显劣化。**标注/建库已适配三麻**（2026-07-11，STATUS §1.61，
+  见"标注"节）——三麻局可以进 build_datasets（检测头 57 类含 `btn_babei`）；
+  ⚠️ recognize/重建侧（assemble/observe/reconstruct）仍 4P-only。
 - `--auto-next-debug`（**诊断专用，非数据集输入**）：`--auto-next` 循环卡死时开这个，每轮把当前
   端末帧 + 四个按钮 guard 的 frac/质心/预测分支（**全在同一帧上评估**）+ lobby menu_diff 存到
   `<run>/_autonext_debug/`（PNG + `autonext_debug.jsonl`）。产物在 `frames/`、`games.json` 之外，
@@ -142,6 +155,16 @@
   脚本保留只为存档复现 session5/6。
 
 ### 标注（annotate）
+- **三麻（3P）已适配**（2026-07-11，STATUS §1.61）：`BoardState.sanma`（start_kyoku
+  `scores[3]==0` 或任一 nukidora 事件置位）驱动 `pipeline.set_sanma` **原地切换**几何常数——
+  `DISCARD_GRID_3P`/`DISCARD_ROW_OFFSETS_3P`/`MELD_STRIP2_3P`（`calibrate_annotation_model.py`
+  实测 refit：侧河列距 -3%、self 行距 +3.1%、across 行距 -5.2%、hero 副露角 cross +46px；
+  refit 后复测恒等 ±1px）。座位映射零改动（`(hero+rel)%4` 照用，椅子 3 = 首局北家位恒空，
+  §1.59）。**拔北堆**（`NUKI_STRIP_3P`，`calibrate_nukidora.py` 标定）以 `tile='N'` +
+  `nuki:True` 并入 `meld_boxes`（self 堆逐局 ±12px 浮动由 1-D fill snap 吸收）；HUD 侧
+  `field_texts` 跳过空位分数、三麻自风 `ESW`，babei offer（op 11）→ 新检测类 `btn_babei`
+  （id 56，尾部追加，56 类旧权重仍是前缀）。`--sanma`（refit 用）/测量端按帧自动切换。
+  ⚠️ recognize/重建侧（assemble/observe/reconstruct）仍 4P-only。
 - `annotate_ai_session.py` 默认标注**全部** `paths.ai_captures()`；`--captures` 指定局；
   `--frames-dir` 可将某局指向另一帧目录（历史上用于 run_5 信箱局的 derived 修复帧，现已就地修复不再需要）；`--workers` 默认保守 4（RAM 束）。
 - GT 谓词丢弃发牌窗帧（`replay.is_deal_window`：rivers 全空）；hero 摸牌槽经 `replay.drawn_tile`
@@ -332,6 +355,8 @@ bash scripts/train/launch_detector.sh obb --dataset v2 --gpus 4,5,6,7
 | `captures/intermediate/gt/` | **已退役删除**（AI 采集直接写 GTRecord，无转换产物） |
 | `label/`（`autolabel.py`） | 仅剩 hero 手牌+dora 框供 `annotate_frame` 调用；river/meld 旧几何已删 |
 | `scripts/inspect/count_dora_glow.py` | **现役一次性诊断工具**（非管线环节）：统计每个 tile 类别的「发光实例/总实例」覆盖，判断是否需要为宝牌闪光加专门增强。读 GT 采集（Akagi-free），纯 stdout。见 `docs/superpowers/specs/2026-07-05-dora-glow-aug-design.md` |
+| `scripts/capture/verify_bot3p.py` | **现役一次性验证工具**（非管线环节）：离线验证三麻 bot 栈（Akagi mortal3p 引擎 + MJC glue）——`init_bot(seat, MJ3P)` 冒烟 + 真实三麻 mjai 整局三座位回放。Akagi/MJC/`default.pth` 任一变动后重跑（无需浏览器）。见 STATUS §1.58 |
+| `scripts/annotate/calibrate_nukidora.py` | **现役一次性标定工具**（非管线环节）：三麻拔北堆几何（每座 anchor+step+foot，`pipeline.NUKI_STRIP_3P`）——GT 计数 vs 面掩膜连通域匹配自动测量，皮肤/客户端改版后重跑。见 STATUS §1.61 |
 | `scripts/eval/eval_reconstruction.py` | **QA 工具**（非管线环节，局面复原验收）：三层评测——oracle（GT `BoardState` → `ObservedState` → `reconstruct` → `Replayer` 往返一致性，无 GPU 依赖）/ assemble（真实帧 → `TileDetector`（+可选 `HudReader`）→ `assemble` 装配 vs GT 投影，按 zone 报错 + 拒收帧按 violation 类别计数 `rejected_reasons`——HUD 交叉校验新增 `hud_scores`/`hud_kyotaku`/`hud_wall` 三类拒收原因；另打印 HUD 逐字段核对报告 `hud_ok`/`hud_err`/`hud_missing` + `score_anim_rejected` 计数，`--no-hud` 关闭整条 HUD 装配只测 tile-board）/ engine（真实 mjai 前缀 vs 复原序列各喂 `--engine-cmd` 指定的任意 mjai bot，比较最终决策，stdin/stdout JSON lines 契约；`{seat}` 占位符按各序列 `start_game` 的 hero id 实例化——复原序列无 HUD 时 hero 恒在绝对座位 0，与真实序列不同）。oracle 在全量 `captures/raw/ai_session` 上验收 ≥99%（实测见 STATUS §1.52）；单帧 HUD 集成的 assemble 层回归数字见 STATUS §1.54。spec: `docs/superpowers/specs/2026-07-05-board-reconstruction-design.md`、`docs/superpowers/specs/2026-07-09-hud-integration-design.md` |
 | `scripts/eval/mortal_stdin.py` | **QA 辅助工具**（非管线环节）：mjai stdin/stdout 包装 `../auto/mycv` 的 Mortal（version=4 b24c512，`mortal.pth`，cpu），供 `eval_reconstruction --level engine --engine-cmd "python scripts/eval/mortal_stdin.py {seat}"` 用。非 shipped 识别器组件，允许触及 sibling repo |
 | `scripts/recognize/recognize_frame.py` | **🔁 现役工具**（非管线环节，运行时识别链路的 CLI 入口）：截图 → `TileDetector`+`assemble`+`reconstruct` → JSON lines（ObservedState + 合法 mjai 序列 + fabricated 说明；拒收帧给 violations）。`--weights` 默认取 `weights/detector/tile_detector_obb_*.pt` 最新者；宽高比自动分派（~16:9 全幅 / 更宽走 `locate_wide` 居中板+屏角宝牌救援 / 更窄走信箱裁剪，`--letterbox` 可强制）；`--no-reconstruct`/`--pretty`。**HUD 默认开**：自动打包加载 `majsoul_eye/recognize/hud_reader.pt`（`--no-hud` 关闭 / `--hud-weights` 换权重），`assemble(dets, region, frame_bgr, hud_reader)` 用检测框+`HudReader`+原图填充 ObservedState 的 scores/bakaze/kyoku/honba/kyotaku/left_tile_count/seat_wind_self/pending_buttons——**含宽屏手机帧**（2026-07-09 放开 `region.ox==0` 门控：中央面板在手机布局同构渲染，samples/ 16 张实测全字段检出+读数精确，分数/余牌守恒校验兜底；宽屏未验证项=立直棒；暗皮肤按钮欠召回**根因已定位并修复在标注侧**（STATUS §1.55：不是类不均衡，是 46% 可见按钮被当背景负样本训练），待 re-annotate + 重训检测器后复验）。Akagi-free，供外部调用/快速检视（手机截图实测可用） |
