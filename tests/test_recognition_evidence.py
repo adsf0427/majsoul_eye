@@ -6,7 +6,8 @@ from majsoul_eye.coords import HAND, dora_slot
 from majsoul_eye.normalize import BoardRegion
 from majsoul_eye.recognize.assemble import assemble_with_evidence
 from majsoul_eye.recognize.detector import Detection
-from majsoul_eye.recognize.evidence import CandidatePolicy
+from majsoul_eye.recognize.evidence import (
+    CandidatePolicy, FieldObservation, attach_tile_candidates)
 from majsoul_eye.tiles import NAME_TO_ID, TILE_NAMES
 
 REGION = BoardRegion(0, 0, 1920, 1080, 1920, 1080)
@@ -55,20 +56,49 @@ def test_candidates_require_named_calibration():
 
 
 def test_hud_scores_use_numeric_relative_seats_zero_through_three():
-    original = hudstate.assemble_hud
-    hudstate.assemble_hud = lambda dets, reader, frame: {
-        "scores": [25000, 26000, 24000, 25000],
-    }
+    original = hudstate._assemble_hud_with_producers
+    dets = [SimpleNamespace(name=name) for name in
+            ("score_self", "score_right", "score_across", "score_left")]
+    hudstate._assemble_hud_with_producers = lambda d, reader, frame: (
+        {"scores": [25000, 26000, 24000, 25000]},
+        {det.name: det for det in dets})
     try:
-        dets = [SimpleNamespace(name=name) for name in
-                ("score_self", "score_right", "score_across", "score_left")]
         result = hudstate.assemble_hud_with_evidence(dets, None, None)
     finally:
-        hudstate.assemble_hud = original
+        hudstate._assemble_hud_with_producers = original
     assert [(field.field_key, field.value) for field in result.fields] == [
         ("round.scores.0", 25000), ("round.scores.1", 26000),
         ("round.scores.2", 24000), ("round.scores.3", 25000),
     ]
+
+
+def test_aggregate_fields_never_receive_candidates():
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+    single = FieldObservation("hand:0", "1m", 0.9,
+                              [det_for_box("1m", REGION.norm_to_px(HAND.slot_box(0)))])
+    aggregate = FieldObservation(
+        "meld:1:0", object(), 0.9,
+        [det_for_box("P", REGION.norm_to_px(HAND.slot_box(1))),
+         det_for_box("P", REGION.norm_to_px(HAND.slot_box(2)))])
+    attach_tile_candidates([single, aggregate], frame, StubClassifier(),
+                           CandidatePolicy("tile-temp-v1", 3))
+    assert [c.value for c in single.candidates] == ["1m", "2m", "3m"]
+    assert aggregate.candidates == []
+
+
+def test_hud_evidence_attaches_only_the_value_producing_detection():
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+    skipped = SimpleNamespace(name="wall_count", xyxy=(10.0, 10.0, 10.0, 30.0))
+    producing = SimpleNamespace(name="wall_count", xyxy=(100.0, 10.0, 140.0, 30.0))
+
+    class StubReader:
+        def read(self, crop, cls):
+            return "69"
+
+    result = hudstate.assemble_hud_with_evidence([skipped, producing], StubReader(), frame)
+    field = next(f for f in result.fields if f.field_key == "round.leftTileCount")
+    assert field.value == 69
+    assert field.detections == [producing]
 
 
 def test_hud_class_probabilities_only_expose_classification_heads():

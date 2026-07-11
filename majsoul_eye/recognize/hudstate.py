@@ -50,11 +50,12 @@ def _attribute_slot(dx: float, dy: float) -> str:
     return "right" if dx > 0 else "left"
 
 
-def assemble_hud(dets, reader, frame_bgr: np.ndarray) -> dict:
+def _assemble_hud_with_producers(dets, reader, frame_bgr):
     out = {"scores": {"self": None, "right": None, "across": None, "left": None},
            "round": None, "wall": None, "kyotaku": None, "honba": None,
            "seat_wind": None, "buttons": [],
            "riichi": {"self": False, "right": False, "across": False, "left": False}}
+    producers = {}           # name -> Detection that produced the stored value
     anchor = None            # center of round_label detection (preferred)
     anchor_fallback = None   # center of wall_count detection (fallback)
     stick_centers = []       # (cx, cy) of every `reach_stick` detection
@@ -81,19 +82,25 @@ def assemble_hud(dets, reader, frame_bgr: np.ndarray) -> dict:
         text = reader.read(crop, cls)
         if cls in _SCORE_KEY:
             out["scores"][_SCORE_KEY[cls]] = _to_int(text)
+            producers[cls] = det
         elif cls == "wall_count":
             out["wall"] = _to_int(text, strip="余")
+            producers[cls] = det
             if anchor_fallback is None:
                 anchor_fallback = ((x0 + x1) / 2, (y0 + y1) / 2)
         elif cls == "riichi_stick_count":
             out["kyotaku"] = _to_int(text, strip="x")
+            producers[cls] = det
         elif cls == "honba_count":
             out["honba"] = _to_int(text, strip="x")
+            producers[cls] = det
         elif cls == "round_label":
             out["round"] = text
+            producers[cls] = det
             anchor = ((x0 + x1) / 2, (y0 + y1) / 2)
         elif cls == "seat_wind_self":
             out["seat_wind"] = text
+            producers[cls] = det
     out["buttons"].sort(key=HUD_NAMES.index)
 
     if stick_centers:
@@ -103,33 +110,35 @@ def assemble_hud(dets, reader, frame_bgr: np.ndarray) -> dict:
             for cx, cy in stick_centers:
                 out["riichi"][_attribute_slot(cx - ax, cy - ay)] = True
         # else: no anchor detection present in this frame -> leave riichi all False.
-    return out
+    return out, producers
+
+
+def assemble_hud(dets, reader, frame_bgr: np.ndarray) -> dict:
+    values, _ = _assemble_hud_with_producers(dets, reader, frame_bgr)
+    return values
 
 
 def assemble_hud_with_evidence(dets, reader, frame_bgr) -> HudAssembly:
-    values = assemble_hud(dets, reader, frame_bgr)
-    by_name = {}
-    for det in dets:
-        by_name.setdefault(det.name, []).append(det)
+    values, producers = _assemble_hud_with_producers(dets, reader, frame_bgr)
     fields = []
     score_names = ((0, "score_self"), (1, "score_right"),
                    (2, "score_across"), (3, "score_left"))
-    score_values = values["scores"]
     relative_keys = ("self", "right", "across", "left")
     for seat, name in score_names:
-        if by_name.get(name):
+        if name in producers:
+            score_values = values["scores"]
             value = (score_values[seat] if isinstance(score_values, list)
                      else score_values[relative_keys[seat]])
-            fields.append(HudFieldEvidence(f"round.scores.{seat}",
-                                           value, by_name[name]))
+            fields.append(HudFieldEvidence(f"round.scores.{seat}", value,
+                                           [producers[name]]))
     for key, name in (("round.bakazeKyoku", "round_label"),
                       ("round.leftTileCount", "wall_count"),
                       ("round.kyotaku", "riichi_stick_count"),
                       ("round.honba", "honba_count"),
                       ("round.seatWindSelf", "seat_wind_self")):
-        if by_name.get(name):
+        if name in producers:
             lookup = {"round.bakazeKyoku": "round", "round.leftTileCount": "wall",
                       "round.kyotaku": "kyotaku", "round.honba": "honba",
                       "round.seatWindSelf": "seat_wind"}[key]
-            fields.append(HudFieldEvidence(key, values[lookup], by_name[name]))
+            fields.append(HudFieldEvidence(key, values[lookup], [producers[name]]))
     return HudAssembly(values, fields)

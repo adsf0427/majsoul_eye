@@ -12,6 +12,16 @@ from majsoul_eye.tiles import TILE_NAMES
 
 @dataclass(frozen=True)
 class CandidatePolicy:
+    """Mechanical gate for tile-candidate attachment.
+
+    This layer only checks that a calibration version string is present; it
+    does not (and must not) validate provenance. Callers must construct the
+    policy exclusively from the active model manifest whose named calibration
+    passed the independent golden evaluation (enforced by the Task 9 runtime;
+    the initial manifest ships calibrationVersion=null, so candidates stay
+    off). An arbitrary caller-supplied string is not proof of calibration.
+    """
+
     calibration_version: str | None
     top_k: int = 3
 
@@ -61,7 +71,7 @@ def attach_tile_candidates(fields: list[FieldObservation], frame_bgr: np.ndarray
     if classifier is None or not policy.enabled:
         return
     indexed = [(i, field.detections[0]) for i, field in enumerate(fields)
-               if field.detections and field.detections[0].tile is not None]
+               if len(field.detections) == 1 and field.detections[0].tile is not None]
     if not indexed:
         return
     probabilities = classifier.predict_proba(
