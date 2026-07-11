@@ -12,7 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from majsoul_eye.state.history import ReconstructionOverrides, derive_history_baseline
+from majsoul_eye.state.history import (
+    HistoryConflict, HistorySolution, ReconstructionOverrides,
+    derive_history_baseline, solve_hidden_history, validate_history_semantics,
+)
 from majsoul_eye.state.observe import ObservedState, check_observed
 from majsoul_eye.tiles import red_to_normal
 from majsoul_eye.what_cut.schema import HistoryBaselineItemV1, SelectedHistoryV1, WhatCutIssueV1
@@ -103,220 +106,224 @@ def _pending_reach_seats(obs: ObservedState) -> list[int]:
             if obs.reach[r] and obs.rivers[r] and obs.rivers[r][-1].sideways]
 
 
-def _search(obs: ObservedState, oya_rel: int,
-            pending_reach: Optional[int] = None) -> Optional[list]:
-    """Ops: ("draw",rel) ("discard",rel,idx) ("ghost",rel,pai,reach)
+@dataclass
+class SkeletonBudget:
+    limit: int = 4096
+    yielded: int = 0
+    exhausted: bool = False
+
+
+def _iter_skeletons(obs: ObservedState, oya_rel: int,
+                    pending_reach: Optional[int] = None,
+                    budget: SkeletonBudget | None = None):
+    """Ops: ("draw",rel) ("discard",rel,idx,drew) ("ghost",rel,pai,reach,drew,owner,mi)
     ("call",_Item) ("ankan",_Item) ("kakan",_Item). Canonical branch order:
     visible discard > own-turn kan > ghost/call (calls as late as feasible).
-    pending_reach: seat whose riichi declaration is still unaccepted — its
-    declaring dahai must be the sequence's FINAL event."""
+    Yields every complete operation list (not just the first). pending_reach:
+    seat whose riichi declaration is still unaccepted — its declaring dahai must
+    be the sequence's FINAL event. `active` is recursion-cycle protection only;
+    NO prefix-insensitive failed-state memo (two prefixes reaching the same turn
+    state can differ in hidden-hand feasibility)."""
+    budget = budget or SkeletonBudget()
     rivers = obs.rivers
-    n = [len(r) for r in rivers]
+    counts = [len(river) for river in rivers]
     creation, kakans = _items_for(obs)
-    ncre = [len(c) for c in creation]
-    failed: set = set()
-    # hero call-pending terminal: hero's LAST chi/pon must be the sequence's
-    # FINAL event (no forced discard after it) — see _hero_call_pending.
-    pending_it = creation[0][-1] if _hero_call_pending(obs) else None
+    creation_counts = [len(items) for items in creation]
+    active = set()
+    pending_item = creation[0][-1] if _hero_call_pending(obs) else None
+    sideways = [next((i for i, tile in enumerate(river) if tile.sideways), None)
+                for river in rivers]
+    must_reach = [bool(obs.reach[seat]) and sideways[seat] is None
+                  for seat in range(4)]
 
-    # precompute per-seat sideways visible index (None if no riichi shown)
-    side_idx = [next((i for i, t in enumerate(rivers[r]) if t.sideways), None)
-                for r in range(4)]
+    def declared(seat, cursors, reach_ghost_mask):
+        if sideways[seat] is None:
+            return bool(reach_ghost_mask >> seat & 1)
+        return cursors[seat] > sideways[seat] or bool(reach_ghost_mask >> seat & 1)
 
-    # riichi known from the HUD reach stick but declaration tile invisible
-    # (called away with no later discard): the search MUST bind that seat's
-    # reach to one of its ghosts, and may not finish until it has.
-    must_reach = [bool(obs.reach[r]) and side_idx[r] is None for r in range(4)]
+    def all_done(cursors, creation_index, kakan_mask, reach_ghost_mask):
+        return (list(cursors) == counts
+                and list(creation_index) == creation_counts
+                and kakan_mask == (1 << len(kakans)) - 1
+                and all(reach_ghost_mask >> seat & 1 for seat in range(4)
+                        if must_reach[seat]))
 
-    def declared(r, cur, rghost):
-        if side_idx[r] is None:
-            return bool(rghost >> r & 1)
-        return cur[r] > side_idx[r] or bool(rghost >> r & 1)
+    def go(cursors, creation_index, kakan_mask, reach_ghost_mask, actor, prefix):
+        if budget.yielded >= budget.limit:
+            budget.exhausted = True
+            return
+        state = (cursors, creation_index, kakan_mask, reach_ghost_mask, actor)
+        if state in active:
+            return
+        active.add(state)
+        if all_done(cursors, creation_index, kakan_mask, reach_ghost_mask):
+            tail = [("draw", 0)] if obs.drawn_tile is not None and actor == 0 else []
+            if obs.drawn_tile is None or tail:
+                budget.yielded += 1
+                yield prefix + tail
+            active.remove(state)
+            return
+        yield from decide(cursors, creation_index, kakan_mask, reach_ghost_mask,
+                          actor, True, prefix + [("draw", actor)])
+        active.remove(state)
 
-    def all_done(cur, cidx, kkmask, rghost):
-        return (list(cur) == n and list(cidx) == ncre
-                and kkmask == (1 << len(kakans)) - 1
-                and all(rghost >> r & 1 for r in range(4) if must_reach[r]))
-
-    def go(cur, cidx, kkmask, rghost, actor):
-        key = (cur, cidx, kkmask, rghost, actor)
-        if key in failed:
-            return None
-        if all_done(cur, cidx, kkmask, rghost):
-            if obs.drawn_tile is not None:
-                return [("draw", 0)] if actor == 0 else None
-            return []
-        rest = decide(cur, cidx, kkmask, rghost, actor, drew=True)
-        if rest is not None:
-            return [("draw", actor)] + rest
-        failed.add(key)
-        return None
-
-    def decide(cur, cidx, kkmask, rghost, actor, drew):
+    def decide(cursors, creation_index, kakan_mask, reach_ghost_mask,
+               actor, drew, prefix):
         if (drew and actor == 0 and obs.drawn_tile is not None
-                and all_done(cur, cidx, kkmask, rghost)):
-            return []
-        # (a) plain visible discard
-        if cur[actor] < n[actor]:
-            nxt = list(cur)
-            nxt[actor] += 1
-            if actor == pending_reach and cur[actor] == side_idx[actor]:
-                # the unaccepted declaration: legal ONLY as the final event
-                # (any later action would have implied reach_accepted)
-                if obs.drawn_tile is None and pending_it is None \
-                        and all_done(tuple(nxt), cidx, kkmask, rghost):
-                    return [("discard", actor, cur[actor], drew)]
+                and all_done(cursors, creation_index, kakan_mask, reach_ghost_mask)):
+            if budget.yielded < budget.limit:
+                budget.yielded += 1
+                yield prefix
             else:
-                rest = go(tuple(nxt), cidx, kkmask, rghost, (actor + 1) % 4)
-                if rest is not None:
-                    return [("discard", actor, cur[actor], drew)] + rest
-        # (b) own-turn kans (need a fresh draw; kakan forbidden after riichi)
-        if drew:
-            if cidx[actor] < ncre[actor] and creation[actor][cidx[actor]].kind == "ankan":
-                it = creation[actor][cidx[actor]]
-                ncidx = list(cidx)
-                ncidx[actor] += 1
-                rest = decide(cur, tuple(ncidx), kkmask, rghost, actor, drew=True)
-                if rest is not None:
-                    return [("ankan", it), ("draw", actor)] + rest
-            if not declared(actor, cur, rghost):
-                for ki, it in enumerate(kakans):
-                    if kkmask >> ki & 1 or it.owner != actor:
-                        continue
-                    # its pon-part must already be triggered
-                    pon_pos = next(j for j, c in enumerate(creation[actor])
-                                   if c.mi == it.mi)
-                    if cidx[actor] <= pon_pos:
-                        continue
-                    rest = decide(cur, cidx, kkmask | (1 << ki), rghost, actor, drew=True)
-                    if rest is not None:
-                        return [("kakan", it), ("draw", actor)] + rest
-        # (c) ghost discard + call (a riichi'd owner cannot call)
-        for o in range(4):
-            if o == actor or cidx[o] >= ncre[o]:
-                continue
-            it = creation[o][cidx[o]]
-            if it.kind not in ("chi", "pon", "daiminkan") or it.target != actor:
-                continue
-            if declared(o, cur, rghost):
-                continue
-            ncidx = list(cidx)
-            ncidx[o] += 1
-            variants = [False]
-            if not declared(actor, cur, rghost) and actor != pending_reach:
-                # (a pending seat's declaration is its VISIBLE last discard —
-                #  never a ghost)
-                if side_idx[actor] is not None and cur[actor] == side_idx[actor]:
-                    variants.append(True)      # bind the reach to this ghost
-                elif must_reach[actor]:
-                    variants.append(True)      # stick-known riichi, tile called away
-            for reach_here in variants:
-                nrg = rghost | (1 << actor) if reach_here else rghost
-                pre = [("ghost", actor, it.pai, reach_here, drew, it.owner, it.mi), ("call", it)]
-                if it is pending_it:
-                    if all_done(cur, tuple(ncidx), kkmask, nrg):
-                        return pre       # terminal: hero now owes the discard
-                    continue             # the pending call must come last
-                if it.kind == "daiminkan":
-                    rest = decide(cur, tuple(ncidx), kkmask, nrg, o, drew=True)
-                    if rest is not None:
-                        return pre + [("draw", o)] + rest
-                else:
-                    rest = decide(cur, tuple(ncidx), kkmask, nrg, o, drew=False)
-                    if rest is not None:
-                        return pre + rest
-        return None
+                budget.exhausted = True
+            return
 
-    return go((0, 0, 0, 0), (0, 0, 0, 0), 0, 0, oya_rel)
+        if cursors[actor] < counts[actor]:
+            next_cursors = list(cursors)
+            next_cursors[actor] += 1
+            discard = ("discard", actor, cursors[actor], drew)
+            is_pending_declaration = (actor == pending_reach
+                                      and cursors[actor] == sideways[actor])
+            if is_pending_declaration:
+                if (obs.drawn_tile is None and pending_item is None
+                        and all_done(tuple(next_cursors), creation_index,
+                                     kakan_mask, reach_ghost_mask)
+                        and budget.yielded < budget.limit):
+                    budget.yielded += 1
+                    yield prefix + [discard]
+                elif (obs.drawn_tile is None and pending_item is None
+                      and all_done(tuple(next_cursors), creation_index,
+                                   kakan_mask, reach_ghost_mask)):
+                    budget.exhausted = True
+            else:
+                yield from go(tuple(next_cursors), creation_index, kakan_mask,
+                              reach_ghost_mask, (actor + 1) % 4,
+                              prefix + [discard])
+
+        if drew:
+            if (creation_index[actor] < creation_counts[actor]
+                    and creation[actor][creation_index[actor]].kind == "ankan"):
+                item = creation[actor][creation_index[actor]]
+                next_creation = list(creation_index)
+                next_creation[actor] += 1
+                yield from decide(cursors, tuple(next_creation), kakan_mask,
+                                  reach_ghost_mask, actor, True,
+                                  prefix + [("ankan", item), ("draw", actor)])
+            if not declared(actor, cursors, reach_ghost_mask):
+                for kakan_index, item in enumerate(kakans):
+                    if kakan_mask >> kakan_index & 1 or item.owner != actor:
+                        continue
+                    pon_position = next(index for index, created in enumerate(creation[actor])
+                                        if created.mi == item.mi)
+                    if creation_index[actor] <= pon_position:
+                        continue
+                    yield from decide(cursors, creation_index,
+                                      kakan_mask | (1 << kakan_index),
+                                      reach_ghost_mask, actor, True,
+                                      prefix + [("kakan", item), ("draw", actor)])
+
+        for caller in range(4):
+            if caller == actor or creation_index[caller] >= creation_counts[caller]:
+                continue
+            item = creation[caller][creation_index[caller]]
+            if item.kind not in ("chi", "pon", "daiminkan") or item.target != actor:
+                continue
+            if declared(caller, cursors, reach_ghost_mask):
+                continue
+            next_creation = list(creation_index)
+            next_creation[caller] += 1
+            reach_variants = [False]
+            if not declared(actor, cursors, reach_ghost_mask) and actor != pending_reach:
+                if sideways[actor] is not None and cursors[actor] == sideways[actor]:
+                    reach_variants.append(True)
+                elif must_reach[actor]:
+                    reach_variants.append(True)
+            for reach_here in reach_variants:
+                next_reach_mask = (reach_ghost_mask | (1 << actor)
+                                   if reach_here else reach_ghost_mask)
+                ghost = ("ghost", actor, item.pai, reach_here, drew,
+                         item.owner, item.mi)
+                called = [ghost, ("call", item)]
+                if item is pending_item:
+                    if (all_done(cursors, tuple(next_creation), kakan_mask,
+                                 next_reach_mask)
+                            and budget.yielded < budget.limit):
+                        budget.yielded += 1
+                        yield prefix + called
+                    elif all_done(cursors, tuple(next_creation), kakan_mask,
+                                  next_reach_mask):
+                        budget.exhausted = True
+                    continue
+                if item.kind == "daiminkan":
+                    yield from decide(cursors, tuple(next_creation), kakan_mask,
+                                      next_reach_mask, caller, True,
+                                      prefix + called + [("draw", caller)])
+                else:
+                    yield from decide(cursors, tuple(next_creation), kakan_mask,
+                                      next_reach_mask, caller, False,
+                                      prefix + called)
+
+    yield from go((0, 0, 0, 0), (0, 0, 0, 0), 0, 0, oya_rel, [])
 
 
 # --- emission -----------------------------------------------------------------
 
 def _emit(obs: ObservedState, ops: list, oya_rel: int,
-          pending_reach: Optional[int] = None):
-    """ops -> (mjai events after start_kyoku, info dict for backfill).
-    pending_reach: that seat's declaring dahai (the final op) gets reach +
-    dahai but NO reach_accepted — the 1000-point stick is not on the table
-    yet, so it must not count into the score/kyotaku backfill either."""
-    events: list = []
-    haipai = list(obs.hero_hand)
+          solution: HistorySolution, pending_reach: Optional[int] = None):
+    events: list[dict] = []
+    haipai = list(solution.hero_haipai)
     reach_count = [0] * 4
     declared = [False] * 4
-    just_called_hero = False
-    side_idx = [next((i for i, t in enumerate(r) if t.sideways), None)
-                for r in obs.rivers]
-    dora_next = 1                      # markers[0] went into start_kyoku
+    side_idx = [next((i for i, tile in enumerate(river) if tile.sideways), None)
+                for river in obs.rivers]
+    dora_next = 1
 
     def flip_dora():
         nonlocal dora_next
         if dora_next < len(obs.dora_markers):
-            events.append({"type": "dora", "dora_marker": obs.dora_markers[dora_next]})
+            events.append({"type": "dora",
+                           "dora_marker": obs.dora_markers[dora_next]})
             dora_next += 1
 
-    for i, op in enumerate(ops):
+    for op_index, op in enumerate(ops):
         kind = op[0]
         if kind == "draw":
-            r = op[1]
-            if r != 0:
-                events.append({"type": "tsumo", "actor": r, "pai": "?"})
-                continue
-            pai = obs.drawn_tile
-            if i + 1 < len(ops):
-                nxt = ops[i + 1]
-                if nxt[0] == "discard":
-                    pai = obs.rivers[0][nxt[2]].pai
-                elif nxt[0] == "ghost" and nxt[1] == 0:
-                    pai = nxt[2]
-                elif nxt[0] == "ankan" and nxt[1].owner == 0:
-                    pai = nxt[1].consumed[0]
-                elif nxt[0] == "kakan" and nxt[1].owner == 0:
-                    pai = nxt[1].pai
-            events.append({"type": "tsumo", "actor": 0, "pai": pai})
+            events.append({"type": "tsumo", "actor": op[1],
+                           "pai": solution.draw_pai[op_index]})
         elif kind in ("discard", "ghost"):
-            r = op[1]
+            actor = op[1]
             if kind == "discard":
-                idx, pai = op[2], obs.rivers[r][op[2]].pai
-                is_reach = (idx == side_idx[r]) and not declared[r]
+                river_index = op[2]
+                pai = obs.rivers[actor][river_index].pai
+                is_reach = river_index == side_idx[actor] and not declared[actor]
             else:
                 pai = op[2]
                 is_reach = op[3]
             if is_reach:
-                events.append({"type": "reach", "actor": r})
-            if r == 0:
-                tsumogiri = not just_called_hero
-                if just_called_hero:
-                    haipai.append(pai)
-                just_called_hero = False
-            else:
-                tsumogiri = declared[r]        # post-riichi discards are forced tsumogiri
-            events.append({"type": "dahai", "actor": r, "pai": pai,
-                           "tsumogiri": tsumogiri})
-            if is_reach and r != pending_reach:
-                events.append({"type": "reach_accepted", "actor": r})
-                declared[r] = True
-                reach_count[r] = 1
+                events.append({"type": "reach", "actor": actor})
+            events.append({"type": "dahai", "actor": actor, "pai": pai,
+                           "tsumogiri": solution.tsumogiri[op_index]})
+            if is_reach and actor != pending_reach:
+                events.append({"type": "reach_accepted", "actor": actor})
+                declared[actor] = True
+                reach_count[actor] = 1
         elif kind == "call":
-            it = op[1]
-            events.append({"type": it.kind, "actor": it.owner, "target": it.target,
-                           "pai": it.pai, "consumed": list(it.consumed)})
-            if it.owner == 0:
-                haipai.extend(it.consumed)
-                if it.kind in ("chi", "pon"):
-                    just_called_hero = True
-            if it.kind == "daiminkan":
+            item = op[1]
+            events.append({"type": item.kind, "actor": item.owner,
+                           "target": item.target, "pai": item.pai,
+                           "consumed": list(item.consumed)})
+            if item.kind == "daiminkan":
                 flip_dora()
         elif kind == "ankan":
-            it = op[1]
-            events.append({"type": "ankan", "actor": it.owner,
-                           "consumed": list(it.consumed)})
-            if it.owner == 0:
-                haipai.extend(it.consumed[1:])   # 4th copy was that turn's draw
+            item = op[1]
+            events.append({"type": "ankan", "actor": item.owner,
+                           "consumed": list(item.consumed)})
             flip_dora()
         elif kind == "kakan":
-            it = op[1]
-            events.append({"type": "kakan", "actor": it.owner, "pai": it.pai,
-                           "consumed": list(it.consumed)})
-            flip_dora()                          # added tile was the draw: nothing to haipai
+            item = op[1]
+            events.append({"type": "kakan", "actor": item.owner,
+                           "pai": item.pai, "consumed": list(item.consumed)})
+            flip_dora()
     return events, {"haipai": haipai, "reach_count": reach_count}
 
 
@@ -341,12 +348,22 @@ def _relabel(events: list, hero_abs: int) -> list:
     return out
 
 
+def _reconstruction_failure(code: str, message: str,
+                            field_path: str | None = None,
+                            **params) -> ReconstructionResult:
+    issue = {"code": code, "severity": "blocking", "fieldPath": field_path,
+             "evidenceIds": [], "messageKey": f"whatCut.issue.{code}",
+             "params": {"message": message, **params}}
+    return ReconstructionResult(False, reason=message, issues=[issue])
+
+
 def reconstruct(obs: ObservedState,
                 overrides: ReconstructionOverrides | None = None) -> ReconstructionResult:
     overrides = overrides or ReconstructionOverrides()
-    viol = list(obs.violations) + check_observed(obs)
-    if viol:
-        return ReconstructionResult(False, reason="; ".join(viol))
+    violations = list(obs.violations) + check_observed(obs)
+    if violations:
+        return _reconstruction_failure("OBSERVED_STATE_INVALID",
+                                       "; ".join(violations))
     if obs.seat_wind_self is not None:
         cand = [(4 - WINDS.index(obs.seat_wind_self)) % 4]
     else:
@@ -355,25 +372,46 @@ def reconstruct(obs: ObservedState,
     # must be one whose sideways tile is still its newest discard (candidates
     # from _pending_reach_seats; check_observed already rejected other deficits)
     pend_cand = _pending_reach_seats(obs) or [None]
-    feasible, chosen, ops, pending = [], None, None, None
+    first_conflict = None
+    chosen = ops = solution = pending = None
+    feasible = []
+    search_exhausted = False
     for oya_rel in cand:
-        for pend in pend_cand:
-            got = _search(obs, oya_rel, pending_reach=pend)
-            if got is not None:
+        for pending_candidate in pend_cand:
+            budget = SkeletonBudget()
+            for candidate_ops in _iter_skeletons(
+                    obs, oya_rel, pending_reach=pending_candidate, budget=budget):
                 if oya_rel not in feasible:
                     feasible.append(oya_rel)
-                if chosen is None:
-                    chosen, ops, pending = oya_rel, got, pend
+                if chosen is not None:
+                    break  # survey later dealer feasibility without replacing selection
+                candidate_solution = solve_hidden_history(
+                    obs, candidate_ops, overrides, oya_rel, pending_candidate)
+                if isinstance(candidate_solution, HistoryConflict):
+                    first_conflict = first_conflict or candidate_solution
+                    continue
+                chosen, ops, solution, pending = (
+                    oya_rel, candidate_ops, candidate_solution, pending_candidate)
+                break
+            search_exhausted = search_exhausted or budget.exhausted
     if chosen is None:
-        return ReconstructionResult(
-            False, reason=f"no legal turn order for any oya in {cand}",
-            diagnostics={"feasible_oya_rel": []})
+        conflict = (HistoryConflict("HISTORY_SEARCH_LIMIT", None,
+                                    {"skeletonLimit": SkeletonBudget().limit})
+                    if search_exhausted else
+                    first_conflict or HistoryConflict("NO_LEGAL_TURN_ORDER", None, {}))
+        issue = {"code": conflict.code, "severity": "blocking",
+                 "fieldPath": conflict.field_path, "evidenceIds": [],
+                 "messageKey": f"whatCut.issue.{conflict.code}",
+                 "params": conflict.params}
+        return ReconstructionResult(False, reason=conflict.code, issues=[issue])
     history_baseline, _ = derive_history_baseline(
         obs, ops, overrides, pending_reach=pending)
-    body, info = _emit(obs, ops, chosen, pending_reach=pending)
+    body, info = _emit(obs, ops, chosen, solution, pending_reach=pending)
     if len(info["haipai"]) != 13:
-        return ReconstructionResult(
-            False, reason=f"internal: fabricated haipai {len(info['haipai'])} != 13")
+        return _reconstruction_failure(
+            "INTERNAL_HAIPAI_INVALID",
+            f"internal: fabricated haipai {len(info['haipai'])} != 13",
+            actualCount=len(info["haipai"]))
     hero_abs, oya_abs, kyoku = _abs_map(obs, chosen)
     n_reach = sum(info["reach_count"])
     scores_rel = list(obs.scores) if obs.scores is not None else [25000] * 4
@@ -386,19 +424,24 @@ def reconstruct(obs: ObservedState,
     sk = {"type": "start_kyoku", "bakaze": obs.bakaze or "E", "kyoku": kyoku,
           "honba": obs.honba or 0, "kyotaku": max(0, kyotaku), "oya": oya_abs,
           "dora_marker": obs.dora_markers[0], "scores": scores_abs, "tehais": tehais}
-    events = [{"type": "start_game", "id": hero_abs}, sk] + _relabel(body, hero_abs)
     fabricated = {"haipai": tehais[hero_abs],
                   "defaults": [k for k in ("scores", "bakaze", "kyoku", "honba", "kyotaku")
                                if getattr(obs, k) is None]}
+    events = [{"type": "start_game", "id": hero_abs}, sk] + _relabel(body, hero_abs)
+    semantic_violations = validate_history_semantics(events)
+    if semantic_violations:
+        issue = {"code": "INTERNAL_HISTORY_INVALID", "severity": "blocking",
+                 "fieldPath": None, "evidenceIds": [],
+                 "messageKey": "whatCut.issue.INTERNAL_HISTORY_INVALID",
+                 "params": {"message": "; ".join(semantic_violations)}}
+        return ReconstructionResult(False, reason=issue["code"], issues=[issue])
     diagnostics = {"feasible_oya_rel": feasible, "oya_rel": chosen}
     if _hero_call_pending(obs):
         diagnostics["hero_call_pending"] = True
     if pending is not None:
         diagnostics["pending_reach_seat"] = pending
     return ReconstructionResult(
-        True,
-        events=events,
-        fabricated=fabricated,
-        diagnostics=diagnostics,
+        True, events=events, fabricated=fabricated, diagnostics=diagnostics,
         history_baseline=history_baseline,
+        selected_history=solution.selected_history,
     )

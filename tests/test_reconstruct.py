@@ -188,6 +188,8 @@ def test_opponent_riichi_reach_events_and_tsumogiri():
 
 
 def test_hero_ankan_with_kandora():
+    # _roundtrip already pins full legality: replay -> check_invariants == []
+    # -> projection back to the identical ObservedState.
     o = _obs(hero_hand=H13[:9] + ["C"],                     # 10 concealed
              melds=[[ObservedMeld("ankan", ["F", "F", "F", "F"])], [], [], []],
              rivers=[[ObservedRiverTile("9p")], [ObservedRiverTile("E")],
@@ -198,8 +200,15 @@ def test_hero_ankan_with_kandora():
     ak = next(i for i, e in enumerate(evs) if e["type"] == "ankan")
     assert evs[ak]["consumed"] == ["F", "F", "F", "F"]
     assert evs[ak + 1] == {"type": "dora", "dora_marker": "6s"}
-    # the 4th F was that turn's draw: haipai holds only 3 F
-    assert evs[1]["tehais"][0].count("F") == 3
+    # Lexicographic canonical (hidden-history-v1): the fabricated haipai is
+    # deterministic scaffolding, NOT recovered gameplay truth. The pre-ankan
+    # hero draw is unconstrained, so it canonicalizes to the smallest legal
+    # tile (1m) — all four F sit in the haipai, and the rinshan draw is the
+    # tsumogiri'd 9p.
+    assert evs[ak - 1] == {"type": "tsumo", "actor": 0, "pai": "1m"}
+    assert evs[ak + 2] == {"type": "tsumo", "actor": 0, "pai": "9p"}
+    assert evs[1]["tehais"][0] == ["2m", "3m", "4m", "5m", "6m", "7m", "8m",
+                                   "9m", "C", "F", "F", "F", "F"]
 
 
 def test_kakan_pon_then_upgrade():
@@ -221,8 +230,14 @@ def test_kakan_pon_then_upgrade():
     ki = r.events.index(kk)
     assert r.events[ki + 1] == {"type": "dora", "dora_marker": "6s"}
     assert r.events[-1] == {"type": "tsumo", "actor": 0, "pai": "6s"}
-    # haipai: 10 concealed + pon's [P,P] + forced tedashi 9p = 13
-    assert sorted(r.events[1]["tehais"][0]) == sorted(H13[:10] + ["P", "P", "9p"])
+    # Lexicographic canonical (hidden-history-v1): the kakan'd P is
+    # haipai-held (deterministic scaffolding, not gameplay truth) and the
+    # kakan turn's unconstrained draw canonicalizes to the smallest legal
+    # tile (1m). haipai = 10 concealed - 1m + pon's [P,P] + kakan P +
+    # forced tedashi 9p. _roundtrip pins replay legality + projection.
+    assert r.events[ki - 1] == {"type": "tsumo", "actor": 0, "pai": "1m"}
+    assert r.events[1]["tehais"][0] == ["1p", "2m", "3m", "4m", "5m", "6m",
+                                        "7m", "8m", "9m", "9p", "P", "P", "P"]
 
 
 def test_riichi_tile_claimed_ghost_reach():
