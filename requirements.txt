@@ -9,6 +9,7 @@ ultralytics>=8.2      # YOLOv8/v11 (+OBB) detector for 河/副露 + external scr
 onnx>=1.16            # export
 onnxruntime>=1.18     # CPU inference deployment
 # paddleocr           # OR pytesseract — for player-name text (scores use a digit classifier)
+mahjong==2.0.0        # verified PyPI wheel; static Agari/Shanten + HandCalculator; Python >=3.10
 
 # --- capture ---
 mss>=9.0              # fast screen grab for the Windows client
