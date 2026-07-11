@@ -408,3 +408,18 @@ bash scripts/train/launch_detector.sh obb --dataset v2 --gpus 4,5,6,7
   worker 本身只绑 loopback，不为调试暴露公网接口。
 - **调试 CLI**：`scripts/recognize/recognize_frame.py` 与 worker 共享同一 manifest-bound 运行时，
   单帧 in / JSON 行 out（`--allow-experimental` 放行未提级的 layout）。
+- **部署前检查清单**（在权重所在机器上逐条过一遍，缺一不可）：
+  1. **权重就位**：SHA-exact `tile_detector.pt` 必须与 manifest 放在一起——`verify_model_assets`
+     按 SHA-256 逐一核对，缺文件时 readiness 设计上就是失败（fail-closed，不是 bug）。
+  2. **独立 venv**：`requirements-worker.txt` 装进**专用虚拟环境**，不要装进共享 conda 环境——
+     其 `fastapi` 版本下限会连带把共享环境里其他项目依赖的 `starlette` 拉低版本。
+  3. **真实 runtime 冒烟**：所有 worker 测试（`tests/test_worker_api.py` 等）用的都是
+     `FakeRuntime`；上线前必须在权重所在机器上跑一次针对**真实 `RecognitionRuntime`**
+     的活体冒烟（`/healthz` → `/readyz` → 一次真实 `/v1/recognize` → `/v1/reconstruct`）。
+  4. **并发浸泡测试**：把识别车道打满到 `max_pending`，用一个原生 fake 卡过
+     `request_timeout_seconds`，验证队列能正常排空、且 reconstruct 车道不受牵连（仍可用）。
+  5. **客户端契约要点**：`X-Image-SHA256` 必须是小写 hex；`Content-Type` 的类型/子类型部分
+     必须与四个允许值之一逐字节相等——`image/png` / `image/jpeg` / `image/webp` /
+     `application/octet-stream`（大小写敏感，`; charset=...` 之类的参数后缀会被
+     worker 剥离后再比较，但主值本身不容拼写/大小写偏差）；上传体积上限不由 worker
+     把关，是主 API 一侧的职责。

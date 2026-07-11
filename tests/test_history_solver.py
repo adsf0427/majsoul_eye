@@ -89,6 +89,28 @@ def test_skeleton_budget_exhaustion_is_not_reported_as_user_conflict():
     assert budget.exhausted is True
 
 
+def test_history_node_budget_exhaustion_aborts_search_without_hanging():
+    # Plan 2 precondition: reverse() inside solve_hidden_history had no node
+    # budget of its own -- only the skeleton COUNT was capped. A shared
+    # HistoryNodeBudget (mirroring SkeletonBudget's injectable `limit`) must
+    # cut the reverse-search short and (a) abort rather than hang, while
+    # (b) surfacing the EXISTING HISTORY_SEARCH_LIMIT code -- never a
+    # HIDDEN_HISTORY_CONFLICT/TSUMOGIRI_RULE_CONFLICT "user conflict", which
+    # would misreport a budget cutoff as an unsolvable/contradictory board.
+    from majsoul_eye.state.history import HistoryNodeBudget
+    o = rotation_obs()
+    overrides = ReconstructionOverrides(
+        river_ids={(s, i): f"r-{s}-{i}" for s, river in enumerate(o.rivers)
+                   for i, _ in enumerate(river)})
+    budget = HistoryNodeBudget(limit=1)
+    result = reconstruct(o, overrides, node_budget=budget)
+    assert budget.exhausted is True                     # (a) aborted, not hung
+    assert not result.ok
+    assert result.issues[0]["code"] == "HISTORY_SEARCH_LIMIT"       # (b) reused
+    assert result.issues[0]["code"] not in (
+        "HIDDEN_HISTORY_CONFLICT", "TSUMOGIRI_RULE_CONFLICT", "NO_LEGAL_TURN_ORDER")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

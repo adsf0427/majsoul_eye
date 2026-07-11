@@ -6,6 +6,7 @@ from majsoul_eye.state.observe import ObservedMeld, ObservedRiverTile, ObservedS
 from majsoul_eye.what_cut.from_recognition import (
     DraftBuildContext, apply_history_baseline, build_recognized_draft,
 )
+from majsoul_eye.what_cut.schema import parse_what_cut_draft
 
 
 def recognizer():
@@ -71,6 +72,16 @@ def test_builder_assigns_deterministic_ids_and_ghost():
     ghost = draft["historyOverrides"]["ghostDiscards"][0]
     assert ghost["id"] == "ghost:1:0"
     assert ghost["ownerRelSeat"] == 2 and ghost["beforeMeldId"] == "meld:1:0"
+
+
+def test_generated_draft_always_parses():
+    # Completion-contract: a recognized draft must always be a valid
+    # WhatCutDraftV1 -- round-trip it through the same schema parser the
+    # worker/frontend use, with no exception raised.
+    draft = build_recognized_draft(
+        assembly(), DraftBuildContext("d-1", "img-ref", "f" * 64, 1920, 1080),
+        recognizer())
+    parse_what_cut_draft(draft)
 
 
 def test_annotations_use_plan2_stable_field_paths_and_resolve_to_draft_items():

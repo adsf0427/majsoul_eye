@@ -195,7 +195,8 @@ guessing and no loose `--weights` paths.
 # Quick single-frame inspection (JSON lines: WhatCutDraftV1 + ObservedState + mjai):
 PYTHONPATH=. python scripts/recognize/recognize_frame.py --allow-experimental shot.png
 
-# Shared worker — readiness self-check (verifies assets + fixed-SHA golden report), no bind:
+# Shared worker — readiness self-check (verifies assets and, for supported
+# layouts, the fixed-SHA golden report), no bind:
 EYE_REVISION="$(git rev-parse HEAD)" PYTHONPATH=. python \
   scripts/recognize/serve_worker.py \
   --manifest majsoul_eye/recognize/model-manifest.internal-v1.json --check-only

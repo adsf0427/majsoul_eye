@@ -123,6 +123,24 @@ class HistorySolution:
     selected_history: SelectedHistoryV1
 
 
+# reverse()'s backtracking DFS has no branching bound of its own -- only the
+# skeleton COUNT is capped (SkeletonBudget, majsoul_eye/state/reconstruct.py).
+# A pathological user-edited draft (long all-tedashi hero river + an
+# infeasible override) can blow reverse() up superlinearly. HistoryNodeBudget
+# mirrors SkeletonBudget: an injectable, shared node counter threaded through
+# every solve_hidden_history() call within one reconstruct() search (all
+# skeletons/oya/pending-reach attempts combined), so a runaway search aborts
+# instead of wedging a worker's non-cancellable timeout slot forever.
+HISTORY_NODE_LIMIT = 200_000
+
+
+@dataclass
+class HistoryNodeBudget:
+    limit: int = HISTORY_NODE_LIMIT
+    visited: int = 0
+    exhausted: bool = False
+
+
 def _hand_valid(hand: list[str]) -> bool:
     normalized = Counter(red_to_normal(tile) for tile in hand)
     red = Counter(tile for tile in hand if tile.endswith("r"))
@@ -161,7 +179,10 @@ def validate_history_semantics(events: list[dict]) -> list[str]:
 
 
 def solve_hidden_history(obs, ops: list, overrides: ReconstructionOverrides,
-                         oya_rel: int, pending_reach: int | None) -> HistorySolution | HistoryConflict:
+                         oya_rel: int, pending_reach: int | None,
+                         node_budget: HistoryNodeBudget | None = None
+                         ) -> HistorySolution | HistoryConflict:
+    node_budget = node_budget or HistoryNodeBudget()
     sites = discard_sites(obs, ops, pending_reach)
     baseline_items, baseline_by_op = derive_history_baseline(
         obs, ops, overrides, pending_reach=pending_reach)
@@ -202,6 +223,12 @@ def solve_hidden_history(obs, ops: list, overrides: ReconstructionOverrides,
     assignments = {}
 
     def reverse(index: int, hand: list[str]):
+        if node_budget.exhausted:
+            return None
+        node_budget.visited += 1
+        if node_budget.visited > node_budget.limit:
+            node_budget.exhausted = True
+            return None
         if not _hand_valid(hand):
             return None
         if index < 0:

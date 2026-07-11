@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from majsoul_eye.state.history import (
-    HistoryConflict, HistorySolution, ReconstructionOverrides,
+    HistoryConflict, HistoryNodeBudget, HistorySolution, ReconstructionOverrides,
     derive_history_baseline, solve_hidden_history, validate_history_semantics,
 )
 from majsoul_eye.state.observe import ObservedState, check_observed
@@ -358,8 +358,10 @@ def _reconstruction_failure(code: str, message: str,
 
 
 def reconstruct(obs: ObservedState,
-                overrides: ReconstructionOverrides | None = None) -> ReconstructionResult:
+                overrides: ReconstructionOverrides | None = None, *,
+                node_budget: HistoryNodeBudget | None = None) -> ReconstructionResult:
     overrides = overrides or ReconstructionOverrides()
+    node_budget = node_budget or HistoryNodeBudget()
     violations = list(obs.violations) + check_observed(obs)
     if violations:
         return _reconstruction_failure("OBSERVED_STATE_INVALID",
@@ -377,7 +379,11 @@ def reconstruct(obs: ObservedState,
     feasible = []
     search_exhausted = False
     for oya_rel in cand:
+        if node_budget.exhausted:
+            break
         for pending_candidate in pend_cand:
+            if node_budget.exhausted:
+                break
             budget = SkeletonBudget()
             for candidate_ops in _iter_skeletons(
                     obs, oya_rel, pending_reach=pending_candidate, budget=budget):
@@ -386,14 +392,17 @@ def reconstruct(obs: ObservedState,
                 if chosen is not None:
                     break  # survey later dealer feasibility without replacing selection
                 candidate_solution = solve_hidden_history(
-                    obs, candidate_ops, overrides, oya_rel, pending_candidate)
+                    obs, candidate_ops, overrides, oya_rel, pending_candidate,
+                    node_budget=node_budget)
                 if isinstance(candidate_solution, HistoryConflict):
                     first_conflict = first_conflict or candidate_solution
+                    if node_budget.exhausted:
+                        break  # shared node budget spent: abort the whole search
                     continue
                 chosen, ops, solution, pending = (
                     oya_rel, candidate_ops, candidate_solution, pending_candidate)
                 break
-            search_exhausted = search_exhausted or budget.exhausted
+            search_exhausted = search_exhausted or budget.exhausted or node_budget.exhausted
     if chosen is None:
         conflict = (HistoryConflict("HISTORY_SEARCH_LIMIT", None,
                                     {"skeletonLimit": SkeletonBudget().limit})

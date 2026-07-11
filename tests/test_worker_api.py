@@ -14,6 +14,7 @@ class FakeRuntime:
                 "supportStatus": "experimental"}
 
     def recognize_bytes(self, body, context):
+        assert context.image_ref is None
         if body == b"bad":
             raise RuntimeFailure("INVALID_IMAGE", "cannot decode image")
         return {"schemaVersion": 1, "draft": {"draftId": context.draft_id},
