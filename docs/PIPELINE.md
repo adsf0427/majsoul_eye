@@ -219,6 +219,10 @@
 - 标注步的价值 = 可复用缓存 + 附加产物：多局进程池并行、overlays/QA（`--qa-classifier`）、
   一次标注多次建库。批量构建（build_datasets）走 标注 → `--from-annotations` 路线省时间，
   标注缓存就放在版本目录内（`datasets/<name>/annotations/`，`--resume` 据此跳过已标局）。
+- **0 帧残局自动排除**（2026-07-11，STATUS §1.62）：`frames.jsonl` 存在但为空（采集在
+  首帧前被中断，如 `ai_session_3p/run_2/game25`）的捕获在 `build_datasets.discover_games`
+  即被丢弃（打印 skipping 注记，不进 games.json）；标注 worker 对"零可标帧"（含全部帧落在
+  deal/call 窗口的极端情形）也 SKIP 而非崩溃。此前该形状会 KeyError 炸掉整个标注进程池。
 - manual session5/6 一律直接建（不经标注层）。
 - `--drop-violations` 常开；遮挡一致性门 `--occlusion-gate` **默认关**（采集期 roi_diff 已防大头）。
 - 输出既有 crops（分类）也有 yolo（检测）——同一套精确几何，一次标定两处喂。

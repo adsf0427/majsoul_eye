@@ -65,6 +65,29 @@ def test_discover_games_source_qualified_and_empty():
             assert "no captures" in str(e)
 
 
+def test_discover_games_skips_frameless_aborted_captures():
+    """A capture whose frames.jsonl exists but holds ZERO entries is an aborted
+    run (autoplay killed before any frame was recorded — e.g. ai_session_3p
+    run_2/game25): it can never be annotated, and stage 3 would reject its empty
+    yolo dir as a poisoned split, so discovery drops it up front. A capture with
+    NO frames.jsonl at all stays discoverable (legacy shapes; later stages
+    decide)."""
+    with tempfile.TemporaryDirectory() as td:
+        root = os.path.join(td, "ai_session_3p")
+        good = os.path.join(root, "run_2", "game24")
+        _touch(os.path.join(good, "game24.jsonl"))
+        with open(os.path.join(good, "frames.jsonl"), "w", encoding="utf-8") as f:
+            f.write('{"seq": 1, "status": "ok", "file": "frames/000001.png"}\n')
+        aborted = os.path.join(root, "run_2", "game25")
+        _touch(os.path.join(aborted, "game25.jsonl"))
+        open(os.path.join(aborted, "frames.jsonl"), "w").close()      # 0 entries
+        no_index = os.path.join(root, "run_2", "game26")
+        _touch(os.path.join(no_index, "game26.jsonl"))                # no frames.jsonl
+        names = {g["name"] for g in bds.discover_games([root])}
+        assert names == {"ai_session_3p_run_2_game24",
+                         "ai_session_3p_run_2_game26"}, names
+
+
 def test_letterboxed_games_use_own_frames_now():
     """run_5 game2/game3 were de-letterboxed IN PLACE (2026-07-05, deletterbox_frames.py
     --inplace), so the FRAMES_OVERRIDE map is gone and they resolve to their own nested

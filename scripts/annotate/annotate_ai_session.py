@@ -125,6 +125,14 @@ def _process_capture(cap, cfg):
         # {chi,pon,kan,...} (state.replay.is_call_window) are the robust GT signals.
         all_board = [s for s in sorted(seq_state) if s in frames]
         seqs = [s for s in all_board if not is_deal_window(seq_state[s]) and not is_call_window(seq_state[s])]
+        if not seqs:
+            # Aborted run (empty frames.jsonl) or every frame in a deal/call
+            # window: nothing to annotate. Summary access below would KeyError
+            # on stats['frames'], and an empty annotations jsonl would poison
+            # the downstream detector split — skip the game entirely.
+            print(f"{name}: SKIP (no annotatable frames: {len(frames)} frame(s), "
+                  f"{len(all_board)} board, all in deal/call windows)", flush=True)
+            return name, None
         stats = defaultdict(float)
         stats["deal_dropped"] = len(all_board) - len(seqs)
         qa = defaultdict(lambda: [0, 0])         # zone -> [n, correct]

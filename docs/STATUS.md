@@ -1653,6 +1653,23 @@ h 66–105（中位 89）、area 6379–18373；**相邻牌子最小间距 39px*
   （`%4` 回合环、守恒常数、nukidora 事件词表——见 §1.58 调研清单）；三麻检测器/分类器/
   hudreader 尚未用三麻数据训练（标签已就绪，等数据积累后建版本混训）。
 
+### 1.62 首个三麻数据集 v5_3p + 0 帧残局修复（2026-07-11）
+
+- **触发**：`build_datasets.py v5_3p --sources captures/raw/ai_session_3p` 首跑在标注段
+  崩溃——`run_2/game25` 是采集在首帧前被中断的残局（GT 只有 schema 头 + 1 行，
+  `frames.jsonl` 0 字节），`annotate_ai_session._process_capture` 的逐帧循环零次执行、
+  `stats['frames']` 从未置位，而汇总 print 在 try/except **之外** → `KeyError: 'frames'`
+  经 `ex.map` 炸掉整个标注进程池（30/37 局已写完，其余 7 局丢失）。
+- **修复（双层）**：①源头——`build_datasets.discover_games` 丢弃 `frames.jsonl` 存在但为
+  空的捕获（打印注记；不进 games.json，否则 stage 3 也会把其空 yolo 目录判为 poisoned
+  split 拒绝装配）；②防御——标注 worker 对"零可标帧"（同样可达于全部帧落在 deal/call
+  窗口）走 SKIP `(name, None)` 路径且不留空标注 jsonl。回归测试
+  `test_build_datasets.test_discover_games_skips_frameless_aborted_captures`（无
+  frames.jsonl 的 legacy 形状仍被发现）+ 新 `tests/test_annotate_ai_session.py`。
+- **v5_3p 建成**：36 局三麻（run_1×1 素色 + run_2×24 换肤 + run_3×11），
+  val=`ai_session_3p_run_3_game1`，HBB+OBB 双格式（57 类头）。首个含
+  `btn_babei`/拔北堆 `N` 标签的版本；尚未训练。
+
 ---
 
 ## 二、关键经验（实测结论）
