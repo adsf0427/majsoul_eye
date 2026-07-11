@@ -265,7 +265,11 @@ def _validate_tile(value: Any, path: str, *, nullable: bool) -> None:
 
 
 def _is_finite_number(value: Any) -> bool:
-    return type(value) in (int, float) and math.isfinite(value)
+    if type(value) is int:
+        return True
+    if type(value) is float:
+        return math.isfinite(value)
+    return False
 
 
 def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:

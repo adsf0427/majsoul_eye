@@ -184,7 +184,8 @@ def test_annotation_candidates_require_exact_objects():
 
 
 def test_annotation_confidences_are_finite_numbers():
-    for confidence in ("0.9", True, float("inf")):
+    for confidence in ("0.9", True, float("nan"),
+                       float("inf"), float("-inf")):
         raw = minimal_draft()
         raw["annotations"]["round.kyoku"] = valid_annotation()
         raw["annotations"]["round.kyoku"]["confidence"] = confidence
@@ -218,6 +219,35 @@ def test_valid_nested_metadata_round_trips():
     raw["evidence"] = [{"id": "e-1", "bbox": [0.0, 0.0, 1.0, 1.0],
                         "polygon": None, "zone": "round"}]
     assert parse_what_cut_draft(raw) == raw
+
+
+def test_huge_integer_confidences_round_trip():
+    huge = 10 ** 1000
+    raw = minimal_draft()
+    raw["annotations"]["round.kyoku"] = valid_annotation()
+    raw["annotations"]["round.kyoku"]["confidence"] = huge
+    raw["annotations"]["round.kyoku"]["candidates"][0]["confidence"] = huge
+
+    parsed = parse_what_cut_draft(raw)
+
+    assert parsed["annotations"]["round.kyoku"]["confidence"] == huge
+    assert parsed["annotations"]["round.kyoku"]["candidates"][0]["confidence"] == huge
+
+
+def test_huge_integer_evidence_geometry_round_trip():
+    huge = 10 ** 1000
+    raw = minimal_draft()
+    raw["evidence"] = [{
+        "id": "e-huge", "bbox": [huge, 0.0, 1.0, 1.0],
+        "polygon": [[huge, 0.0], [1.0, 0.0],
+                    [1.0, 1.0], [0.0, 1.0]],
+        "zone": "hand",
+    }]
+
+    parsed = parse_what_cut_draft(raw)
+
+    assert parsed["evidence"][0]["bbox"][0] == huge
+    assert parsed["evidence"][0]["polygon"][0][0] == huge
 
 
 def test_dora_markers_container_must_be_list():
@@ -295,6 +325,23 @@ def test_evidence_coordinates_reject_booleans():
         "zone": "hand",
     }]
     _assert_invalid(raw, "evidence.0.polygon", "INVALID_EVIDENCE")
+
+
+def test_evidence_coordinates_reject_non_finite_floats():
+    for value in (float("nan"), float("inf"), float("-inf")):
+        raw = minimal_draft()
+        raw["evidence"] = [{"id": "e-bbox", "bbox": [value, 0.0, 1.0, 1.0],
+                            "polygon": None, "zone": "hand"}]
+        _assert_invalid(raw, "evidence.0.bbox", "INVALID_EVIDENCE")
+
+        raw = minimal_draft()
+        raw["evidence"] = [{
+            "id": "e-polygon", "bbox": [0.0, 0.0, 1.0, 1.0],
+            "polygon": [[value, 0.0], [1.0, 0.0],
+                        [1.0, 1.0], [0.0, 1.0]],
+            "zone": "hand",
+        }]
+        _assert_invalid(raw, "evidence.0.polygon", "INVALID_EVIDENCE")
 
 
 if __name__ == "__main__":
