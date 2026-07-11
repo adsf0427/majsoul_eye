@@ -64,6 +64,12 @@ def test_pon_meld_and_called_tile_removed_from_river():
     # seat 2's only discard was called away -> not visible in the 河
     assert len(s.rivers[2]) == 1 and s.rivers[2][0].called is True
     assert s.visible_river(2) == []
+    # precise call association (replay-only) is recorded and survives copy():
+    # hero (seat 0) called it into hero's meld index 0.
+    called = s.rivers[2][0]
+    assert called.called_by == 0 and called.called_meld_index == 0
+    copied = s.copy().rivers[2][0]
+    assert copied.called_by == 0 and copied.called_meld_index == 0
 
 
 def test_riichi_sideways_and_stick():

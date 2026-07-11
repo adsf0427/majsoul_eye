@@ -63,6 +63,49 @@ def test_reject_categories_ordering_scores_before_kyotaku():
     assert reject_categories(["wall count 60 vs predicted 64 (>1 off)"]) == {"hud_wall"}
 
 
+def _played_state_for_history_test():
+    from majsoul_eye.state.replay import Replayer
+
+    replay = Replayer(hero_seat=0)
+    events = [
+        {"type": "start_game", "id": 0},
+        {"type": "start_kyoku", "bakaze": "E", "kyoku": 1,
+         "honba": 0, "kyotaku": 0, "oya": 0, "dora_marker": "4m",
+         "scores": [25000, 25000, 25000, 25000],
+         "tehais": [
+             ["1m", "2m", "3m", "4m", "5m", "6m", "7m",
+              "8m", "9m", "1p", "2p", "3p", "4p"],
+             ["?"] * 13, ["?"] * 13, ["?"] * 13,
+         ]},
+        {"type": "tsumo", "actor": 0, "pai": "9p"},
+        {"type": "dahai", "actor": 0, "pai": "9p", "tsumogiri": True},
+        {"type": "tsumo", "actor": 1, "pai": "?"},
+        {"type": "dahai", "actor": 1, "pai": "P", "tsumogiri": False},
+        {"type": "pon", "actor": 2, "target": 1, "pai": "P",
+         "consumed": ["P", "P"]},
+        {"type": "dahai", "actor": 2, "pai": "1s", "tsumogiri": False},
+    ]
+    for event in events:
+        replay.apply(event)
+    return replay.state
+
+
+def test_history_overrides_from_board_preserve_visible_tsumogiri():
+    from scripts.eval.eval_reconstruction import history_overrides_from_board
+    from majsoul_eye.state.observe import observed_from_board
+    state = _played_state_for_history_test()
+    observed = observed_from_board(state)
+    overrides = history_overrides_from_board(state, observed)
+    for rel_seat, river in enumerate(observed.rivers):
+        abs_seat = (state.hero_seat + rel_seat) % 4
+        visible_gt = [tile for tile in state.rivers[abs_seat] if not tile.called]
+        assert [overrides.user_visible[(rel_seat, i)].value for i in range(len(river))] == [
+            tile.tsumogiri for tile in visible_gt]
+    assert overrides.user_ghosts[(2, 0)].value is False
+    called = next(tile for tile in state.rivers[1] if tile.called)
+    assert called.called_by == 2 and called.called_meld_index == 0
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

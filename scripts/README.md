@@ -83,7 +83,8 @@ Legend: ★ current pipeline step · 🔁 recurring tool · ⚙️ one-off / inf
 
 | script | role |
 |---|---|
-| `eval_reconstruction.py` 🔁 | 3-layer GT eval: oracle (GT→ObservedState→reconstruct round-trip) / assemble (real frame→detector→assemble vs GT, per-zone errors + `rejected_reasons`) / engine (true vs reconstructed mjai prefix → an mjai bot, decision agreement). |
+| `eval_reconstruction.py` 🔁 | 3-layer GT eval: oracle (GT→ObservedState→reconstruct round-trip) / assemble (real frame→detector→assemble vs GT, per-zone errors + `rejected_reasons`) / engine (true vs reconstructed mjai prefix → an mjai bot, decision agreement). `--history-from-gt` (oracle only) forces the exact GT tsumogiri overrides into reconstruct and asserts the emitted visible/ghost marks reproduce them (`history_mismatch` must be 0). |
+| `eval_what_cut_goldens.py` 🔁 | **P0 what-cut accuracy gate** (non-training QA): runs the manifest-bound runtime over an independent held-out golden JSONL, scores semantic modified-field edits vs the expected `WhatCutDraftV1` (IDs/evidence/baseline/provenance excluded), dHash64 near-duplicate rejection (Hamming ≤4), then writes the manifest-bound report + detached `.sha256`. Non-zero exit unless the immutable thresholds pass (≥100 shots / ≥20 games, structural entry-rate ≥0.95, median edits 0, p90 ≤2). See `docs/WHAT_CUT_GOLDENS.md`. |
 | `mortal_stdin.py` 🔴 | mjai stdin/stdout wrapper around `../auto/mycv`'s Mortal for the engine layer (`--engine-cmd "python scripts/eval/mortal_stdin.py {seat}"`). |
 
 ---
@@ -92,7 +93,8 @@ Legend: ★ current pipeline step · 🔁 recurring tool · ⚙️ one-off / inf
 
 | script | role |
 |---|---|
-| `recognize_frame.py` 🔁 | screenshot(s) → `TileDetector`+`assemble`+`reconstruct` → JSON lines (ObservedState + legal mjai sequence; rejected frames report violations). `--weights` defaults to the newest `weights/detector/tile_detector_obb_*.pt`. |
+| `recognize_frame.py` 🔁 | screenshot(s) → one **manifest-bound** `RecognitionRuntime` (detector + classifier + HUD reader, fixed SHA-verified assets) → per-image `recognize_bytes` → override-aware `reconstruct_draft` → JSON lines (`WhatCutDraftV1` + ObservedState + legal mjai + fabricated notes). Model selection is manifest-first (`--manifest`, default `majsoul_eye/recognize/model-manifest.internal-v1.json`) — no mtime weight guessing, no loose `--weights`. `--device / --eye-revision / --allow-experimental / --no-reconstruct / --pretty`. |
+| `serve_worker.py` 🔁 | **the shared runtime worker** (recurring, non-training): loads the same manifest-bound runtime once and serves `POST /v1/recognize` + `POST /v1/reconstruct` + `/readyz` (FastAPI/uvicorn). `--check-only` verifies model assets + fixed-SHA golden readiness and exits (deployment self-check); otherwise binds `--host/--port` (default `127.0.0.1:8765`). One shared process/device serves all callers — never one worker per request. |
 
 ---
 

@@ -37,9 +37,16 @@ class RiverTile:
     tsumogiri: bool = False          # drawn-and-discarded (摸切) vs from hand (手切)
     riichi: bool = False             # this discard declared riichi → rendered sideways
     called: bool = False             # taken by another player → moved out of the visible 河
+    # Replay-only precise call association (which meld consumed this discard, and
+    # who called it). Populated by _open_meld; NOT part of screenshot recognition
+    # or the Plan 2 wire schema — the eval oracle uses it to bind a ghost discard
+    # to its exact meld (see eval_reconstruction.history_overrides_from_board).
+    called_by: int | None = None
+    called_meld_index: int | None = None
 
     def copy(self) -> "RiverTile":
-        return RiverTile(self.pai, self.tsumogiri, self.riichi, self.called)
+        return RiverTile(self.pai, self.tsumogiri, self.riichi, self.called,
+                         self.called_by, self.called_meld_index)
 
 
 @dataclass
@@ -239,10 +246,16 @@ class Replayer:
         actor, target = ev["actor"], ev["target"]
         consumed = list(ev["consumed"])
         pai = ev["pai"]
-        # The called tile leaves the target's visible 河.
-        for t in reversed(self.state.rivers[target]):
-            if not t.called:
-                t.called = True
+        # The called tile leaves the target's visible 河; record the exact meld
+        # (owner + on-screen meld index) that consumed it — the association the
+        # oracle needs to bind a ghost discard to its meld. Do this BEFORE the
+        # append so meld_index is the index this new meld will occupy.
+        meld_index = len(self.state.melds[actor])
+        for tile in reversed(self.state.rivers[target]):
+            if not tile.called:
+                tile.called = True
+                tile.called_by = actor
+                tile.called_meld_index = meld_index
                 break
         self.state.melds[actor].append(
             Meld(type=mtype, from_seat=target, tiles=_sort_hand([pai] + consumed), called_pai=pai)

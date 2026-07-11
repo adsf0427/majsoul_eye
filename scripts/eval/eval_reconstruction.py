@@ -23,6 +23,8 @@ import sys
 
 from majsoul_eye.capture.gtframes import build_seq_state, load_frames
 from majsoul_eye import paths
+from majsoul_eye.state.history import (ReconstructionOverrides,
+                                       UserTsumogiriOverride)
 from majsoul_eye.state.observe import check_observed, observed_from_board
 from majsoul_eye.state.reconstruct import _hero_call_pending, reconstruct
 from majsoul_eye.state.replay import (Replayer, is_call_pending, is_deal_window,
@@ -56,6 +58,62 @@ def diff_zones(a, b):
     return [z for z in ka if ka[z] != kb[z]]
 
 
+def history_overrides_from_board(state, observed):
+    hero = state.hero_seat
+    result = ReconstructionOverrides()
+    for rel_seat in range(4):
+        absolute = (hero + rel_seat) % 4
+        visible = [tile for tile in state.rivers[absolute] if not tile.called]
+        for index, tile in enumerate(visible):
+            item_id = f"gt-river:{rel_seat}:{index}"
+            result.river_ids[(rel_seat, index)] = item_id
+            result.user_visible[(rel_seat, index)] = UserTsumogiriOverride(
+                tile.tsumogiri, item_id, f"gt.river.{rel_seat}.{index}")
+    called_by_key = {}
+    for absolute_target in range(4):
+        for tile in state.rivers[absolute_target]:
+            if not tile.called:
+                continue
+            if tile.called_by is None or tile.called_meld_index is None:
+                raise ValueError("GT called discard lacks replay association")
+            caller = (tile.called_by - hero) % 4
+            called_by_key[(caller, tile.called_meld_index)] = tile
+    for caller in range(4):
+        for meld_index, meld in enumerate(observed.melds[caller]):
+            if meld.type not in ("chi", "pon", "daiminkan", "kakan"):
+                continue
+            key, item_id = (caller, meld_index), f"gt-ghost:{caller}:{meld_index}"
+            called = called_by_key[key]
+            if called.pai != meld.called_pai:
+                raise ValueError(f"GT ghost tile mismatch for {key}")
+            result.ghost_ids[key] = item_id
+            result.ghost_order.append(key)
+            result.user_ghosts[key] = UserTsumogiriOverride(
+                called.tsumogiri, item_id,
+                f"gt.ghost.{caller}.{meld_index}")
+    return result
+
+
+def _history_marks_mismatch(gt_overrides, recon_state, recon_obs) -> bool:
+    """Do the reconstruction's emitted visible/ghost tsumogiri marks reproduce
+    the GT constraint that history_overrides_from_board forced? Compared in
+    REL-seat space by IDENTITY — visible marks by (relSeat, visibleIndex), ghost
+    marks by (callerRelSeat, meldIndex) — never by full-river position. The
+    solver may legally place a called-away discard later than a still-visible one
+    (calls as late as feasible), which reorders that ghost tile inside the raw
+    river list without changing any tsumogiri value; a positional compare would
+    flag those as false mismatches. With --history-from-gt this must be zero: the
+    solver was handed every GT tsumogiri as a hard override."""
+    re_ov = history_overrides_from_board(recon_state, recon_obs)
+    if (set(gt_overrides.user_visible) != set(re_ov.user_visible)
+            or set(gt_overrides.user_ghosts) != set(re_ov.user_ghosts)):
+        return True
+    return (any(gt_overrides.user_visible[k].value != re_ov.user_visible[k].value
+                for k in gt_overrides.user_visible)
+            or any(gt_overrides.user_ghosts[k].value != re_ov.user_ghosts[k].value
+                   for k in gt_overrides.user_ghosts))
+
+
 _REJECT_CATS = (            # ordered: first substring hit wins per message
     ("scores sum", "hud_scores"),  # "scores sum" first: its message text also contains "kyotaku"
     ("kyotaku", "hud_kyotaku"),
@@ -80,7 +138,7 @@ def reject_categories(violations):
     return cats
 
 
-def run_oracle(states, report):
+def run_oracle(states, report, history_from_gt=False):
     for seq, st in states.items():
         if not st.in_round or is_deal_window(st):
             continue
@@ -102,15 +160,21 @@ def run_oracle(states, report):
             # stay skipped.
             report["skipped_call_pending"] += 1
             continue
-        r = reconstruct(obs)
+        # --history-from-gt: hand the solver the exact GT tsumogiri for every
+        # visible/ghost discard so the emitted history is pinned to truth, then
+        # assert the round-trip reproduces those marks (history_mismatch == 0).
+        overrides = history_overrides_from_board(st, obs) if history_from_gt else None
+        r = reconstruct(obs, overrides)
         if not r.ok:
             report["fail"].append({"seq": seq, "reason": r.reason})
             continue
         rp = Replayer()
         for ev in r.events:
             rp.apply(ev)
-        d = diff_zones(observed_from_board(rp.state, include_hud=False),
-                       observed_from_board(st, include_hud=False))
+        recon = observed_from_board(rp.state, include_hud=False)
+        if history_from_gt and _history_marks_mismatch(overrides, rp.state, recon):
+            report["history_mismatch"] += 1
+        d = diff_zones(recon, observed_from_board(st, include_hud=False))
         if d:
             report["mismatch"].append({"seq": seq, "zones": d})
         else:
@@ -237,6 +301,9 @@ def main():
     ap.add_argument("--sample", type=int, default=20)
     ap.add_argument("--hud-weights", default=None)
     ap.add_argument("--no-hud", action="store_true")
+    ap.add_argument("--history-from-gt", action="store_true",
+                    help="oracle only: force GT tsumogiri overrides into "
+                         "reconstruct and count history_mismatch (must be 0)")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -252,11 +319,11 @@ def main():
              "rejected_reasons": {}, "zone_errors": {}, "agree": 0,
              "disagree": [], "engine_error": 0, "engine_fail": 0,
              "hud_ok": {}, "hud_err": {}, "hud_missing": {},
-             "score_anim_rejected": 0, "drawn_race": 0}
+             "score_anim_rejected": 0, "drawn_race": 0, "history_mismatch": 0}
     for cap in caps:
         states = build_seq_state(cap)
         if args.level == "oracle":
-            run_oracle(states, total)
+            run_oracle(states, total, history_from_gt=args.history_from_gt)
         elif args.level == "assemble":
             run_assemble(cap, states, total, args.weights, args.device,
                          args.hud_weights, args.no_hud)
@@ -268,7 +335,8 @@ def main():
         print(f"[oracle] {total['ok']}/{n} ok, {len(total['fail'])} infeasible, "
               f"{len(total['mismatch'])} mismatched, "
               f"{total['skipped_violations']} skipped, "
-              f"{total['skipped_call_pending']} call-pending skipped")
+              f"{total['skipped_call_pending']} call-pending skipped, "
+              f"history_mismatch {total['history_mismatch']}")
         for f in total["fail"][:10]:
             print("  FAIL", f)
         for m in total["mismatch"][:10]:

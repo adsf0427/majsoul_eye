@@ -183,6 +183,42 @@ foreach ($t in Get-ChildItem tests/test_*.py) { python $t.FullName; if ($LASTEXI
 # bash: for t in tests/test_*.py; do python "$t" || break; done
 ```
 
+### 运行时识别（manifest-first）
+
+The shipped recognition chain is **manifest-first**: one immutable
+`model-manifest.internal-v1.json` names the exact detector/classifier/HUD-reader
+assets by SHA-256, and the runtime is loaded **once** (`manifest -> one-time
+runtime -> draft -> override-aware reconstruct`). There is no mtime-based weight
+guessing and no loose `--weights` paths.
+
+```bash
+# Quick single-frame inspection (JSON lines: WhatCutDraftV1 + ObservedState + mjai):
+PYTHONPATH=. python scripts/recognize/recognize_frame.py --allow-experimental shot.png
+
+# Shared worker — readiness self-check (verifies assets + fixed-SHA golden report), no bind:
+EYE_REVISION="$(git rev-parse HEAD)" PYTHONPATH=. python \
+  scripts/recognize/serve_worker.py \
+  --manifest majsoul_eye/recognize/model-manifest.internal-v1.json --check-only
+```
+
+Internal loopback deployment (one shared process/device serves every gray-beta
+caller — never a worker per request):
+
+```bash
+EYE_REVISION="$(git rev-parse HEAD)" PYTHONPATH=. \
+  /hszhao-f1/h3011050/anaconda3/envs/majsoul_eye/bin/python \
+  scripts/recognize/serve_worker.py \
+  --manifest majsoul_eye/recognize/model-manifest.internal-v1.json \
+  --device cuda --host 127.0.0.1 --port 8765
+```
+
+The remote application uses `http://127.0.0.1:8765` directly (VS Code Remote SSH
+may forward remote port `8765` for debugging; the worker still binds only the
+loopback interface). **Current desktop-layout support status is `experimental`**
+— `majsoul-desktop-16x9-v1` stays experimental until an independent
+100-image/20-game golden report passes the immutable P0 thresholds and binds the
+final manifest SHA (see [`docs/WHAT_CUT_GOLDENS.md`](docs/WHAT_CUT_GOLDENS.md)).
+
 ## ⚠️ Notes
 
 - Tile taxonomy is **38 classes** (34 tiles + 3 red fives + `back`); ordering is

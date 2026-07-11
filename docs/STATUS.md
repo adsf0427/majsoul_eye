@@ -1529,6 +1529,46 @@ h 66–105（中位 89）、area 6379–18373；**相邻牌子最小间距 39px*
   mjai 止于 `reach`+`dahai 3s`、kyotaku 0、分数不动）；测试套全绿（test_observe +3、
   test_reconstruct +3，宣言窗口正/反例与 settled 回归）。
 
+### 1.58 what-cut 共享识别 worker 收口：P0 精度门 + manifest-first CLI + GT 历史 oracle（2026-07-11）
+
+Plan 1（what-cut）的**运行时收口**：DTO / baseline / history / decision / manifest / runtime /
+worker 全链落地，本节钉死对外契约与当前**度量状态**。权威操作文档见
+[PIPELINE.md §7](PIPELINE.md#7-运行时识别-workermanifest-first--灰度-experimental) 与
+[WHAT_CUT_GOLDENS.md](WHAT_CUT_GOLDENS.md)。
+
+- **DTO schema 1**：`WhatCutDraftV1`（screen-relative 四人；每弃牌带 `tsumogiri{value,source,
+  baselineValue,baselineSource}` 现值+基线）；`RecognizeWhatCutData`/`ReconstructWhatCutData` 均
+  `schemaVersion=1`；`recognize` 可返回 `source.imageRef=null`（主应用自己持有截图引用，不经 worker）。
+- **动态 baseline 语义**：`historyBaseline` 基数与顺序＝所有 river IDs 后接所有 ghost IDs，**每个
+  revision 重新生成**；`forced`（无摸=手切、立直后=摸切）vs `inferred`（hero 摸=摸切、对家=手切）
+  —— user override 与 forced 冲突即 `TSUMOGIRI_RULE_CONFLICT`。
+- **selected history**：无 ID/provenance，`solverVersion=hidden-history-v1`，完全定死 hero haipai /
+  摸牌分配 / ghost 时序 / effective flags。
+- **decision 语法**：server-authoritative，冻结的 action 顺序；过滤食替（kuikae）、区分 shape 与
+  yaku、含九种九牌（kyushukyuhai），`candidateCount == 唯一 legalActions 数`。
+- **worker 契约**：`POST /v1/recognize`（原始字节 + 冻结 `X-*` 头）、`POST /v1/reconstruct`
+  （严格 `{draft, revision}`）、`/readyz`（精确 hash + Eye revision + supportStatus）；错误体严格
+  `WorkerErrorBodyV1{code,message,requestId}`；一台机器**一个共享进程/设备**服务全部灰度调用。
+- **当前模型 hash**（`model-manifest.internal-v1.json`，`manifestVersion=internal-2026-07-11-v1`，
+  manifest SHA-256 `4bee92d2ae1e6eae1f66972e83ef55eed3f2f221e063b38c50d790907aa7ca70`）：
+  - detector `085c94bc909c64fa12322929173c316a8b1fa34527cbaee72f097a12bdfcf407`
+  - classifier `a6e13f9a7835a1a59e3289794da64df910fc6761ba71f7c5aa2af0f1a2d149bb`
+  - hudReader `b205d12461435896ff435bf34fe622ec9cfe075d6f31ac978ee2aa0c8fe2ff3d`
+- **度量状态 = `experimental`**：**尚未提交任何合格的 100 图 / 20 局独立 golden**，故不可变 P0 门槛
+  （结构进入率 ≥0.95、median edits 0、p90 ≤2、dHash64 近重复 Hamming ≤4 全清）无从达成，committed
+  manifest 维持 `supportStatus=experimental`。按文档在本机跑 golden 评测**必然非零退出**（无
+  `goldens/` 且本机检出缺 gitignore 的 `tile_detector.pt`——`required model missing`）——这是**正确的
+  记账**，不是失败。
+- **GT 历史 oracle 落地**：`replay.RiverTile` 新增 replay-only `called_by`/`called_meld_index`
+  （精确绑定 ghost 弃牌到其副露；非识别/非 Plan 2 wire schema）；`eval_reconstruction.py` 新增
+  `history_overrides_from_board` + `--history-from-gt` oracle 模式（把每个可见/ghost 弃牌的 GT
+  tsumogiri 作为硬 override 喂给 reconstruct，再**按身份**（rel 座+可见序 / caller+meld 序，**非整河
+  位置**——解算器合法地把被鸣走的弃牌排到后面，不改任何 tsumogiri 值）核对回放）。
+  **实测**（`captures/raw/ai_session` 全量）：plain oracle **10121/10121**（100%）；`--history-from-gt`
+  **10058/10121（99.38% ≥ 99%）、`history_mismatch 0`、0 mismatched、209 call-pending 跳过**；63 项
+  infeasible 全部是 override 约束下的 `HISTORY_SEARCH_LIMIT`（skeleton 预算 4096 命中，纯搜索代价、
+  非漂移）。
+
 ---
 
 ## 二、关键经验（实测结论）

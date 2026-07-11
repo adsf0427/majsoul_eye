@@ -334,7 +334,9 @@ bash scripts/train/launch_detector.sh obb --dataset v2 --gpus 4,5,6,7
 | `scripts/inspect/count_dora_glow.py` | **现役一次性诊断工具**（非管线环节）：统计每个 tile 类别的「发光实例/总实例」覆盖，判断是否需要为宝牌闪光加专门增强。读 GT 采集（Akagi-free），纯 stdout。见 `docs/superpowers/specs/2026-07-05-dora-glow-aug-design.md` |
 | `scripts/eval/eval_reconstruction.py` | **QA 工具**（非管线环节，局面复原验收）：三层评测——oracle（GT `BoardState` → `ObservedState` → `reconstruct` → `Replayer` 往返一致性，无 GPU 依赖）/ assemble（真实帧 → `TileDetector`（+可选 `HudReader`）→ `assemble` 装配 vs GT 投影，按 zone 报错 + 拒收帧按 violation 类别计数 `rejected_reasons`——HUD 交叉校验新增 `hud_scores`/`hud_kyotaku`/`hud_wall` 三类拒收原因；另打印 HUD 逐字段核对报告 `hud_ok`/`hud_err`/`hud_missing` + `score_anim_rejected` 计数，`--no-hud` 关闭整条 HUD 装配只测 tile-board）/ engine（真实 mjai 前缀 vs 复原序列各喂 `--engine-cmd` 指定的任意 mjai bot，比较最终决策，stdin/stdout JSON lines 契约；`{seat}` 占位符按各序列 `start_game` 的 hero id 实例化——复原序列无 HUD 时 hero 恒在绝对座位 0，与真实序列不同）。oracle 在全量 `captures/raw/ai_session` 上验收 ≥99%（实测见 STATUS §1.52）；单帧 HUD 集成的 assemble 层回归数字见 STATUS §1.54。spec: `docs/superpowers/specs/2026-07-05-board-reconstruction-design.md`、`docs/superpowers/specs/2026-07-09-hud-integration-design.md` |
 | `scripts/eval/mortal_stdin.py` | **QA 辅助工具**（非管线环节）：mjai stdin/stdout 包装 `../auto/mycv` 的 Mortal（version=4 b24c512，`mortal.pth`，cpu），供 `eval_reconstruction --level engine --engine-cmd "python scripts/eval/mortal_stdin.py {seat}"` 用。非 shipped 识别器组件，允许触及 sibling repo |
-| `scripts/recognize/recognize_frame.py` | **🔁 现役工具**（非管线环节，运行时识别链路的 CLI 入口）：截图 → `TileDetector`+`assemble`+`reconstruct` → JSON lines（ObservedState + 合法 mjai 序列 + fabricated 说明；拒收帧给 violations）。`--weights` 默认取 `weights/detector/tile_detector_obb_*.pt` 最新者；宽高比自动分派（~16:9 全幅 / 更宽走 `locate_wide` 居中板+屏角宝牌救援 / 更窄走信箱裁剪，`--letterbox` 可强制）；`--no-reconstruct`/`--pretty`。**HUD 默认开**：自动打包加载 `majsoul_eye/recognize/hud_reader.pt`（`--no-hud` 关闭 / `--hud-weights` 换权重），`assemble(dets, region, frame_bgr, hud_reader)` 用检测框+`HudReader`+原图填充 ObservedState 的 scores/bakaze/kyoku/honba/kyotaku/left_tile_count/seat_wind_self/pending_buttons——**含宽屏手机帧**（2026-07-09 放开 `region.ox==0` 门控：中央面板在手机布局同构渲染，samples/ 16 张实测全字段检出+读数精确，分数/余牌守恒校验兜底；宽屏未验证项=立直棒；暗皮肤按钮欠召回**根因已定位并修复在标注侧**（STATUS §1.55：不是类不均衡，是 46% 可见按钮被当背景负样本训练），待 re-annotate + 重训检测器后复验）。Akagi-free，供外部调用/快速检视（手机截图实测可用） |
+| `scripts/recognize/recognize_frame.py` | **🔁 现役工具**（非管线环节，运行时识别链路的 CLI 入口）：**manifest-first** 一次装载运行时（`manifest -> one-time runtime -> draft -> override-aware reconstruct`）。截图 → 一个 `RecognitionRuntime.from_manifest`（detector+classifier+HudReader，资产按 SHA-256 定死）→ 逐帧 `recognize_bytes` → override-aware `reconstruct_draft` → JSON lines（`WhatCutDraftV1` + ObservedState + 合法 mjai + fabricated 说明）。模型选择走 `--manifest`（默认 `majsoul_eye/recognize/model-manifest.internal-v1.json`）——**不再按 mtime 猜权重、无散落 `--weights`**（检测器实验走显式替代 manifest）。`--device/--eye-revision/--allow-experimental/--no-reconstruct/--pretty`。已删除的旧 flag：`--weights`/`--hud-weights`/`--no-hud`/`--letterbox`。Akagi-free，供外部调用/快速检视。详见 §7 运行时 worker |
+| `scripts/recognize/serve_worker.py` | **🔁 现役运行时入口**（非管线环节，非训练）：把同一个 manifest-bound 运行时装载**一次**并长驻，对外提供 `POST /v1/recognize` + `POST /v1/reconstruct` + `/readyz`（FastAPI/uvicorn）。`--check-only` 校验模型资产 + 固定-SHA golden 就绪并退出（部署自检）；否则绑定 `--host/--port`（默认 `127.0.0.1:8765`）。**一台机器一个共享进程/设备服务所有灰度调用方**——绝不每请求起一个 worker。详见 §7 |
+| `scripts/eval/eval_what_cut_goldens.py` | **🔁 P0 what-cut 精度门**（非管线环节，非训练 QA）：manifest-bound 运行时跑一份**独立留出** golden JSONL，按语义 modified-field 计 edits（对齐 `WhatCutDraftV1`，排除 IDs/evidence/baseline/provenance）、dHash64 近重复拒收（Hamming ≤4），写出 manifest-bound 报告 + 独立 `.sha256`。不达不可变门槛（≥100 图/≥20 局、结构进入率 ≥0.95、median edits 0、p90 ≤2）即**非零退出**。见 `docs/WHAT_CUT_GOLDENS.md` |
 
 ## 5. 数据与权重现状快照（2026-07-06）
 
@@ -364,3 +366,45 @@ bash scripts/train/launch_detector.sh obb --dataset v2 --gpus 4,5,6,7
 3. 新增脚本必须归位：是管线环节（进 §0/§2）还是一次性工具（进 §4）？不允许"游离脚本"。
 4. STATUS.md 追加一节记录（问题→处理→验证→结果），并刷新其 TL;DR 若数字变化。
 5. 涉及数据格式/目录的，`majsoul_eye/paths.py` 是唯一真源——改那里，不改散落字面量。
+
+## 7. 运行时识别 worker（manifest-first · 灰度 experimental）
+
+识别产品的运行时是一个**共享长驻 worker**，与训练管线（§0–§3）完全分离。数据流：
+**`manifest -> one-time runtime -> draft -> override-aware reconstruct`**。
+
+- **manifest-first，固定 SHA**：`majsoul_eye/recognize/model-manifest.internal-v1.json`
+  用 SHA-256 定死 detector/classifier/HudReader 三个资产 + 固定推理参数（`detectorConf`/`imgsz`）
+  + 候选策略（`topK`/`calibrationVersion`）。运行时装载一次（`RecognitionRuntime.from_manifest`
+  → `verify_model_assets` 逐一核对文件 SHA）。**不再按 mtime 猜权重**（旧 CLI 的按 mtime 选最新
+  OBB 权重逻辑已删）；检测器实验走**显式替代 manifest**，不走散落 `--weights`。
+- **worker 端点**（`scripts/recognize/serve_worker.py`，FastAPI/uvicorn）：
+  - `POST /v1/recognize`：原始截图字节 + 冻结的 `X-*` context 头（含 `X-Image-SHA256` 与
+    `X-Allow-Experimental`——灰度期放行 experimental layout）→ `RecognizeWhatCutData`
+    schemaVersion 1（`WhatCutDraftV1` 草稿 + issues + recognizer 元数据）。
+  - `POST /v1/reconstruct`：严格 `{draft, revision}` → `ReconstructWhatCutData` schemaVersion 1
+    （mjai + `historyBaseline` + `selectedHistory` + server-authoritative `decision`）。
+  - `/readyz`：报告精确的模型 hash、Eye revision、`supportStatus`。
+- **固定-SHA 就绪门**：supported layout 必须旁边有通过的 golden 报告 + 独立 `.sha256`；
+  `verify_layout_support` 先验报告字节的 detached SHA、再核 `report.manifestSha256` 对上整份 manifest。
+  报告失败/缺失/过期/配置不符时 `serve_worker.py --check-only` 以 `MODEL_MANIFEST_MISMATCH`
+  直接拒绝就绪（部署自检）。
+- **P0 精度门**：`scripts/eval/eval_what_cut_goldens.py` 在独立留出 golden 上跑不可变门槛
+  （≥100 图/≥20 局、结构进入率 ≥0.95、median edits 0、p90 ≤2、dHash64 近重复 Hamming ≤4 全清）。
+  **当前仓库无合格 golden 集**，故 committed manifest 维持 `supportStatus=experimental`
+  （见 `docs/WHAT_CUT_GOLDENS.md`）。
+- **数值 HUD 候选仍缺席**：runtime 草稿的 HUD 数值字段（分数/供托/本场/余牌）目前**不产候选**
+  （`candidateCount`/候选仅覆盖牌面），与识别现状一致。
+- **内部灰度部署**（一台机器**一个共享进程/设备**服务所有灰度调用方，**绝不每请求起 worker**）：
+
+  ```bash
+  EYE_REVISION="$(git rev-parse HEAD)" PYTHONPATH=. \
+    /hszhao-f1/h3011050/anaconda3/envs/majsoul_eye/bin/python \
+    scripts/recognize/serve_worker.py \
+    --manifest majsoul_eye/recognize/model-manifest.internal-v1.json \
+    --device cuda --host 127.0.0.1 --port 8765
+  ```
+
+  远端应用直接用 `http://127.0.0.1:8765`；本地 VS Code Remote SSH 调试时可**转发远端端口 8765**，
+  worker 本身只绑 loopback，不为调试暴露公网接口。
+- **调试 CLI**：`scripts/recognize/recognize_frame.py` 与 worker 共享同一 manifest-bound 运行时，
+  单帧 in / JSON 行 out（`--allow-experimental` 放行未提级的 layout）。
