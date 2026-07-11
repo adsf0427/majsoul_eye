@@ -4,6 +4,27 @@ from majsoul_eye.what_cut.adapter import draft_to_observed
 from test_what_cut_schema import minimal_draft
 
 
+def _draft_with_meld(meld, *, ghost_source="inferred"):
+    draft = minimal_draft()
+    draft["players"][1]["melds"] = [meld]
+    ghosts = []
+    if meld["type"] != "ankan" and meld["calledPai"] is not None:
+        ghosts.append({
+            "id": "ghost-1-0",
+            "ownerRelSeat": (1 + meld["fromOffset"]) % 4,
+            "pai": meld["calledPai"],
+            "beforeMeldId": meld["id"],
+            "tsumogiri": {
+                "value": False,
+                "source": ghost_source,
+                "baselineValue": False,
+                "baselineSource": "inferred",
+            },
+        })
+    draft["historyOverrides"]["ghostDiscards"] = ghosts
+    return draft
+
+
 def test_complete_draft_maps_screen_relative_state():
     draft = minimal_draft()
     draft["historyOverrides"]["ghostDiscards"] = []
@@ -64,6 +85,128 @@ def test_each_called_meld_requires_exactly_one_ghost():
     draft["historyOverrides"]["ghostDiscards"] = [ghost, {**ghost, "id": "ghost-2"}]
     duplicate = draft_to_observed(draft)
     assert any(i["code"] == "GHOST_DUPLICATE" for i in duplicate.issues)
+
+
+def test_called_meld_offsets_reject_self_calls():
+    cases = [
+        {"id": "meld-1-pon", "type": "pon", "tiles": ["P"] * 3,
+         "calledPai": "P", "addedPai": None, "fromOffset": 0},
+        {"id": "meld-1-daiminkan", "type": "daiminkan", "tiles": ["C"] * 4,
+         "calledPai": "C", "addedPai": None, "fromOffset": 0},
+        {"id": "meld-1-kakan", "type": "kakan", "tiles": ["F"] * 4,
+         "calledPai": "F", "addedPai": "F", "fromOffset": 0},
+    ]
+    for meld in cases:
+        result = draft_to_observed(_draft_with_meld(meld))
+        issue = next(
+            (i for i in result.issues if i["code"] == "INVALID_MELD_SOURCE"),
+            None,
+        )
+        assert issue is not None, meld["type"]
+        assert issue["fieldPath"] == f"players.1.melds.{meld['id']}.fromOffset"
+        assert issue["severity"] == "blocking"
+        assert result.observed is None
+
+
+def test_every_called_meld_requires_called_tile_membership():
+    cases = [
+        {"id": "meld-1-chi", "type": "chi", "tiles": ["1m", "2m", "3m"],
+         "calledPai": "9p", "addedPai": None, "fromOffset": 3},
+        {"id": "meld-1-pon", "type": "pon", "tiles": ["P"] * 3,
+         "calledPai": "9p", "addedPai": None, "fromOffset": 1},
+        {"id": "meld-1-daiminkan", "type": "daiminkan", "tiles": ["C"] * 4,
+         "calledPai": "9p", "addedPai": None, "fromOffset": 2},
+        {"id": "meld-1-kakan", "type": "kakan", "tiles": ["F"] * 4,
+         "calledPai": "9p", "addedPai": "F", "fromOffset": 1},
+    ]
+    for meld in cases:
+        result = draft_to_observed(_draft_with_meld(meld))
+        issue = next(
+            (i for i in result.issues
+             if i["code"] == "CALLED_TILE_NOT_IN_MELD"),
+            None,
+        )
+        assert issue is not None, meld["type"]
+        assert issue["fieldPath"] == f"players.1.melds.{meld['id']}.calledPai"
+        assert issue["severity"] == "blocking"
+        assert result.observed is None
+
+
+def test_meld_types_reject_inappropriate_called_and_added_fields():
+    cases = [
+        ({"id": "meld-1-chi", "type": "chi", "tiles": ["1m", "2m", "3m"],
+          "calledPai": "1m", "addedPai": "1m", "fromOffset": 3},
+         "UNEXPECTED_ADDED_TILE", "addedPai"),
+        ({"id": "meld-1-pon", "type": "pon", "tiles": ["P"] * 3,
+          "calledPai": "P", "addedPai": "P", "fromOffset": 1},
+         "UNEXPECTED_ADDED_TILE", "addedPai"),
+        ({"id": "meld-1-daiminkan", "type": "daiminkan", "tiles": ["C"] * 4,
+          "calledPai": "C", "addedPai": "C", "fromOffset": 2},
+         "UNEXPECTED_ADDED_TILE", "addedPai"),
+        ({"id": "meld-1-ankan-called", "type": "ankan", "tiles": ["F"] * 4,
+          "calledPai": "F", "addedPai": None, "fromOffset": 0},
+         "UNEXPECTED_CALLED_TILE", "calledPai"),
+        ({"id": "meld-1-ankan-added", "type": "ankan", "tiles": ["F"] * 4,
+          "calledPai": None, "addedPai": "F", "fromOffset": 0},
+         "UNEXPECTED_ADDED_TILE", "addedPai"),
+        ({"id": "meld-1-kakan", "type": "kakan", "tiles": ["P"] * 4,
+          "calledPai": "P", "addedPai": None, "fromOffset": 1},
+         "ADDED_TILE_NOT_IN_MELD", "addedPai"),
+    ]
+    for meld, code, field in cases:
+        result = draft_to_observed(_draft_with_meld(meld))
+        issue = next((i for i in result.issues if i["code"] == code), None)
+        assert issue is not None, f"{meld['type']} {field}"
+        assert issue["fieldPath"] == f"players.1.melds.{meld['id']}.{field}"
+        assert issue["severity"] == "blocking"
+        assert result.observed is None
+
+
+def test_type_appropriate_meld_fields_are_accepted():
+    cases = [
+        {"id": "meld-1-chi", "type": "chi", "tiles": ["1m", "2m", "3m"],
+         "calledPai": "1m", "addedPai": None, "fromOffset": 3},
+        {"id": "meld-1-pon", "type": "pon", "tiles": ["P"] * 3,
+         "calledPai": "P", "addedPai": None, "fromOffset": 1},
+        {"id": "meld-1-daiminkan", "type": "daiminkan", "tiles": ["C"] * 4,
+         "calledPai": "C", "addedPai": None, "fromOffset": 2},
+        {"id": "meld-1-ankan", "type": "ankan", "tiles": ["F"] * 4,
+         "calledPai": None, "addedPai": None, "fromOffset": 0},
+        {"id": "meld-1-kakan", "type": "kakan", "tiles": ["P"] * 4,
+         "calledPai": "P", "addedPai": "P", "fromOffset": 1},
+    ]
+    for meld in cases:
+        result = draft_to_observed(_draft_with_meld(meld))
+        assert result.issues == [], meld["type"]
+        assert result.observed is not None
+
+
+def test_ghost_owner_mismatch_is_field_addressed_blocker():
+    meld = {"id": "meld-1-0", "type": "pon", "tiles": ["P"] * 3,
+            "calledPai": "P", "addedPai": None, "fromOffset": 1}
+    draft = _draft_with_meld(meld)
+    draft["historyOverrides"]["ghostDiscards"][0]["ownerRelSeat"] = 3
+    result = draft_to_observed(draft)
+    issue = next(i for i in result.issues if i["code"] == "GHOST_MELD_MISMATCH")
+    assert issue["fieldPath"] == "historyOverrides.ghostDiscards.ghost-1-0"
+    assert issue["severity"] == "blocking"
+    assert result.observed is None
+
+
+def test_user_ghost_override_uses_meld_position_and_stable_id():
+    meld = {"id": "meld-1-0", "type": "pon", "tiles": ["P"] * 3,
+            "calledPai": "P", "addedPai": None, "fromOffset": 1}
+    result = draft_to_observed(_draft_with_meld(meld, ghost_source="user"))
+    assert result.issues == []
+    assert result.observed is not None
+    override = result.overrides.user_ghosts[(1, 0)]
+    assert override.value is False
+    assert override.item_id == "ghost-1-0"
+    assert override.field_path == (
+        "historyOverrides.ghostDiscards.ghost-1-0.tsumogiri"
+    )
+    assert result.overrides.ghost_ids == {(1, 0): "ghost-1-0"}
+    assert result.overrides.ghost_order == [(1, 0)]
 
 
 if __name__ == "__main__":

@@ -42,10 +42,19 @@ def _valid_meld(meld: dict, owner: int, path: str) -> list[WhatCutIssueV1]:
         issues.append(_issue("INVALID_KAN", path))
     if kind == "ankan" and meld["fromOffset"] != 0:
         issues.append(_issue("INVALID_ANKAN_SOURCE", f"{path}.fromOffset"))
-    if kind != "ankan" and kind != "kakan" and meld["calledPai"] not in tiles:
+    if (kind in ("pon", "daiminkan", "kakan")
+            and meld["fromOffset"] not in (1, 2, 3)):
+        issues.append(_issue("INVALID_MELD_SOURCE", f"{path}.fromOffset"))
+    if (kind in ("chi", "pon", "daiminkan", "kakan")
+            and meld["calledPai"] not in tiles):
         issues.append(_issue("CALLED_TILE_NOT_IN_MELD", f"{path}.calledPai"))
-    if kind == "kakan" and meld["addedPai"] not in tiles:
-        issues.append(_issue("ADDED_TILE_NOT_IN_MELD", f"{path}.addedPai"))
+    if kind == "ankan" and meld["calledPai"] is not None:
+        issues.append(_issue("UNEXPECTED_CALLED_TILE", f"{path}.calledPai"))
+    if kind == "kakan":
+        if meld["addedPai"] not in tiles:
+            issues.append(_issue("ADDED_TILE_NOT_IN_MELD", f"{path}.addedPai"))
+    elif meld["addedPai"] is not None:
+        issues.append(_issue("UNEXPECTED_ADDED_TILE", f"{path}.addedPai"))
     if Counter(norm).most_common(1) and Counter(norm).most_common(1)[0][1] > 4:
         issues.append(_issue("INVALID_MELD_TILE_COUNT", path, owner=owner))
     return issues
