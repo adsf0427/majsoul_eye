@@ -67,15 +67,28 @@ OP_TO_BTN: dict[int, str] = {
 }
 
 
+# On-screen L->R button order — what annotate/hud.button_boxes zips against its
+# x-sorted plate candidates. Matches HUD_NAMES order for the 4P classes
+# (calibrated on 22 real frames, see annotate/hud.BTN_ORDER_LTR) EXCEPT
+# btn_babei: its detector id is APPENDED (56) but Majsoul renders 拔北/北抜き
+# LEFTMOST of any co-offered button (verified at full res on all 3 v5_3p
+# co-occurrence frames, CN+JP clients: babei|riichi|skip and babei|kan|skip;
+# STATUS §1.63). Babei only ever co-occurs with own-turn buttons
+# (kan/riichi/tsumo/kyushu) — chi/pon/ron are other-discard offers — so
+# "babei first" covers every reachable combination.
+BTN_SCREEN_ORDER: list[str] = ["btn_babei", "btn_chi", "btn_pon", "btn_kan",
+                               "btn_riichi", "btn_tsumo", "btn_ron", "btn_kyushu"]
+
+
 def buttons_for_ops(op_types: list[int]) -> list[str]:
     """Pending liqi op types -> button classes expected on screen (dapai-only -> []).
-    Order = HUD_NAMES order (stable); on-screen ordering is assigned by x-sort at
-    annotation time, not here. btn_skip accompanies any other button —
-    VERIFIED (Task 7 Step 5) on a real own-turn riichi offer (seq 302,
+    Order = on-screen L->R order (BTN_SCREEN_ORDER, babei first) — annotation
+    zips this against x-sorted plate candidates. btn_skip accompanies any other
+    button — VERIFIED (Task 7 Step 5) on a real own-turn riichi offer (seq 302,
     captures/raw/ai_session3/run_1/game1, ops=[1(dapai), 7(riichi)]): the frame
     shows BOTH a 立直 banner AND a スキップ banner, so own-turn-only offers do
     NOT drop the skip button — no change needed here."""
-    btns = [b for b in HUD_NAMES if b in {OP_TO_BTN.get(t) for t in op_types}]
+    btns = [b for b in BTN_SCREEN_ORDER if b in {OP_TO_BTN.get(t) for t in op_types}]
     if btns:
         btns.append("btn_skip")
     return btns

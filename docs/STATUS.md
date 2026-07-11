@@ -1669,6 +1669,27 @@ h 66–105（中位 89）、area 6379–18373；**相邻牌子最小间距 39px*
 - **v5_3p 建成**：36 局三麻（run_1×1 素色 + run_2×24 换肤 + run_3×11），
   val=`ai_session_3p_run_3_game1`，HBB+OBB 双格式（57 类头）。首个含
   `btn_babei`/拔北堆 `N` 标签的版本；尚未训练。
+- **类直方图自检**：0 实例的类恰为三麻规则应缺的 `2m–8m`/`5mr`（三麻剔除）与
+  `btn_chi`（三麻无吃），`btn_babei` 436、`N` 28260、`reach_stick` 2874——taxonomy
+  端到端语义正确。
+
+### 1.63 babei 按钮排序修复：拔北渲染在最左，非追加序（2026-07-11）
+
+- **发现**：v5_3p 建成后按"典型帧过目"抽查 `btn_babei` 样例，全分辨率放大发现
+  **babei 与同帧其他动作钮类别互换**——屏幕左→右 = 拔北|立直|跳過，标注却是
+  btn_riichi|btn_babei|btn_skip。根因：`hud.buttons_for_ops` 按 `HUD_NAMES` 序出类
+  （babei 是尾部追加的 id 56 → 排最后），`annotate/hud.button_boxes` 将其与 x 排序的
+  plate zip；4P 里 HUD_NAMES 序恰好 = 屏幕序（22 帧标定，`BTN_ORDER_LTR`），babei 打破
+  了这个巧合。§1.61 的"零 count_mismatch"防线只查**数量**，查不出**顺序**错位。
+- **证据**：全语料恰 3 帧共现（2× babei+riichi、1× babei+kan），全分辨率裁剪逐帧核实，
+  覆盖 CN（拔北|杠|跳過）与 JP（北抜き|立直|スキップ）两种客户端——**拔北恒最左**。
+  babei 只可能与自摸回合类按钮（杠/立直/自摸/九种）共现（吃/碰/荣是他家舍张 offer），
+  故"babei 置首"覆盖全部可达组合。
+- **修复**：`hud.BTN_SCREEN_ORDER`（显式屏幕序：babei 最前，其余保持 HUD_NAMES 序）
+  取代 `buttons_for_ops` 里的 HUD_NAMES 迭代；检测头类 id 不动（56 仍是 babei）。
+  单独 babei+skip（215 帧）本就正确，不受影响。回归断言入 `test_hud_taxonomy`
+  （babei+riichi、babei+kan 两组合）。受影响 3 局删除重建（`--resume` 增量），
+  重建后 3 帧逐一目检类别与横幅对齐。
 
 ---
 
