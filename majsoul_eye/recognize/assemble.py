@@ -10,7 +10,10 @@ import numpy as np
 
 from majsoul_eye.annotate import pipeline as P
 from majsoul_eye.normalize import BoardRegion
-from majsoul_eye.recognize.hudstate import assemble_hud
+from majsoul_eye.recognize.evidence import (
+    AssemblyResult, CandidatePolicy, FieldObservation, attach_tile_candidates,
+)
+from majsoul_eye.recognize.hudstate import assemble_hud_with_evidence
 from majsoul_eye.state.observe import ObservedMeld, ObservedRiverTile
 from majsoul_eye.tiles import red_to_normal
 
@@ -59,8 +62,8 @@ def _river_frame(seat: int):
     return disc0, colu, rowu, float(np.linalg.norm(dcol))
 
 
-def _assign_river(seat: int, items):
-    """items = [(det, corners_fw)] -> (ordered ObservedRiverTiles, violations).
+def _assign_river_with_sources(seat: int, items):
+    """items -> ordered ``(ObservedRiverTile, Detection)`` pairs + violations.
 
     Row = nearest DISCARD_ROW_OFFSETS entry; order within a row = along-column
     projection (handles the riichi extra-shift and the >18 overflow, since only
@@ -79,8 +82,8 @@ def _assign_river(seat: int, items):
             continue
         u = float(np.dot(c - disc0, colu))
         rows[r].append((u, ObservedRiverTile(
-            det.tile, sideways=_long_edge_sideways(pts, colu, rowu))))
-    out: list[ObservedRiverTile] = []
+            det.tile, sideways=_long_edge_sideways(pts, colu, rowu)), det))
+    out = []
     for r in (0, 1, 2):
         rows[r].sort(key=lambda t: t[0])
         if rows[r] and r > 0 and len(rows[r - 1]) != P.DISCARD_COLS:
@@ -95,8 +98,13 @@ def _assign_river(seat: int, items):
                 gap = rows[r][i + 1][0] - rows[r][i][0]
                 if gap > 1.5 * col_pitch:
                     viol.append(f"seat{seat} river row{r} hole (gap {gap:.0f}px)")
-        out.extend(t for _, t in rows[r])
+        out.extend((tile, det) for _, tile, det in rows[r])
     return out, viol
+
+
+def _assign_river(seat: int, items):
+    assigned, violations = _assign_river_with_sources(seat, items)
+    return [tile for tile, _ in assigned], violations
 
 
 def _strip_cells(seat: int, items):
@@ -113,17 +121,20 @@ def _strip_cells(seat: int, items):
         cr = float(np.dot(c - corner, cross))
         raw.append({"a": a, "c": cr, "label": det.tile,
                     "sideways": _long_edge_sideways(pts, along, cross),
-                    "stacked_on": None})
+                    "stacked_on": None, "detection": det})
     raw.sort(key=lambda x: x["a"])
     cells, i = [], 0
     while i < len(raw):
-        cell = {"label": raw[i]["label"], "sideways": raw[i]["sideways"], "stacked": []}
+        cell = {"label": raw[i]["label"], "sideways": raw[i]["sideways"],
+                "stacked": [], "detections": [raw[i]["detection"]]}
         j = i + 1
         # a kakan's added tile shares the same along-slot, offset across (c ~ d..2d)
         while j < len(raw) and abs(raw[j]["a"] - raw[i]["a"]) < 0.4 * cfg["w"]:
             top = raw[j] if raw[j]["c"] > raw[i]["c"] else raw[i]
             base = raw[i] if top is raw[j] else raw[j]
-            cell = {"label": base["label"], "sideways": True, "stacked": [top["label"]]}
+            cell = {"label": base["label"], "sideways": True,
+                    "stacked": [top["label"]],
+                    "detections": [base["detection"], top["detection"]]}
             j += 1
         cells.append(cell)
         i = j
@@ -188,8 +199,8 @@ def _match_group(seat, group):
     return None
 
 
-def _parse_melds(seat: int, items):
-    """Meld-zone detections -> (melds in SCREEN order oldest-first, violations).
+def _parse_melds_with_sources(seat: int, items):
+    """Meld detections -> ``(ObservedMeld, source detections)`` pairs.
 
     Whole-strip recursive parse trying size 4 then 3 at each position. A strip
     with more than one forward-consistent decomposition is REJECTED (violation)
@@ -199,20 +210,24 @@ def _parse_melds(seat: int, items):
     one."""
     cells = _strip_cells(seat, items)
 
-    def parse(i: int):
-        """Complete parses from cell i, capped at 2."""
-        if i == len(cells):
+    def parse(index: int):
+        """Complete parses from cell ``index``, capped at two."""
+        if index == len(cells):
             return [[]]
-        out = []
+        parses = []
         for size in (4, 3):
-            if i + size <= len(cells):
-                got = _match_group(seat, cells[i:i + size])
-                if got is not None:
-                    for rest in parse(i + size):
-                        out.append([got] + rest)
-                        if len(out) >= 2:
-                            return out
-        return out
+            if index + size > len(cells):
+                continue
+            meld = _match_group(seat, cells[index:index + size])
+            if meld is None:
+                continue
+            detections = [det for cell in cells[index:index + size]
+                          for det in cell["detections"]]
+            for rest in parse(index + size):
+                parses.append([(meld, detections)] + rest)
+                if len(parses) >= 2:
+                    return parses
+        return parses
 
     parses = parse(0)
     if not parses:
@@ -220,6 +235,11 @@ def _parse_melds(seat: int, items):
     if len(parses) > 1:
         return [], [f"seat{seat} meld strip ambiguous ({len(cells)} cells)"]
     return parses[0], []
+
+
+def _parse_melds(seat: int, items):
+    parsed, violations = _parse_melds_with_sources(seat, items)
+    return [meld for meld, _ in parsed], violations
 
 
 _REL_KEYS = ("self", "right", "across", "left")
@@ -250,8 +270,8 @@ from majsoul_eye.state.observe import ObservedState, check_observed
 HAND_MIN_H = 0.11            # hand tiles are ~0.141 canon-high; hero meld tiles ~0.083
 
 
-def assemble(dets, region: BoardRegion, frame_bgr=None, hud_reader=None) -> ObservedState:
-    """One frame's detections -> ObservedState.
+def _assemble_with_sources(dets, region: BoardRegion, frame_bgr=None, hud_reader=None):
+    """One frame's detections -> ``(ObservedState, field source tuples)``.
 
     HUD fields fill when BOTH frame_bgr and hud_reader are given. Wide (>16:9
     phone) frames included: the center-panel fields render identically to the
@@ -269,6 +289,9 @@ def assemble(dets, region: BoardRegion, frame_bgr=None, hud_reader=None) -> Obse
     hand_cand, dora_cand, table, wide_dora = [], [], [], []
     hud_dets = []
     conf: dict[str, list] = {}
+    river_sources = []
+    meld_sources = []
+    hud_sources = []
 
     def note(zone, det):
         conf.setdefault(zone, []).append(det.score)
@@ -294,11 +317,16 @@ def assemble(dets, region: BoardRegion, frame_bgr=None, hud_reader=None) -> Obse
     # hand + drawn (gap of >= ~half a slot before the last tile)
     hand_cand.sort(key=lambda t: t[0])
     o.hero_hand = [d.tile for _, _, d in hand_cand]
+    drawn_det = None
     if len(hand_cand) >= 2:
         gap = hand_cand[-1][0] - hand_cand[-2][0]
         if gap > HAND.slot_w + 0.5 * HAND.tsumo_gap:
             o.drawn_tile = o.hero_hand.pop()
-    o.dora_markers = [d.tile for _, d in sorted(dora_cand, key=lambda t: t[0])]
+            drawn_det = hand_cand[-1][2]
+    hand_dets = [det for _, _, det in hand_cand[:len(o.hero_hand)]]
+    sorted_dora = sorted(dora_cand, key=lambda t: t[0])
+    o.dora_markers = [d.tile for _, d in sorted_dora]
+    dora_dets = [d for _, d in sorted_dora]
 
     # route table detections to the nearest seat zone (river vs meld)
     per_river: list[list] = [[] for _ in range(4)]
@@ -368,20 +396,69 @@ def assemble(dets, region: BoardRegion, frame_bgr=None, hud_reader=None) -> Obse
         for cx, cy, _, d in wide_dora:
             if abs(cy - med_y) >= 0.6 * med_h:
                 o.violations.append(f"stray detection {d.tile} (off dora row)")
-        o.dora_markers += [d.tile for _, d in sorted(row, key=lambda t: t[0])]
-        for _, d in row:
+        sorted_row = sorted(row, key=lambda t: t[0])
+        o.dora_markers += [d.tile for _, d in sorted_row]
+        dora_dets += [d for _, d in sorted_row]
+        for _, d in sorted_row:
             note("dora", d)
 
     for seat in range(4):
-        o.rivers[seat], v1 = _assign_river(seat, per_river[seat])
-        melds, v2 = _parse_melds(seat, per_meld[seat])
-        o.melds[seat] = melds
+        assigned, v1 = _assign_river_with_sources(seat, per_river[seat])
+        o.rivers[seat] = [tile for tile, _ in assigned]
+        river_sources.extend(
+            (f"river:{seat}:{index}", tile.pai, [det])
+            for index, (tile, det) in enumerate(assigned)
+        )
+        parsed, v2 = _parse_melds_with_sources(seat, per_meld[seat])
+        o.melds[seat] = [meld for meld, _ in parsed]
+        meld_sources.extend(
+            (f"meld:{seat}:{index}", meld, detections)
+            for index, (meld, detections) in enumerate(parsed)
+        )
         o.violations.extend(v1 + v2)
         o.reach[seat] = any(t.sideways for t in o.rivers[seat])
     if frame_bgr is not None and hud_reader is not None and hud_dets:
-        _fill_hud(o, assemble_hud(hud_dets, hud_reader, frame_bgr))
+        hud = assemble_hud_with_evidence(hud_dets, hud_reader, frame_bgr)
+        _fill_hud(o, hud.values)
+        hud_sources.extend(
+            (field.field_key, field.value, list(field.detections))
+            for field in hud.fields
+        )
         for det in hud_dets:
             note("hud", det)
     o.zone_confidence = {z: min(s) for z, s in conf.items()}
     o.violations.extend(check_observed(o))
-    return o
+    field_sources = [
+        (f"hand:{index}", tile, [det])
+        for index, (tile, det) in enumerate(zip(o.hero_hand, hand_dets))
+    ]
+    if drawn_det is not None:
+        field_sources.append(("drawn:0", o.drawn_tile, [drawn_det]))
+    field_sources.extend(
+        (f"dora:{index}", tile, [det])
+        for index, (tile, det) in enumerate(zip(o.dora_markers, dora_dets))
+    )
+    field_sources.extend(river_sources)
+    field_sources.extend(meld_sources)
+    field_sources.extend(hud_sources)
+    return o, field_sources
+
+
+def assemble_with_evidence(dets, region: BoardRegion, frame_bgr=None, hud_reader=None,
+                           tile_classifier=None,
+                           candidate_policy: CandidatePolicy | None = None) -> AssemblyResult:
+    observed, field_sources = _assemble_with_sources(
+        dets, region, frame_bgr=frame_bgr, hud_reader=hud_reader)
+    fields = [FieldObservation(key, value,
+                               min((det.score for det in sources), default=None),
+                               list(sources))
+              for key, value, sources in field_sources]
+    policy = candidate_policy or CandidatePolicy(None, 0)
+    if frame_bgr is not None:
+        attach_tile_candidates(fields, frame_bgr, tile_classifier, policy)
+    return AssemblyResult(observed, fields, list(observed.violations))
+
+
+def assemble(dets, region: BoardRegion, frame_bgr=None, hud_reader=None) -> ObservedState:
+    return assemble_with_evidence(dets, region, frame_bgr=frame_bgr,
+                                  hud_reader=hud_reader).observed

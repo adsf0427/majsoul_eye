@@ -90,3 +90,15 @@ class HudReader:
         if cls_name == "seat_wind_self":
             return WIND_CLASSES[int(self.wind(t).argmax())]
         raise ValueError(f"not a readable field: {cls_name}")
+
+    @torch.no_grad()
+    def class_probabilities(self, bgr_crop: np.ndarray,
+                            cls_name: str) -> tuple[list[str], np.ndarray]:
+        tensor = preprocess(bgr_crop)[None].to(self.device)
+        if cls_name == "round_label":
+            probabilities = torch.softmax(self.round(tensor), dim=1)[0]
+            return list(ROUND_CLASSES), probabilities.cpu().numpy()
+        if cls_name == "seat_wind_self":
+            probabilities = torch.softmax(self.wind(tensor), dim=1)[0]
+            return list(WIND_CLASSES), probabilities.cpu().numpy()
+        raise ValueError(f"no class distribution for {cls_name}")

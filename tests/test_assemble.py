@@ -161,6 +161,21 @@ def _dora_dets(markers):
     return dets
 
 
+def test_river_and_meld_fields_retain_source_detections():
+    from majsoul_eye.recognize.assemble import assemble_with_evidence
+    hand = ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m",
+            "1p", "2p", "3p", "4p"]
+    river = _river_dets(2, ["E", "9p"])
+    meld = _meld_dets(1, [_gt("pon", ["P", "P", "P"], called="P",
+                                 from_seat_rel=3, seat=1)])
+    result = assemble_with_evidence(_hand_dets(hand) + _dora_dets(["5s"]) + river + meld,
+                                    REGION)
+    r1 = next(f for f in result.fields if f.field_key == "river:2:1")
+    m0 = next(f for f in result.fields if f.field_key == "meld:1:0")
+    assert r1.value == "9p" and r1.detections[0].tile == "9p"
+    assert m0.value.type == "pon" and len(m0.detections) == 3
+
+
 def test_river_last_row_hole_flags_violation():
     # 8-tile river missing tile #7 (first tile of row 1): the surviving row-1
     # tile sits one pitch off the row origin — must be flagged, not silently
