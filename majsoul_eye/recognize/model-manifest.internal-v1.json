@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "manifestVersion": "internal-2026-07-11-v1",
+  "layout": {
+    "layoutId": "majsoul-desktop-16x9-v1",
+    "minWidth": 1280,
+    "minHeight": 720,
+    "aspectRatio": 1.7777777777777777,
+    "aspectTolerance": 0.02
+  },
+  "models": {
+    "detector": {
+      "path": "tile_detector.pt",
+      "sha256": "085c94bc909c64fa12322929173c316a8b1fa34527cbaee72f097a12bdfcf407",
+      "required": true
+    },
+    "classifier": {
+      "path": "tile_classifier.pt",
+      "sha256": "a6e13f9a7835a1a59e3289794da64df910fc6761ba71f7c5aa2af0f1a2d149bb",
+      "required": true
+    },
+    "hudReader": {
+      "path": "hud_reader.pt",
+      "sha256": "b205d12461435896ff435bf34fe622ec9cfe075d6f31ac978ee2aa0c8fe2ff3d",
+      "required": true
+    }
+  },
+  "inference": {"detectorConf": 0.25, "imgsz": 1280},
+  "candidates": {"topK": 3, "calibrationVersion": null, "autoReplace": false},
+  "supportStatus": "experimental",
+  "goldenGate": {
+    "datasetVersion": "majsoul-desktop-16x9-gold-v1",
+    "comparisonVersion": "what-cut-semantic-v1",
+    "reportPath": "model-manifest.internal-v1.accuracy.json",
+    "reportChecksumPath": "model-manifest.internal-v1.accuracy.json.sha256"
+  }
+}
