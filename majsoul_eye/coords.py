@@ -189,8 +189,12 @@ RIVER_ZONES: dict[str, NormBox] = {k: px_box(*v) for k, v in RIVER_ZONES_PX.item
 # on riichi_stick_count/honba_count/score_across specifically because that
 # resolution's top-left panel does not scale the icon<->text gap the same way
 # the 1920x1080-derived normalized seed assumes — a non-uniform-scaling artifact
-# of a non-16:9 source, not a seed placement error. Proper fix is the
-# `AnchorLocator` TODO in normalize.py; out of scope for Task 6's fixed-slot seeds.
+# of a non-16:9 source, not a seed placement error.
+#   RESOLVED for the RECOGNIZE path (2026-07-12): these seeds are training-time
+#   only. recognize/hudstate.py crops each HUD field from its OWN detection box
+#   (`frame_bgr[y0:y1, x0:x1]`), never from a seed, so a reflowing top-left panel
+#   cannot contaminate a read no matter the resolution. The seeds below still
+#   generate labels, and there every frame is a clean 1920x1080 render.
 _HUD_SEEDS_PX: dict[str, tuple[int, int, int, int]] = {
     "score_self":         (900, 467, 1020, 497),   # y0/y1 trimmed clear of the diamond-vertex glow (see note)
     "score_right":        (1028, 385, 1063, 462),  # vertical digits; x1 trimmed short of the vertex glow (~x1067)

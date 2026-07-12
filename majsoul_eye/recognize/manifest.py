@@ -58,9 +58,14 @@ def load_model_manifest(path: str) -> LoadedModelManifest:
     if raw.get("supportStatus") not in ("experimental", "supported"):
         raise ManifestError("MODEL_MANIFEST_MISMATCH", "invalid supportStatus")
     layout = raw.get("layout") or {}
-    expected_layout = {"layoutId": "majsoul-desktop-16x9-v1", "minWidth": 1280,
-                       "minHeight": 720, "aspectRatio": 16 / 9,
-                       "aspectTolerance": 0.02}
+    # The board is found by landmark fit, not assumed from the frame's aspect, so
+    # the contract pins the FIT's quality bars and the BOARD's minimum size — the
+    # frame floor is only a cheap "this is not a thumbnail" guard before inference.
+    expected_layout = {"layoutId": "majsoul-desktop-16x9-v1",
+                       "minFrameWidth": 640, "minFrameHeight": 360,
+                       "minBoardWidth": 1280, "minBoardHeight": 720,
+                       "anchorToleranceCanon": 30.0, "maxResidualCanon": 8.0,
+                       "minHandInliers": 4, "clipToleranceFrac": 0.005}
     if any(layout.get(key) != value for key, value in expected_layout.items()):
         raise ManifestError("MODEL_MANIFEST_MISMATCH", "desktop layout contract drift")
     if set(layout) != set(expected_layout):

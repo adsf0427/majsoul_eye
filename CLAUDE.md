@@ -78,9 +78,14 @@ recognizer (`recognize/`) is a separate, Akagi-free product. Module map:
   parametric `HandModel`, `DORA_STRIP`, and coarse per-quadrant `RIVER_ZONES`. (The precise
   per-seat 河/副露 geometry lives in `annotate/`, not here — the old `RIVER_QUADS`/`MELD_STRIPS`
   were removed with the `label/` river+meld modules; see §1.13.)
-- **`normalize.py`** — front-end that maps an arbitrary screenshot onto the canonical frame via
-  a `BoardRegion` (`locate_fullscreen` / `locate_letterbox`; `AnchorLocator` is a TODO stub).
-  This is what lets fixed-slot logic survive other resolutions.
+- **`normalize.py`** — maps an arbitrary screenshot onto the canonical frame via a `BoardRegion`.
+  The recognizer uses **`locate_anchor`**: the DETECTIONS are the landmarks (the 7 centre-panel
+  HUD classes, always present and board-anchored, plus the hero hand row, which carries the
+  scale), RANSAC-fitted to a 3-DOF similarity. The board is always a 16:9 rect, so aspect and
+  framing are free — phone, windowed-under-chrome, cropped, downscaled all work, and
+  screen-anchored elements fall out as outliers. `clipped_sides` then reports a board that is
+  cropped by the image edge. `locate_fullscreen`/`_wide`/`_letterbox`/`_auto` remain for the
+  offline tooling that already knows its frames are clean.
 - **`hud.py`** — the HUD-element detector taxonomy: `HUD_NAMES` (19 classes — 7 center-panel
   fields, 2 top-left counters, 9 semantic action buttons incl. the sanma `btn_babei`, 1 symmetric
   `reach_stick`) + `DET_NAMES = TILE_NAMES + HUD_NAMES` (the 57-class detector head; `btn_babei`

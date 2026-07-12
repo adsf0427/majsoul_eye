@@ -47,7 +47,33 @@ def _error(status: int, code: str, message: str, request_id: str):
 _STATUS = {"INVALID_IMAGE": 422, "INVALID_IMAGE_DIGEST": 422,
            "INVALID_DRAFT": 422, "UNSUPPORTED_SCHEMA": 422,
            "UNSUPPORTED_LAYOUT": 422,
+           # Localization outcomes. All 422: the request was well-formed, the
+           # screenshot just isn't one we can read. Each is a DISTINCT code so
+           # the caller can tell the user what to do about it.
+           "IMAGE_TOO_SMALL": 422, "LOCALIZATION_FAILED": 422,
+           "HAND_NOT_VISIBLE": 422, "BOARD_TOO_SMALL": 422,
+           "BOARD_CLIPPED": 422,
            "MODEL_MANIFEST_MISMATCH": 503, "MODEL_UNAVAILABLE": 503}
+
+
+def _parse_board_rect(raw: str):
+    """``X-Board-Rect: ox,oy,bw,bh`` (source-image px) -> tuple, or None.
+
+    Carried as a header, not a draft field: the draft schema is key-exact on
+    three sides (worker, API, browser) and the client mails the whole draft back
+    on every reconstruct, so a new draft field would 422 the EDIT path against an
+    older worker. Reconstruct never needs the image, so the rect never needs to
+    outlive recognition.
+    """
+    if not raw:
+        return None
+    parts = raw.split(",")
+    if len(parts) != 4:
+        raise ValueError("board rect must be ox,oy,bw,bh")
+    ox, oy, bw, bh = (int(part) for part in parts)
+    if bw <= 0 or bh <= 0:
+        raise ValueError("board rect must have positive extent")
+    return ox, oy, bw, bh
 
 
 def _consume_background(task: asyncio.Task) -> None:
@@ -112,10 +138,14 @@ def create_app(runtime, *, max_pending: int = 8, inference_concurrency: int = 1,
                 or any(ch not in "0123456789abcdef" for ch in digest)):
             return _error(400, "INVALID_REQUEST", "invalid worker context header",
                           request_id)
+        try:
+            board_rect = _parse_board_rect(request.headers.get("X-Board-Rect", ""))
+        except ValueError:
+            return _error(400, "INVALID_REQUEST", "invalid X-Board-Rect", request_id)
         context = RecognitionContext(
             request_id, required["X-Draft-ID"], required["X-Image-SHA256"],
             required["X-Layout-ID"],
-            allow == "1", None)
+            allow == "1", None, board_rect)
         body = await request.body()
         try:
             return await _invoke(recognition_gate, request_timeout_seconds,

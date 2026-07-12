@@ -55,7 +55,7 @@
 | 区域 | 文件 | 方法 | 质量 |
 |---|---|---|---|
 | 坐标模型 | `majsoul_eye/coords.py` | 归一化 `NormBox`、手牌槽、`RIVER_QUADS`(4家透视网格)、`MELD_STRIPS`、`DORA_STRIP` | — |
-| 板面定位 | `majsoul_eye/normalize.py` | `locate_fullscreen`/`locate_letterbox`/`AnchorLocator`(TODO) | 全屏 16:9 ✓ |
+| 板面定位 | `majsoul_eye/normalize.py` | **`locate_anchor`**(检测即地标+RANSAC 相似变换) + `clipped_sides` | 任意截图 ✓（手机/窗口/裁剪/缩放） |
 | 易区 | `majsoul_eye/label/autolabel.py` | 确定性 ROI 裁剪 + GT；手牌/dora/分数/文本 | 手牌 99.8% on-tile ✓ |
 | 河(难区) | `majsoul_eye/label/river.py` | **每家透视网格(单应) + GT 顺序赋类** | **98.5–99.5% on-tile** ✓ |
 | 副露 | `majsoul_eye/label/meld.py` | 每家 1 行 strip + GT 顺序；ankan 2 背面 | self/left ~95–98%，**right/across 3D 侧家偏松(88–93%) → opt-in**；几何重写 spike 见 §1.9（未并） |
@@ -1761,6 +1761,45 @@ worker 全链落地，本节钉死对外契约与当前**度量状态**。权威
   **10058/10121（99.38% ≥ 99%）、`history_mismatch 0`、0 mismatched、209 call-pending 跳过**；63 项
   infeasible 全部是 override 约束下的 `HISTORY_SEARCH_LIMIT`（skeleton 预算 4096 命中，纯搜索代价、
   非漂移）。
+
+### 1.66 板面地标自定位 `locate_anchor`：任意截图（手机/窗口/裁剪/缩放）（2026-07-12）
+
+- **动机（一个回归）**：§1.52 记着"用户 16 张真实截图 16/16 全链路通过"，但那之后 `07eab7c`
+  把 runtime 绑定到 manifest 时写死了 `locate_fullscreen(image)` + 16:9 ±2% 闸门，`d6a04a2` 又把
+  CLI 接到同一条路上。结果 `locate_wide`/`locate_auto` **只被 tests 引用、线上无入口可达**，那 16 张
+  里有 15 张（2.17/2.20:1）当场 `UNSUPPORTED_LAYOUT` → 422。
+  **根因不是代码，是没有守卫**：`samples/` 在 `.gitignore`，测试从不加载它，证据只活在散文里。
+- **关键认识（问题比想象的小）**：识别路径上**不存在"屏幕坐标系"问题**——`recognize/hudstate.py`
+  的 HUD 数值是从**各自的检测框**里裁的（`frame_bgr[y0:y1, x0:x1]`），`assemble_hud()` 签名里没有
+  region；立直棒座位归属早已是"以 `round_label` 检测框中心为锚"的相对几何。`coords.py` 的固定 HUD
+  框**只服务训练标注**。⇒ 定位器只需放好 3D 牌桌矩形。而牌桌**在任何客户端都是一个 16:9 矩形**
+  （手机居中、窗口内嵌）⇒ 待求变换只有 **3 DOF（缩放+平移）**，`BoardRegion` 结构原样不动。
+- **方案**：`normalize.locate_anchor(frame, dets)` —— **检测即地标**，零新训练：
+  - E1 = 7 个中央面板 HUD 类（每帧必在、锚在牌桌上、canonical 位置已标定）；
+  - E2 = 英雄手牌行（尺度无关地找出"最高的一排等距牌"，行间距 → 缩放，最左牌 → tx）。
+    面板只跨 270/1920，单用它尺度误差放大 ~7×；**手牌行才是尺度的来源**。
+  - 两组对应点合并，穷举 2-子集做**确定性 RANSAC**（~21 点 → 210 个最小样本，无随机、无种子），
+    内点集上重拟合。屏幕锚定的元素（宝牌条）天然是**外点**被丢弃。
+- **实测**：
+  - `samples/` 16 张真实截图：拟合矩形 vs 真值 **最大误差 0.30%**（中位 0.08–0.12%），重投影残差
+    **< 1.1 canonical px**（亚像素），**真实 runtime 全链路 16/16、零 violation**。
+  - 合成变体（同一批图，变换已知 ⇒ 真值精确）：**浏览器边框窗口 16/16 ✅**、**缩到 55% 16/16 ✅**、
+    **边框+裁剪+缩放组合 16/16 ✅**。
+  - 裁剪变体：定位**照样准**（0.13%），但盘面残缺 ⇒ 必须靠覆盖检查拒绝，不能靠"没有游离框"判断。
+    切掉手牌行时误差跳到 **1.05%**（只剩面板，正是预判的病态）⇒ `hand_inliers == 0` 是可靠信号。
+- **闸门换形**：`runtime._decode_and_validate` 的比例检查删除，改为
+  **定位（`LOCALIZATION_FAILED`/`HAND_NOT_VISIBLE`）+ 覆盖检查（`BOARD_TOO_SMALL`/`BOARD_CLIPPED`）**，
+  每个码都能对用户说清该怎么办。manifest `layout` 段随之换形（`minBoardWidth`/`anchorToleranceCanon`
+  /`maxResidualCanon`/`minHandInliers`/`clipToleranceFrac`），`manifest.py` 的契约同步钉死。
+- **手动兜底**：`RecognitionContext.board_rect`（worker 走 `X-Board-Rect` header，**不进 draft schema**
+  —— draft 是三仓键集联锁，且每次 reconstruct 都把整份 draft 寄回 worker，加字段会 422 掉**编辑**路径）。
+- **守卫（防止同样的事再发生）**：
+  - `tests/test_locate_anchor.py` —— 合成地标，零数据，钉死几何；
+  - `tests/test_recognition_runtime.py::test_the_same_board_reads_identically_from_a_phone_and_from_a_desktop`
+    —— **同一副盘面搬进宽屏/窗口画面，draft 必须逐字相同**。已做变异测试：退回 `locate_fullscreen`
+    时如实报警。⚠️ 它防的失败模式是**静默**的：定位错了不会报错，只会安静地产出一个完整、可信、错误的盘面。
+  - `tests/test_samples_golden.py` + `tests/samples_golden.json`（11KB）—— 16 张真实截图的期望值进 git，
+    图片（48MB）仍不进；`samples/` 缺失时**大声 skip**，绝不静默通过。
 
 ---
 

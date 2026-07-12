@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from majsoul_eye.normalize import locate_fullscreen
+from majsoul_eye.normalize import BoardRegion, clipped_sides, locate_anchor
 from majsoul_eye.recognize.accuracy_gate import verify_layout_support
 from majsoul_eye.recognize.assemble import assemble_with_evidence
 from majsoul_eye.recognize.classifier import TileClassifier
@@ -35,6 +35,9 @@ class RecognitionContext:
     layout_id: str
     allow_experimental: bool
     image_ref: str | None
+    # User-supplied board rect (ox, oy, bw, bh) in source-image px, from the
+    # manual-calibration fallback. Overrides the landmark fit when present.
+    board_rect: tuple[int, int, int, int] | None = None
 
 
 class RuntimeFailure(RuntimeError):
@@ -126,20 +129,54 @@ class RecognitionRuntime:
             raise RuntimeFailure("INVALID_IMAGE", "cannot decode image")
         height, width = image.shape[:2]
         layout = self.manifest.raw["layout"]
-        if width < layout["minWidth"] or height < layout["minHeight"]:
-            raise RuntimeFailure("UNSUPPORTED_LAYOUT", "image is below minimum dimensions")
-        ratio_error = abs(width / height - layout["aspectRatio"]) / layout["aspectRatio"]
-        if ratio_error > layout["aspectTolerance"]:
-            raise RuntimeFailure("UNSUPPORTED_LAYOUT", "image aspect is outside +-2%")
+        if width < layout["minFrameWidth"] or height < layout["minFrameHeight"]:
+            raise RuntimeFailure("IMAGE_TOO_SMALL", "image is below minimum dimensions")
         return image
+
+    def _locate(self, image, dets, context: RecognitionContext):
+        """Find the board, then judge whether enough of it is actually in frame.
+
+        The aspect of the SCREENSHOT says nothing — a phone letterboxes the 16:9
+        table between HUD columns, a window insets it under chrome. What matters
+        is (a) can we pin the board, and (b) is all of it present.
+        """
+        layout = self.manifest.raw["layout"]
+        if context.board_rect is not None:              # user-calibrated: trust it
+            ox, oy, bw, bh = context.board_rect
+            region = BoardRegion(ox, oy, bw, bh, image.shape[1], image.shape[0])
+        else:
+            found = locate_anchor(image, dets,
+                                  tol=layout["anchorToleranceCanon"])
+            if found is None or found.residual > layout["maxResidualCanon"]:
+                raise RuntimeFailure(
+                    "LOCALIZATION_FAILED",
+                    "cannot locate the board from this screenshot")
+            if found.hand_inliers < layout["minHandInliers"]:
+                # The hand row is what pins the scale (the center panel alone is a
+                # 270/1920 baseline). No hand row also means no what-cut question.
+                raise RuntimeFailure("HAND_NOT_VISIBLE",
+                                     "the hero hand row is not fully visible")
+            region = found.region
+
+        if (region.bw < layout["minBoardWidth"]
+                or region.bh < layout["minBoardHeight"]):
+            raise RuntimeFailure("BOARD_TOO_SMALL",
+                                 "the board is rendered too small to read")
+        sides = clipped_sides(region, layout["clipToleranceFrac"])
+        if sides:
+            raise RuntimeFailure("BOARD_CLIPPED",
+                                 f"the board is cropped: {', '.join(sides)}")
+        return region
 
     def recognize_bytes(self, image_bytes: bytes,
                         context: RecognitionContext) -> RecognizeWhatCutData:
         image = self._decode_and_validate(image_bytes, context)
         candidates = self.manifest.raw["candidates"]
         policy = CandidatePolicy(candidates["calibrationVersion"], candidates["topK"])
+        dets = self.detector.predict(image)
+        region = self._locate(image, dets, context)
         assembly = assemble_with_evidence(
-            self.detector.predict(image), locate_fullscreen(image),
+            dets, region,
             frame_bgr=image, hud_reader=self.hud_reader,
             tile_classifier=self.classifier, candidate_policy=policy)
         draft = build_recognized_draft(

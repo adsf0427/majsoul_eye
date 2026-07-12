@@ -270,6 +270,16 @@ from majsoul_eye.state.observe import ObservedState, check_observed
 HAND_MIN_H = 0.11            # hand tiles are ~0.141 canon-high; hero meld tiles ~0.083
 
 
+def _has_side_columns(region) -> bool:
+    """Is there frame outside the board's left/right edges? (i.e. a phone shot.)
+
+    Asked as a width comparison rather than ``region.ox > 0`` because a fitted
+    board rect carries sub-percent jitter and can land at ox = -3 on a clean
+    fullscreen capture.
+    """
+    return region.frame_w > region.bw * 1.01
+
+
 def _assemble_with_sources(dets, region: BoardRegion, frame_bgr=None, hud_reader=None):
     """One frame's detections -> ``(ObservedState, field source tuples)``.
 
@@ -356,12 +366,15 @@ def _assemble_with_sources(dets, region: BoardRegion, frame_bgr=None, hud_reader
         if best[0] > 60.0:
             if det.tile == "back":     # opponents' concealed rows are expected strays
                 continue
-            if region.ox > 0:
-                # Wide (>16:9) frame: the dora indicator is 2D HUD anchored
-                # near the SCREEN top-left corner at a device-dependent inset
-                # (iPhone safe-area != Android) — outside the board rect and
-                # any fixed box. Real dead-wall tiles are the only tile
-                # detections up there; hold them for the row-rescue below.
+            if _has_side_columns(region):
+                # The frame is WIDER than the board (a phone: the 16:9 table is
+                # letterboxed between HUD columns). There, the dora indicator is
+                # 2D HUD anchored near the SCREEN top-left corner at a
+                # device-dependent inset (iPhone safe-area != Android) — outside
+                # the board rect and any fixed box. Real dead-wall tiles are the
+                # only tile detections up there; hold them for the row-rescue.
+                # On a windowed desktop shot the board spans the full width and
+                # the dora sits INSIDE it, so this never engages.
                 x0, y0, x1, y1 = det.xyxy
                 cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
                 if cx < 0.35 * region.frame_w and cy < 0.25 * region.frame_h:

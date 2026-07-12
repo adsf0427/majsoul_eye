@@ -11,9 +11,10 @@ from majsoul_eye.recognize.manifest import (
 def manifest(asset, digest):
     return {"schemaVersion": 1, "manifestVersion": "test-v1",
             "layout": {"layoutId": "majsoul-desktop-16x9-v1",
-                       "minWidth": 1280, "minHeight": 720,
-                       "aspectRatio": 1.7777777777777777,
-                       "aspectTolerance": 0.02},
+                       "minFrameWidth": 640, "minFrameHeight": 360,
+                       "minBoardWidth": 1280, "minBoardHeight": 720,
+                       "anchorToleranceCanon": 30.0, "maxResidualCanon": 8.0,
+                       "minHandInliers": 4, "clipToleranceFrac": 0.005},
             "models": {name: {"path": asset, "sha256": digest,
                                "required": True}
                        for name in ("detector", "classifier", "hudReader")},

@@ -3,10 +3,14 @@
   "manifestVersion": "internal-2026-07-11-v1",
   "layout": {
     "layoutId": "majsoul-desktop-16x9-v1",
-    "minWidth": 1280,
-    "minHeight": 720,
-    "aspectRatio": 1.7777777777777777,
-    "aspectTolerance": 0.02
+    "minFrameWidth": 640,
+    "minFrameHeight": 360,
+    "minBoardWidth": 1280,
+    "minBoardHeight": 720,
+    "anchorToleranceCanon": 30.0,
+    "maxResidualCanon": 8.0,
+    "minHandInliers": 4,
+    "clipToleranceFrac": 0.005
   },
   "models": {
     "detector": {
