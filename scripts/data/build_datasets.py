@@ -160,6 +160,9 @@ def discover_games(sources: list) -> list:
     Returns [{name, dir, kind, capture, frames_dir}] with repo-relative POSIX paths.
     Raises SystemExit on an empty root or a duplicate game name (e.g. the same source
     root listed twice; distinct roots are source-root-qualified and never collide).
+    Captures whose frames.jsonl exists but holds zero entries (a run aborted before
+    any frame was recorded) are dropped with a note — they can never be annotated or
+    built, and stage 3 would reject their empty yolo dir as a poisoned split.
     """
     games, seen = [], {}
     for root in sources:
@@ -176,6 +179,10 @@ def discover_games(sources: list) -> list:
                                  f"source-root-qualified, so distinct roots never collide)")
             seen[name] = cap
             frames = paths.frames_dir_for(cap)
+            idx = os.path.join(frames, "frames.jsonl")
+            if os.path.exists(idx) and os.path.getsize(idx) == 0:
+                print(f"  skipping frameless capture (aborted run): {_posix(cap)}")
+                continue
             games.append({"name": name, "dir": name,
                           "kind": "manual" if cap in manual else "ai",
                           "capture": _posix(cap), "frames_dir": _posix(frames)})

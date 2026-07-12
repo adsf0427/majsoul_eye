@@ -369,9 +369,13 @@ def main() -> None:
     ap.add_argument("--per-game", type=int, default=40)
     ap.add_argument("--out", default="scratchpad/calib_measure.json")
     ap.add_argument("--refit", default=None, help="aggregate an existing measurement JSON")
+    ap.add_argument("--sanma", action="store_true",
+                    help="refit only: aggregate against the 3P geometry constants "
+                         "(measurement auto-switches per frame from BoardState.sanma)")
     args = ap.parse_args()
 
     if args.refit:
+        P.set_sanma(args.sanma)
         refit(args.refit)
         return
 
@@ -393,6 +397,7 @@ def main() -> None:
                 continue
             if img.shape[1] != 1920:
                 img = cv2.resize(img, (1920, 1080), interpolation=cv2.INTER_AREA)
+            P.set_sanma(getattr(seq_state[seq], "sanma", False))
             for rec in measure_frame(img, seq_state[seq], hom):
                 rec["capture"] = paths.ai_game_name(cap)
                 rec["seq"] = seq

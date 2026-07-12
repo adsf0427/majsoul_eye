@@ -56,9 +56,15 @@ def field_texts(state) -> dict[str, str]:
     Fields whose GT is missing are OMITTED (never guessed)."""
     t: dict[str, str] = {}
     hero = state.hero_seat
+    sanma = getattr(state, "sanma", False)
     if hero >= 0 and state.scores:
+        # sanma: the phantom chair (seat 3 = the would-be E1 north seat) renders
+        # NO score slot on the panel — skip its rel so we never label empty felt.
+        empty_rel = (3 - hero) % 4 if sanma else None
         for i, name in enumerate(("score_self", "score_right",
                                   "score_across", "score_left")):
+            if i == empty_rel:
+                continue
             t[name] = str(state.scores[(hero + i) % 4])
     if state.bakaze and state.kyoku:
         t["round_label"] = f"{state.bakaze}{state.kyoku}"
@@ -70,7 +76,9 @@ def field_texts(state) -> dict[str, str]:
         t["riichi_stick_count"] = f"x{state.kyotaku}"
         t["honba_count"] = f"x{state.honba}"
     if hero >= 0 and state.oya >= 0:
-        t["seat_wind_self"] = "ESWN"[(hero - state.oya) % 4]
+        # sanma rotates winds over 3 seats (E/S/W only; there is no north seat)
+        t["seat_wind_self"] = ("ESW"[(hero - state.oya) % 3] if sanma
+                               else "ESWN"[(hero - state.oya) % 4])
     return t
 
 

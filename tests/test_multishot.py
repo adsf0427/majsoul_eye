@@ -266,6 +266,23 @@ def test_multishot_window_operation_type_9_ron():
     assert mod.multishot_window(rec) is True
 
 
+def test_multishot_window_operation_type_11_babei():
+    """Record with operation type 11 (babei / 3P nukidora offer) → True even
+    though OP_TO_BTN has no class for it (on-screen button, special-cased)."""
+    mod = _load_autoplay()
+    rec = _MockRecord(
+        mjai=[{"type": "dahai", "pai": "5p"}],
+        raw_liqi={
+            "data": {"data": {"operation": {
+                "seat": 0,
+                "operationList": [{"type": 1}, {"type": 11}]
+            }}}
+        },
+        seat=0
+    )
+    assert mod.multishot_window(rec) is True
+
+
 def test_multishot_window_operation_mixed_types():
     """Record with mixed operation types (some have buttons) → True."""
     mod = _load_autoplay()

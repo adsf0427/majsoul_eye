@@ -61,6 +61,7 @@ from collections import deque
 from majsoul_eye.capture.roi_diff import roi_diff
 from majsoul_eye.capture.schema import GTRecord, GTWriter
 from majsoul_eye.capture.mjcopilot_gt import make_capturing_game_state, gt_fields
+from majsoul_eye.capture.bot3p import make_sanma_bot, AKAGI_DIR
 from majsoul_eye.capture.multishot import MultiShot
 from majsoul_eye.state.ops import ops_from_record
 from majsoul_eye.hud import buttons_for_ops
@@ -125,7 +126,7 @@ def multishot_window(record) -> bool:
     if any(ev.get("type") in MULTISHOT_MELD_TYPES for ev in (record.mjai or [])):
         return True
     ops = ops_from_record(record)
-    return bool(ops and buttons_for_ops(ops))
+    return bool(ops and buttons_for_ops(ops))   # incl. babei offers (op 11 -> btn_babei)
 
 
 # Game-end "one more game" button guards. Coordinates are in MahjongCopilot's 16x9
@@ -254,11 +255,14 @@ def auto_next_flow(*, button_guard, main_menu_visible, click_at, delay_step,
 
 def mjc_settings(op_delay: tuple[float, float] = (0.5, 1.0), *, url: str = SERVERS["jp"],
                  width: int = 1280, height: int = 720, model: str = "v4_js_09260526.pth",
-                 live: bool = False, randomize: int = 2, autojoin: bool = False) -> dict:
+                 live: bool = False, randomize: int = 2, autojoin: bool = False,
+                 join_mode: str = "4E") -> dict:
     """The MahjongCopilot settings-file seed dict (`Settings()` loads this so no "use
     default value" warning spam). Pure/testable — extracted so `--op-delay` (the random
     hesitation between the AI receiving an operation offer and clicking) has a unit-testable
-    home; every other key matches the pre-extraction inline literal byte-for-byte."""
+    home; every other key matches the pre-extraction inline literal byte-for-byte.
+    `join_mode` is the --autojoin room ("4E"/"4S"/"3E"/"3S"; MJC has click coords for all
+    four) — irrelevant when joining a game manually."""
     lo, hi = op_delay
     return {
         "update_url": "https://update.mjcopilot.com", "auto_launch_browser": False, "gui_set_dpi": True,
@@ -272,7 +276,7 @@ def mjc_settings(op_delay: tuple[float, float] = (0.5, 1.0), *, url: str = SERVE
         "auto_reply_emoji_rate": 0.0, "auto_emoji_intervel": 5.0, "auto_dahai_drag": False,
         "game_end_reminder": False, "ai_randomize_choice": max(0, min(5, randomize)),
         "delay_random_lower": lo, "delay_random_upper": hi, "auto_retry_interval": 1.5,
-        "auto_join_game": bool(autojoin), "auto_join_level": 1, "auto_join_mode": "4E",
+        "auto_join_game": bool(autojoin), "auto_join_level": 1, "auto_join_mode": join_mode,
     }
 
 
@@ -285,6 +289,14 @@ def main() -> None:
                     help="Session PARENT dir; each run writes a fresh run_<N>/ subdir. Default: captures/raw/ai_session.")
     ap.add_argument("--model", default="v4_js_09260526.pth",
                     help="Model file under MahjongCopilot/models/ (v4_js… is ~6x faster than the ensemble).")
+    ap.add_argument("--model-3p", default="default.pth",
+                    help="3-player (sanma) checkpoint under Akagi/mjai_bot/mortal3p/ — loaded via the "
+                         "Akagi mortal3p engine so 3P games play/observe too. Empty string disables; "
+                         "missing assets just warn and fall back to 4P-only.")
+    ap.add_argument("--akagi", default=AKAGI_DIR,
+                    help="Akagi checkout providing the mortal3p 3P engine stack (default: %(default)s).")
+    ap.add_argument("--join-mode", default="4E", choices=["4E", "4S", "3E", "3S"],
+                    help="--autojoin room: 4E/4S four-player east/south, 3E/3S three-player (sanma).")
     ap.add_argument("--live", action="store_true",
                     help="Actually click (AI auto-plays). Default = OBSERVE (log Mortal's action, no clicking).")
     ap.add_argument("--dry-run", action="store_true",
@@ -412,7 +424,8 @@ def main() -> None:
     dry_tmp = tempfile.mkdtemp(prefix="autoplay_ai_dry_") if args.dry_run else None
     settings_path = os.path.join(dry_tmp if dry_tmp else out_dir, "ai_settings.json")
     seed = mjc_settings(tuple(args.op_delay), url=url, width=args.width, height=args.height,
-                        model=args.model, live=args.live, randomize=args.randomize, autojoin=args.autojoin)
+                        model=args.model, live=args.live, randomize=args.randomize, autojoin=args.autojoin,
+                        join_mode=args.join_mode)
     with open(settings_path, "w", encoding="utf-8") as fh:
         json.dump(seed, fh, indent=2)
     st = Settings(settings_path)
@@ -426,7 +439,16 @@ def main() -> None:
     model_path = os.path.join(mjc, "models", args.model)
     if not os.path.exists(model_path):
         sys.exit(f"model not found: {model_path}")
-    bot = BotMortalLocal({GameMode.MJ4P: model_path})   # 4p only -> no missing-3p warning
+    bot = None
+    if args.model_3p:
+        try:                                            # sanma too: Akagi mortal3p engine (see capture/bot3p.py)
+            bot = make_sanma_bot(BotMortalLocal, GameMode, {GameMode.MJ4P: model_path},
+                                 akagi_dir=args.akagi, model_3p=args.model_3p)
+            print(f"  3P engine: {args.model_3p} (Akagi mortal3p stack)", flush=True)
+        except Exception as e:
+            print(f"  WARNING: 3P engine unavailable ({e!r}) -> 4P-only", flush=True)
+    if bot is None:
+        bot = BotMortalLocal({GameMode.MJ4P: model_path})   # 4p only -> no missing-3p warning
     browser = GameBrowser(st.browser_width, st.browser_height)
     automation = Automation(browser, st)
     parser = liqi.LiqiProto()

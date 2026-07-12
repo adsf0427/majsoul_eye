@@ -1529,7 +1529,169 @@ h 66–105（中位 89）、area 6379–18373；**相邻牌子最小间距 39px*
   mjai 止于 `reach`+`dahai 3s`、kyotaku 0、分数不动）；测试套全绿（test_observe +3、
   test_reconstruct +3，宣言窗口正/反例与 settled 回归）。
 
-### 1.58 what-cut 共享识别 worker 收口：P0 精度门 + manifest-first CLI + GT 历史 oracle（2026-07-11）
+### 1.58 三麻（sanma）AI 自打前置跑通：Akagi mortal3p 引擎接入 autoplay（2026-07-10）
+
+- **背景**：全管线三麻适配调研（采集→标注→重建）定位出采集段唯一硬卡点——
+  `autoplay_ai.py` 的 `BotMortalLocal({MJ4P: ...})` 在三麻局 `init_bot(seat, MJ3P)` 抛
+  `BotNotSupportingMode` 后被吞，**GT 推导与截图 arming 一起挂**（wire 录全但帧没拍，
+  无法事后兜底）。其余采集链早已 3P-ready（sync/multishot/replay 均含 nukidora，
+  MJC GameState 按 seatList 自动判 MJ3P、ActionBaBei→nukidora 解析原生支持）。
+- **关键实证（探针）**：MJC 自带 3P 路（`bot.local.engine3p` + shinkuan `libriichi3p`）与
+  盘上资产**不配套**——shinkuan 3.12 pyd 的 `obs_shape(4)=(775,34)` 配旧 `mortal.pth`；
+  而 `default.pth`（new-arch：622 通道、压缩 27 牌列/36 动作、DQN 头 37）要配 Akagi
+  `mjai_bot/mortal3p/` 自带的 `.libriichi` featurizer pyd（`obs_shape(4)=(622,34)`、
+  ACTION_SPACE=44，`local_engine` 内部切列 34→27 / 44→36；契约见 `../mortal3p` 仓
+  `mortal/obs_codec.py`，那是该映射的唯一真源）。该 pyd 实测 cp312 兼容，`mjai_bot` 为
+  无副作用命名空间包——**auto env 零构建直接引用**（重编 `../mortal3p` 的 maturin 路线
+  留作备选，未用）。
+- **实现**：新模块 `majsoul_eye/capture/bot3p.py`（DEV-ONLY，沿 `mjcopilot_gt` 惯例：
+  导入期不碰 MJC，类由调用方注入；Akagi 在工厂内懒加载、sys.path **append** 避免遮蔽）：
+  `make_sanma_bot` = `BotMortalLocal` 子类，MJ3P 的 `_init_bot_impl` 用 Akagi
+  `build_engine(default.pth)` + 其 `mjai.Bot`。`autoplay_ai.py`：`--model-3p default.pth`
+  （默认开，空串关，缺资产警告回退 4P-only）、`--akagi`、`--join-mode {4E,4S,3E,3S}`
+  （参数化 settings 种子里原本写死的 `auto_join_mode:"4E"`；MJC 的 3E/3S 选房点击坐标现成）；
+  `multishot_window` 对拔北 offer（liqi op 11，`OP_TO_BTN` 无此类）特判加拍
+  （`test_multishot` +1 例，修掉首版 `ops=None` 崩溃——原代码 `ops and` 短路在先）。
+- **验证**（`scripts/capture/verify_bot3p.py`，一次性工具）：真实三麻 mjai 整局
+  （`../mortal3p/log-viewer/game_records/smoke.json`，8 局 632 事件、22 次拔北）三座位全量
+  回放——`init_bot(seat∈{0,1,2}, MJ3P)` 全过，反应含 **nukidora 13/3/6**、dahai/reach
+  （宣言→追打 dahai 流程 OK）/pon/ankan/hora 全合法；4P+3P 两个 rust featurizer 同进程共存；
+  MJC 注入的 `can_act` 键无害；引擎 cuda 构建 0.4s。受影响 8 个测试文件全绿。
+- **边界（诚实清单）**：①未实弹——浏览器进真实三麻房的 live 冒烟待跑（`--dry-run` +手动进房
+  即可）；②auto-next 结算守卫与 `roi_diff.STABILITY_ROIS` 是按 4P 屏实测的，三麻屏（3 条
+  rank bar、对手行位置）未验证；③**下游全未适配**：annotate/建库/重建的座位几何、HUD 面板、
+  `%4` 索引、`btn_babei`/拔北堆类别照旧 4P-only——三麻采集数据先只作 wire+GT+帧原始积累，
+  勿喂 build_datasets（PIPELINE §2 已注明）。
+- **live 首局实测追记（同日）**：OBSERVE 与 LIVE 均跑通（真实三麻 wire 下 GT/反应/点击正常），
+  但暴露"ACT 打印与实际打牌不符"——排查（meta 解码探针）确认**不是接错引擎**：
+  `MJAI_MASK_LIST_3P`（44 项）与 Akagi bot meta 全对齐、整局 argmax 解码 0 错配；根因是
+  3p new-arch 模型 **q 值分布平**（softmax 首选 ~0.13，4P ~0.95），MJC `randomize_action`
+  的幂次抽样（`--randomize 2` → power 2.5）因此有 ~63% 概率把 dahai 换成 top-3 其它牌——
+  4P 下同机制几乎不触发，属首次暴露。**三麻采集一律 `--randomize 0`**（PIPELINE §2 已注明）；
+  randomize 只作用于 dahai，拔北/鸣牌不受影响，GT 来自 wire 故已采数据无损。
+
+### 1.59 三麻屏幕布局实测：4P 四槽公式原样成立，首局北家椅恒空（2026-07-11）
+
+- **数据**：`captures/raw/ai_session_3p/run_1/game1`（三东，E1/E1h1/E2/E3/E3h1 共 5 局，
+  hero=seat1 全场），每局取中局帧与 GT（`gtframes.build_seq_state`）逐项比对：三家分数
+  数值、河逐张（含立直横放 9m）、副露内容（5p 大明杠含红5、1p/1s/E/C 碰、S 暗杠
+  背-面-面-背、中碰）、拔北计数（[1,0,1]/[1,3,0]/[0,0,0]/[0,0,1]/[2,1,0]）——全部对上。
+- **结论（调研 §1.58 的"待截图核实"三问全部落定）**：
+  1. **三麻 = 4P 四槽布局减一**：`annotate/seatgt._screen_to_seat` 的 `(hero + rel) % 4`
+     **原样成立**——mjai actor = 首局（E1）椅子号 0-2，椅子 3 = 首局北家应坐的椅子，
+     该槽整场恒空（用户假设"首局把北家空出来"精确成立）。一局（半庄，含连庄）内固定；
+     跨半庄空位随 hero 座位变：hero=0→left 空、1→across 空（本局已验证）、2→right 空
+     （公式推论，待有对应局的采集顺手看一眼）。**不随局（kyoku）旋转**——E2 hero 当庄
+     （风=東）时空位仍在对面，按风旋转模型被排除。
+  2. **几何复用前景远好于调研预估**：桌面线框/透视与 4P 一致（`SRC_TABLE_CORNERS` 大概率
+     直接复用，待 fullwarp 数值验证）；河位置、立直横放、最新弃牌高亮、副露区
+     （右上=右家/左下=左家/右下=hero）、宝牌指示条、按钮横幅（ポン/スキップ 同
+     `BTN_ZONE`）、本场/供托计数全部与 4P 同位。中央面板 = 4P 减 across 分数位
+     （余牌 `余NN` 两位零填充 ✓、局名 ✓、3 风标 ✓、立直棒 self 槽同位 ✓）。
+  3. **拔北堆**：渲染在各家**副露区**，横排连排堆叠（hero 3 张 = 北北北 连排，右下角），
+     即 `pipeline.meld_display_cells` nukidora 桩设想的位置——新几何仅需"锚点+步进"标定。
+- **对标注适配的含义**：座位映射代码**零改动**（`%4` 环照用，seat 3 恒空自然消化）；
+  重标定范围收窄为"数值校准"而非"重建布局"——`DISCARD_GRID`/`MELD_STRIP2` 直接在三麻帧
+  上跑 `calibrate_annotation_model.py` 验证/微调即可；HUD seeds 只有 across 分数位删除、
+  其余待逐框确认。
+
+### 1.60 三麻标注几何数值标定完成：refit 常数在手（未写入 pipeline）（2026-07-11）
+
+- **空位规则闭环**：run_2 补齐 hero=0（game1/2，帧证 left 空）与 hero=2（game3/5，帧证
+  right 空），加上 §1.59 的 hero=1→across 空——`空位 rel = (3 − hero) % 4` 三种情况全验。
+- **测量**：`calibrate_annotation_model.py` 原样跑通三麻（seat_gt/%4 公式零改动；空位 pos
+  自然无记录）。run_1/game1（素色）+ run_2/game1-4（波纹背/鸭子桌布含大立绘，**花皮肤未劣化
+  测量**：rmse 0.88–1.86 与素色同级）共 788 记录、5 局、3 种 hero 座位；run_1 与 run_2 独立
+  拟合互差 <0.3%——测量 JSON 存 `scratchpad/calib3p_run1_run2.json`（run_2/game5 采集中，未用）。
+- **结论（三麻 vs 4P 常数）**：
+  - **直接转移**：副露带 right/left/across 角点（差 0.5–2px）；河原点（±5px 内）；
+    face w/d（~1px 内）；`DISCARD_READ` 读序、立直横放/最新高亮渲染逻辑。
+  - **需 refit（系统性、跨 run 稳定）**：两侧河列距 **-2.6~-2.9%**（4P 74.7/74.9 →
+    3P 72.7/72.8，第 6 列累计 ~-11px）；self 河行距 **+3.1%**（108.63→112.0）；across 河
+    行距 **-5.2%**（109.95→104.25）且 row1 +6.3px；**hero 副露带 cross +46.0px**
+    （σ=0.00、n=50、双 run 双皮肤全等——3P 专属稳定位移，疑为拔北行在角上占位）。
+  - 建议常数已由 `--refit` 打印（见测量 JSON；重测 2 分钟可复现）。
+- **下一步（标注段实现，未动）**：pipeline 常数按模式切换（`DISCARD_GRID_3P` 等 overlay，
+  模式判定可用 `scores[3]==0`/GT 事件）；**拔北堆 box 生成**（否则 N 牌全成背景负样本——
+  §1.58 投毒陷阱之一）+ hero 副露 corner 用新值；HUD `field_texts`/按钮 op11 的 3P 门控；
+  之后 build_datasets 才能吃三麻局。（→ 当日完成，§1.61。）
+
+### 1.61 三麻标注段 SHIPPED：模式切换几何 + 拔北堆 box + btn_babei（检测头 57 类）（2026-07-11）
+
+- **模式标志**：`BoardState.sanma`（`replay.py`）——start_kyoku 用**分数守恒判别式**
+  `sum(scores)+1000*kyotaku`（4P 恒 100000 / 3P 恒 105000，永不碰撞）或任一 nukidora 事件
+  置位、跨 kyoku 粘滞、`copy()` 保留；scores 不足 4 元素自动 pad。首版用裸 `scores[3]==0`
+  被同日全语料扫描抓出真实反例——`ai_session/run_8/game6` 有一局 4P 开局
+  `[19600,47000,33400,0]`（第 4 家恰好 0 分）；换守恒式后全语料复验（56 局 4P + 全部 3P
+  逐帧 replay）**零误判**，回归用例已入 `test_sanma`。
+- **几何模式切换**：`pipeline.set_sanma(flag)` **原地** clear+update 切换
+  `DISCARD_GRID`/`DISCARD_ROW_OFFSETS`/`MELD_STRIP2` ↔ `*_3P` 变体（字典身份不变，
+  `P.` 属性读者与 from-import 持引用者都跟随；进程全局、幂等）。`annotate_frame` 与
+  `calibrate_annotation_model` 测量端按帧自动设置；refit 端 `--sanma`。**3P 常数 =
+  §1.60 的 refit 值 + 第二轮 pos2/pos3 行链折叠**（工具打印的 o 只含边缘拟合、不含链折叠，
+  fold 需手动沿行进方向并入——已在常数注释记录）；**复测验证全恒等**：四座列距 a≈1.00、
+  行链 ±1px、副露角 ±0.5px。
+- **拔北堆**：`NUKI_STRIP_3P`（每屏幕座 anchor/step/foot；新一次性工具
+  `scripts/annotate/calibrate_nukidora.py`——GT 计数 vs 面掩膜连通域**计数匹配**自动测量，
+  污染帧自排除；n=105-306/座，σ≤1px，self 座 anchor 逐局 ±12px 浮动）。堆位于副露带与河
+  之间的**独立车道**（不在副露角——这解释了 §1.60 的 hero 副露 cross +46px：拔北车道占位）；
+  连通域含朝相机侧裙边，anchor 已做 face-trim（验证：pos2 修正后 349.0 = 无裙首测 348.6）。
+  `pipeline.generate_nukidora_boxes` 产出 `tile='N'`+`nuki:True` 的 meld 形盒并入
+  `meld_boxes`（下游 crops/YOLO 零改动消费）；self 堆经 1-D fill-max snap（±18px）吸收浮动。
+- **btn_babei + HUD 门控**：`OP_TO_BTN[11]='btn_babei'`，`HUD_NAMES` **尾部**追加（id 56，
+  检测头 56→57，旧权重仍是严格前缀）；babei offer 帧的按钮标签从"静默投毒"变为正常标注
+  （count_mismatch 防线自动生效）；autoplay 的 multishot op-11 特判随之删除（走正常
+  `buttons_for_ops` 路径）。`field_texts`：三麻跳过空位分数（`(3-hero)%4`）、自风
+  `"ESW"[(hero-oya)%3]`；reach_stick 循环无需改（`reach[3]` 恒 False）。
+- **端到端 QA**（`annotate_ai_session` 跑 run_1/game1 素色 + run_2/game3 鸭子皮肤）：
+  river 5636+1986 框 **100% ok**、meld（含拔北 419+194 框）**100% ok**、dora 100%、
+  HUD 全字段 **100% reliable**（4P seeds + ink-snap 在 3P 面板直接成立）、按钮含
+  `btn_babei` 11+3 张 **零 count_mismatch**、分数门控逐局正确（hero=1 无 across、
+  hero=2 无 right）；overlay 目检双皮肤全准。测试套全绿（新增 `tests/test_sanma.py` 6 例；
+  `test_hud_taxonomy`/`test_detector` 更新 57 类）。
+- **边界**：recognize/重建侧（`assemble`/`observe`/`reconstruct`、`hudstate`）仍 4P-only
+  （`%4` 回合环、守恒常数、nukidora 事件词表——见 §1.58 调研清单）；三麻检测器/分类器/
+  hudreader 尚未用三麻数据训练（标签已就绪，等数据积累后建版本混训）。
+
+### 1.62 首个三麻数据集 v5_3p + 0 帧残局修复（2026-07-11）
+
+- **触发**：`build_datasets.py v5_3p --sources captures/raw/ai_session_3p` 首跑在标注段
+  崩溃——`run_2/game25` 是采集在首帧前被中断的残局（GT 只有 schema 头 + 1 行，
+  `frames.jsonl` 0 字节），`annotate_ai_session._process_capture` 的逐帧循环零次执行、
+  `stats['frames']` 从未置位，而汇总 print 在 try/except **之外** → `KeyError: 'frames'`
+  经 `ex.map` 炸掉整个标注进程池（30/37 局已写完，其余 7 局丢失）。
+- **修复（双层）**：①源头——`build_datasets.discover_games` 丢弃 `frames.jsonl` 存在但为
+  空的捕获（打印注记；不进 games.json，否则 stage 3 也会把其空 yolo 目录判为 poisoned
+  split 拒绝装配）；②防御——标注 worker 对"零可标帧"（同样可达于全部帧落在 deal/call
+  窗口）走 SKIP `(name, None)` 路径且不留空标注 jsonl。回归测试
+  `test_build_datasets.test_discover_games_skips_frameless_aborted_captures`（无
+  frames.jsonl 的 legacy 形状仍被发现）+ 新 `tests/test_annotate_ai_session.py`。
+- **v5_3p 建成**：36 局三麻（run_1×1 素色 + run_2×24 换肤 + run_3×11），
+  val=`ai_session_3p_run_3_game1`，HBB+OBB 双格式（57 类头）。首个含
+  `btn_babei`/拔北堆 `N` 标签的版本；尚未训练。
+- **类直方图自检**：0 实例的类恰为三麻规则应缺的 `2m–8m`/`5mr`（三麻剔除）与
+  `btn_chi`（三麻无吃），`btn_babei` 436、`N` 28260、`reach_stick` 2874——taxonomy
+  端到端语义正确。
+
+### 1.63 babei 按钮排序修复：拔北渲染在最左，非追加序（2026-07-11）
+
+- **发现**：v5_3p 建成后按"典型帧过目"抽查 `btn_babei` 样例，全分辨率放大发现
+  **babei 与同帧其他动作钮类别互换**——屏幕左→右 = 拔北|立直|跳過，标注却是
+  btn_riichi|btn_babei|btn_skip。根因：`hud.buttons_for_ops` 按 `HUD_NAMES` 序出类
+  （babei 是尾部追加的 id 56 → 排最后），`annotate/hud.button_boxes` 将其与 x 排序的
+  plate zip；4P 里 HUD_NAMES 序恰好 = 屏幕序（22 帧标定，`BTN_ORDER_LTR`），babei 打破
+  了这个巧合。§1.61 的"零 count_mismatch"防线只查**数量**，查不出**顺序**错位。
+- **证据**：全语料恰 3 帧共现（2× babei+riichi、1× babei+kan），全分辨率裁剪逐帧核实，
+  覆盖 CN（拔北|杠|跳過）与 JP（北抜き|立直|スキップ）两种客户端——**拔北恒最左**。
+  babei 只可能与自摸回合类按钮（杠/立直/自摸/九种）共现（吃/碰/荣是他家舍张 offer），
+  故"babei 置首"覆盖全部可达组合。
+- **修复**：`hud.BTN_SCREEN_ORDER`（显式屏幕序：babei 最前，其余保持 HUD_NAMES 序）
+  取代 `buttons_for_ops` 里的 HUD_NAMES 迭代；检测头类 id 不动（56 仍是 babei）。
+  单独 babei+skip（215 帧）本就正确，不受影响。回归断言入 `test_hud_taxonomy`
+  （babei+riichi、babei+kan 两组合）。受影响 3 局删除重建（`--resume` 增量），
+  重建后 3 帧逐一目检类别与横幅对齐。
+
+### 1.64 what-cut 共享识别 worker 收口：P0 精度门 + manifest-first CLI + GT 历史 oracle（2026-07-11）
 
 Plan 1（what-cut）的**运行时收口**：DTO / baseline / history / decision / manifest / runtime /
 worker 全链落地，本节钉死对外契约与当前**度量状态**。权威操作文档见

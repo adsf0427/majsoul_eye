@@ -55,6 +55,7 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
     overlay PLATES instead of thresholded as bright glyphs. Omitting it falls back
     to the legacy brightness gate, which is skin- and language-biased; every
     pipeline caller passes it."""
+    P.set_sanma(getattr(state, "sanma", False))   # 4P vs 3P geometry constants
     Hinv = hom["H_full_inv"]
     full = P.warp_to_full(img, hom["H_full"], hom["full_size"])
     hsv_full = cv2.cvtColor(full, cv2.COLOR_BGR2HSV)   # one conversion feeds all 3 masks
@@ -115,6 +116,32 @@ def annotate_frame(img: np.ndarray, state, hom: dict, hand_suspect: bool = False
                     rec["flags"].append(f"pos{pos}:meld[{b['tile']}]:low_fill={f:.2f}")
             if low_conf:
                 rec["flags"].append(f"pos{pos}:meld:low_round_conf")
+
+        # nukidora pile (3P): face-up N tiles in their own lane; appended to the
+        # meld list so crops/YOLO/QA consume them as regular tiles (nuki=True
+        # marker for QA). The SELF pile floats ±12px per round along its row —
+        # a 1-D fill-maximizing snap over the face mask absorbs it (the other
+        # seats' anchors measured σ<=1px, template is enough).
+        if getattr(state, "sanma", False) and seat is not None and seat < 4 \
+                and state.nukidora[seat] > 0:
+            best_off = 0.0
+            if pos == 0:
+                cand = [P.generate_nukidora_boxes(pos, state.nukidora[seat], Hinv, off)
+                        for off in np.arange(-18.0, 18.1, 3.0)]
+                fills = [np.mean([_fill(ii_w, b["poly_fullwarp"]) for b in bs]) for bs in cand]
+                k = int(np.argmax(fills))
+                nboxes, best_off = cand[k], float(np.arange(-18.0, 18.1, 3.0)[k])
+            else:
+                nboxes = P.generate_nukidora_boxes(pos, state.nukidora[seat], Hinv)
+            for b in nboxes:
+                f = _fill(ii_w, b["poly_fullwarp"])
+                b["fill"] = round(f, 3)
+                b["snap"] = (round(best_off, 1), 0.0)
+                if f < FILL_OK:
+                    b["reliable"] = False
+                    b["low_conf"] = True
+                    rec["flags"].append(f"pos{pos}:nuki:low_fill={f:.2f}")
+            boxes = boxes + nboxes
         rec["meld_boxes"][str(pos)] = boxes
 
     # hero hand via the calibrated HandModel (settled 13-tile states only)

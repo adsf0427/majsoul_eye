@@ -1,6 +1,7 @@
-"""HUD-element detector taxonomy — the 18 classes appended after the frozen 38
-tile classes (ids 38-55; spec docs/superpowers/specs/2026-07-04-hud-detection-design.md §3,
-reach stick added in §10, then revised same day to a single class).
+"""HUD-element detector taxonomy — the 19 classes appended after the frozen 38
+tile classes (ids 38-56; spec docs/superpowers/specs/2026-07-04-hud-detection-design.md §3,
+reach stick added in §10, then revised same day to a single class; btn_babei
+appended 2026-07-11 for sanma, STATUS §1.61).
 
 Pure data (no cv2/numpy) so every component can import it. Button classes are
 SEMANTIC — CN/JP/TW glyphs are all training samples of the same class.
@@ -43,33 +44,51 @@ HUD_NAMES: list[str] = [
     "btn_tsumo", "btn_ron", "btn_kyushu", "btn_skip",
     # symmetric riichi stick (single class -- see REACH_STICK_SLOTS above)
     "reach_stick",                                      # id 55 (spec §10)
+    # sanma babei (拔北) offer button. APPENDED (id 56) so all earlier ids stay
+    # frozen — 56-class weights remain a strict prefix of this 57-class head.
+    "btn_babei",                                        # id 56 (3P; STATUS §1.61)
 ]
-DET_NAMES: list[str] = TILE_NAMES + HUD_NAMES          # 56-class detector head
+DET_NAMES: list[str] = TILE_NAMES + HUD_NAMES          # 57-class detector head
 HUD_NAME_TO_ID: dict[str, int] = {n: len(TILE_NAMES) + i for i, n in enumerate(HUD_NAMES)}
 NUM_DET_CLASSES: int = len(DET_NAMES)
-assert NUM_DET_CLASSES == 56, NUM_DET_CLASSES
+assert NUM_DET_CLASSES == 57, NUM_DET_CLASSES
 
 # liqi operation type -> button class. Wire shape verified on run_13/game1:
 # raw_liqi.data.data.operation = {seat, operationList:[{type, combination,...}], ...}.
-# type 1 = dapai (no button), 11 = babei (3p, out of scope). An/dai/ka kan share
-# ONE button. Codes follow Akagi/MahjongCopilot convention — re-check against
-# Akagi's liqi parser if a mismatch shows up in calibration (spec §3.3).
+# type 1 = dapai (no button). An/dai/ka kan share ONE button. Codes follow
+# Akagi/MahjongCopilot convention — re-check against Akagi's liqi parser if a
+# mismatch shows up in calibration (spec §3.3). 11 = babei (sanma 拔北 offer;
+# 北抜き banner verified on real 3P capture, run_1 seq 225/286).
 OP_TO_BTN: dict[int, str] = {
     2: "btn_chi", 3: "btn_pon",
     4: "btn_kan", 5: "btn_kan", 6: "btn_kan",
     7: "btn_riichi", 8: "btn_tsumo", 9: "btn_ron", 10: "btn_kyushu",
+    11: "btn_babei",
 }
+
+
+# On-screen L->R button order — what annotate/hud.button_boxes zips against its
+# x-sorted plate candidates. Matches HUD_NAMES order for the 4P classes
+# (calibrated on 22 real frames, see annotate/hud.BTN_ORDER_LTR) EXCEPT
+# btn_babei: its detector id is APPENDED (56) but Majsoul renders 拔北/北抜き
+# LEFTMOST of any co-offered button (verified at full res on all 3 v5_3p
+# co-occurrence frames, CN+JP clients: babei|riichi|skip and babei|kan|skip;
+# STATUS §1.63). Babei only ever co-occurs with own-turn buttons
+# (kan/riichi/tsumo/kyushu) — chi/pon/ron are other-discard offers — so
+# "babei first" covers every reachable combination.
+BTN_SCREEN_ORDER: list[str] = ["btn_babei", "btn_chi", "btn_pon", "btn_kan",
+                               "btn_riichi", "btn_tsumo", "btn_ron", "btn_kyushu"]
 
 
 def buttons_for_ops(op_types: list[int]) -> list[str]:
     """Pending liqi op types -> button classes expected on screen (dapai-only -> []).
-    Order = HUD_NAMES order (stable); on-screen ordering is assigned by x-sort at
-    annotation time, not here. btn_skip accompanies any other button —
-    VERIFIED (Task 7 Step 5) on a real own-turn riichi offer (seq 302,
+    Order = on-screen L->R order (BTN_SCREEN_ORDER, babei first) — annotation
+    zips this against x-sorted plate candidates. btn_skip accompanies any other
+    button — VERIFIED (Task 7 Step 5) on a real own-turn riichi offer (seq 302,
     captures/raw/ai_session3/run_1/game1, ops=[1(dapai), 7(riichi)]): the frame
     shows BOTH a 立直 banner AND a スキップ banner, so own-turn-only offers do
     NOT drop the skip button — no change needed here."""
-    btns = [b for b in HUD_NAMES if b in {OP_TO_BTN.get(t) for t in op_types}]
+    btns = [b for b in BTN_SCREEN_ORDER if b in {OP_TO_BTN.get(t) for t in op_types}]
     if btns:
         btns.append("btn_skip")
     return btns
