@@ -45,7 +45,8 @@
         │
         ▼
 【构建 · 一条命令】  scripts/data/build_datasets.py <name> [--sources 根目录...] [--resume|--force]
-   默认 sources = captures/raw/ai_session（可加 captures/raw/manual、将来的 ai_session_2 等；
+                                                          [--exclude 局名...]
+   默认 sources = captures/raw/ai_session（可加 captures/raw/manual、三麻 ai_session_3p 等；
    立即执行，--dry-run 才是干跑）。内部按序编排三个阶段，产出自包含版本目录：
 
    datasets/<name>/                      ←（现役：datasets/v4，71 局全量（HUD 标签三修后重建，STATUS §1.47）；
@@ -266,6 +267,15 @@
   stage-2 先跑完 HBB 再跑 OBB（reuse 依赖 HBB 帧先落盘）。`games.json` 记 `formats` 字段；`dir` 仍存 HBB
   局名，OBB 目录＝`<dir>__obb`。已建的 HBB 版本可 `--hbb --obb --resume` **原地补 OBB**（跳过已验证的
   HBB 与标注，只增量建 OBB 标签＋重装两套 split，快）。
+- **剔除坏局 `--exclude <局名>`（可重复）**：把一个**能被发现、也能被标注，但像素与 GT 不符**的局
+  永久挡在版本外——采集文件原地保留（GT 仍有效），只是不进 `games.json`，因此**以后任何
+  `--resume` 都不会把它捞回来**（这正是不能靠"手工删目录"解决的原因：删了下次 resume 又会重建）。
+  名字打错 = 报错而非静默忽略（拼错就等于把本要剔除的坏局放回训练集）。
+  典型场景 = **掉线局**：客户端断线后弹「连接异常」蒙层盖住牌桌，GT 却继续推进 → 河格 fill≈0
+  被判 unreliable 而**丢标签**（可见牌无标 = 背景负样本），副露框则落到**牌墙**上**通过** fill 门
+  → 输出**幻影标签**。首例 `ai_session_3p_run_3_game11`（236 帧中 227 帧整桌不可见；
+  1733 个副露框全部"合格"却全是假的），已在 v6 剔除（STATUS §1.65）。
+  体检办法：标注后看 `annotate_ai_session` 汇总行的 `river … % ok` —— 正常局 ~100%，掉线局趋近 0。
 - **对手牌背（实验，默认关）**：`build_datasets.py --backs` 额外标注三家对手暗牌行的 `back` 框
   （手摸切识别的前置；`majsoul_eye/annotate/backs.py`，标定于 run_8 真实帧，人工 per-slot
   fullwarp 模板 + 玩家左手端锚点，跨皮肤/分辨率已验证）。透传路径：`--backs` →

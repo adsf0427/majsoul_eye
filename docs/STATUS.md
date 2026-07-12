@@ -1691,6 +1691,37 @@ h 66–105（中位 89）、area 6379–18373；**相邻牌子最小间距 39px*
   （babei+riichi、babei+kan 两组合）。受影响 3 局删除重建（`--resume` 增量），
   重建后 3 帧逐一目检类别与横幅对齐。
 
+### 1.65 三麻并入 v6（首个 4P+3P 混合集）+ 掉线局投毒发现 + `--exclude`（2026-07-12）
+
+- **做了什么**：`captures/raw/ai_session_3p` 的 36 局并入 **`datasets/v6`（OBB-only）**，得到
+  第一个 **4P+3P 混合**数据集：**179 局**（144 四麻 + 35 三麻）、**train 47612 / val 2118**、
+  `nc` 从 56 刷到 **57**（`btn_babei`；它是追加的 id 56，旧 4P 标签是严格前缀，无需重标）。
+  命令＝`build_datasets.py v6 --sources <5 个 4P 根> captures/raw/ai_session_3p --obb --resume -j 16
+  --exclude ai_session_3p_run_3_game11 --val …`（6 个 `--val`）。
+  ⚠️ **`--resume` 时 sources 与 `--val` 必须一次给全**：stage 3 用**当次发现的全部局**重装 split，
+  漏给一个 source 会把老局悄悄踢出训练集；不给 `--val` 会退化成单个默认留出局。
+- **val**：沿用"每个 source root 留一整局"的惯例，新增第 6 局 `ai_session_3p_run_3_game1`
+  （否则验证集里 0 帧三麻，三麻表现无从衡量）。
+- **🔴 掉线局 = 投毒源（新发现）**：`ai_session_3p_run_3_game11` 是一局**客户端断线**的采集——
+  「连接异常，请刷新重试」蒙层盖住牌桌，牌桌渲染为空，而 GT 照常推进。后果**双向**：
+  ①河格 fill≈0 → 判 unreliable → `build_dataset` 只发 `reliable` 框（build_dataset.py:370）→
+  **5107 个河标签被丢**，可见/GT 有牌却无标 = 背景负样本；②副露框落到**牌墙**上，`tile_face_mask`
+  照样命中 → **1733/1733 全部"合格"** → **幻影标签**原样写进 YOLO。236 帧里 **227 帧整桌不可见**。
+  全 180 局体检（逐帧"GT 有河但零河可见"）只揪出它一个（96.2%）；次高是 v6 **既有**的 4P 局
+  `ai_session2_run_5_game7`（8.8%，21 帧短暂遮挡，**本次未动**——留待日后决定是否加通用逐帧门）。
+  体检信号极干净：正常局 `river … % ok` ≈100%，掉线局趋近 0。
+- **`--exclude <局名>`（新，`build_datasets.py`）**：把这种"可发现、可标注、但像素与 GT 不符"的局
+  永久挡在版本外。采集文件原地保留；只是不进 `games.json`，故**任何后续 `--resume` 都捞不回来**
+  ——手工删目录做不到这点（下次 resume 会重建）。未匹配任何局的名字**报错**而非忽略（拼错 =
+  静默把坏局放回训练集）。回归用例 `test_discover_games_excludes_named_games`。
+- **类直方图自检（三麻 35 局，331886 个实例）**：`btn_babei` 184、拔北堆 `N` 13606、
+  `reach_stick` 1392；零实例类恰为三麻规则该缺的 `2m–8m`/`5mr`（三麻剔除）与 `btn_chi`（无吃）
+  ——taxonomy 端到端语义正确。
+- **环境注记**：本次标注/构建跑在 base python（numpy 1.26 / cv2 4.9），项目 env 是
+  numpy 2.5 / cv2 4.13。抽一局用项目 env 重标并逐字段 diff：**0 处差异**（浮点 max delta 0.0），
+  标注段对这两套 cv2/numpy 版本不敏感，混合集无工具链裂痕。
+- **未训练**：v6 检测器尚未在混合集上重训（`launch_detector.sh obb --dataset v6`）。
+
 ### 1.64 what-cut 共享识别 worker 收口：P0 精度门 + manifest-first CLI + GT 历史 oracle（2026-07-11）
 
 Plan 1（what-cut）的**运行时收口**：DTO / baseline / history / decision / manifest / runtime /

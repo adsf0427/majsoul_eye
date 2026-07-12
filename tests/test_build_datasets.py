@@ -88,6 +88,33 @@ def test_discover_games_skips_frameless_aborted_captures():
                          "ai_session_3p_run_2_game26"}, names
 
 
+def test_discover_games_excludes_named_games():
+    """``--exclude NAME`` drops a discoverable-but-unusable game for good: the capture
+    stays on disk (and keeps its GT), but never enters the manifest, so a later
+    ``--resume`` cannot silently pull it back in. Motivating case:
+    ai_session_3p_run_3_game11, a game the client played disconnected — a modal covers
+    the table, so GT-driven river boxes land on nothing (dropped as unreliable) while
+    meld boxes land on the WALL and pass the fill gate (emitted as phantom labels).
+    An unknown --exclude name is an error, not a no-op: a typo'd name would silently
+    leave the poisoned game in the split."""
+    with tempfile.TemporaryDirectory() as td:
+        root = os.path.join(td, "ai_session_3p")
+        for g in ("game10", "game11"):
+            _touch(os.path.join(root, "run_3", g, f"{g}.jsonl"))
+        names = {g["name"] for g in bds.discover_games([root])}
+        assert names == {"ai_session_3p_run_3_game10", "ai_session_3p_run_3_game11"}
+
+        kept = bds.discover_games([root], exclude=["ai_session_3p_run_3_game11"])
+        assert [g["name"] for g in kept] == ["ai_session_3p_run_3_game10"]
+
+        try:
+            bds.discover_games([root], exclude=["ai_session_3p_run_3_game99"])
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("an --exclude name matching no discovered game must fail")
+
+
 def test_letterboxed_games_use_own_frames_now():
     """run_5 game2/game3 were de-letterboxed IN PLACE (2026-07-05, deletterbox_frames.py
     --inplace), so the FRAMES_OVERRIDE map is gone and they resolve to their own nested

@@ -154,7 +154,7 @@ def verify_game_yolo(yolo_dir: str, obb: bool):
     return None
 
 
-def discover_games(sources: list) -> list:
+def discover_games(sources: list, exclude=()) -> list:
     """Scan source roots for captures -> manifest entries (pure; no side effects).
 
     Returns [{name, dir, kind, capture, frames_dir}] with repo-relative POSIX paths.
@@ -163,6 +163,12 @@ def discover_games(sources: list) -> list:
     Captures whose frames.jsonl exists but holds zero entries (a run aborted before
     any frame was recorded) are dropped with a note — they can never be annotated or
     built, and stage 3 would reject their empty yolo dir as a poisoned split.
+
+    ``exclude`` names games to keep OUT of the manifest for good — the capture stays on
+    disk with its GT, but no stage ever sees it, so a later ``--resume`` cannot pull it
+    back in. For games that are discoverable and annotatable yet whose PIXELS do not
+    show what GT says (see --exclude's help). An unknown name raises rather than being
+    ignored: a typo would silently readmit the game it was meant to keep out.
     """
     games, seen = [], {}
     for root in sources:
@@ -186,6 +192,15 @@ def discover_games(sources: list) -> list:
             games.append({"name": name, "dir": name,
                           "kind": "manual" if cap in manual else "ai",
                           "capture": _posix(cap), "frames_dir": _posix(frames)})
+    if exclude:
+        unknown = [x for x in exclude if x not in seen]
+        if unknown:
+            raise SystemExit(f"--exclude {unknown} not among discovered games — a name that "
+                             f"matches nothing would silently readmit the game it was meant "
+                             f"to keep out. Discovered: {sorted(seen)}")
+        for x in exclude:
+            print(f"  excluding game (--exclude): {x}")
+        games = [g for g in games if g["name"] not in set(exclude)]
     return games
 
 
@@ -341,6 +356,15 @@ def main() -> None:
                     help=f"held-out whole game for the detector split (default {DEFAULT_VAL} "
                          f"when present among the discovered games; else you must pass one). "
                          f"Repeatable — pass --val twice to hold out two whole games at once.")
+    ap.add_argument("--exclude", action="append", default=None, metavar="NAME",
+                    help="keep a discovered game OUT of this dataset for good (repeatable). "
+                         "The capture stays on disk; it just never enters the manifest, so a "
+                         "later --resume cannot pull it back in. For captures whose PIXELS "
+                         "disagree with GT even though the GT itself is fine — e.g. a game the "
+                         "client played DISCONNECTED (a modal covers the table: river boxes "
+                         "land on nothing and are dropped as unreliable, while meld boxes land "
+                         "on the wall, pass the fill gate, and ship as phantom labels). An "
+                         "unknown NAME is an error, not a no-op.")
     ap.add_argument("--stage", choices=["annotate", "dataset", "detector", "all"], default="all")
     ap.add_argument("--resume", action="store_true",
                     help="continue into an existing datasets/<name>: skip games that already "
@@ -388,7 +412,7 @@ def main() -> None:
     if args.force:
         r.rm(ds)
 
-    games = apply_existing_dirs(discover_games(args.sources), ds)
+    games = apply_existing_dirs(discover_games(args.sources, args.exclude or ()), ds)
     names = [g["name"] for g in games]
     vals = resolve_vals(args.val, names)
     print(f"{'DRY RUN' if args.dry_run else 'BUILD'} {ds}  "
