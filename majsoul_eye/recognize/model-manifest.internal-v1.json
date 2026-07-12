@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "manifestVersion": "internal-2026-07-11-v1",
+  "manifestVersion": "internal-2026-07-12-v1",
   "layout": {
     "layoutId": "majsoul-desktop-16x9-v1",
     "minFrameWidth": 640,
@@ -15,7 +15,7 @@
   "models": {
     "detector": {
       "path": "tile_detector.pt",
-      "sha256": "085c94bc909c64fa12322929173c316a8b1fa34527cbaee72f097a12bdfcf407",
+      "sha256": "fe68e22cb0e40db19274fac94a006ab31cdae18a1fd7e02c38b63d90bdaf084b",
       "required": true
     },
     "classifier": {

@@ -1742,9 +1742,9 @@ worker 全链落地，本节钉死对外契约与当前**度量状态**。权威
 - **worker 契约**：`POST /v1/recognize`（原始字节 + 冻结 `X-*` 头）、`POST /v1/reconstruct`
   （严格 `{draft, revision}`）、`/readyz`（精确 hash + Eye revision + supportStatus）；错误体严格
   `WorkerErrorBodyV1{code,message,requestId}`；一台机器**一个共享进程/设备**服务全部灰度调用。
-- **当前模型 hash**（`model-manifest.internal-v1.json`，`manifestVersion=internal-2026-07-11-v1`，
-  manifest SHA-256 `4bee92d2ae1e6eae1f66972e83ef55eed3f2f221e063b38c50d790907aa7ca70`）：
-  - detector `085c94bc909c64fa12322929173c316a8b1fa34527cbaee72f097a12bdfcf407`
+- **当前模型 hash**（`model-manifest.internal-v1.json`，`manifestVersion=internal-2026-07-12-v1`，
+  manifest SHA-256 `cd6523cf807d99e896af5b441091d8b9b7bf597d872b6fc037d00067a45d9c95`）：
+  - detector `fe68e22cb0e40db19274fac94a006ab31cdae18a1fd7e02c38b63d90bdaf084b`
   - classifier `a6e13f9a7835a1a59e3289794da64df910fc6761ba71f7c5aa2af0f1a2d149bb`
   - hudReader `b205d12461435896ff435bf34fe622ec9cfe075d6f31ac978ee2aa0c8fe2ff3d`
 - **度量状态 = `experimental`**：**尚未提交任何合格的 100 图 / 20 局独立 golden**，故不可变 P0 门槛
