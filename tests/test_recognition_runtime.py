@@ -6,6 +6,7 @@ import numpy as np
 
 from majsoul_eye.recognize.runtime import RecognitionContext, RecognitionRuntime, RuntimeFailure
 from majsoul_eye.what_cut.schema import parse_what_cut_draft
+from majsoul_eye.recognize.detector import Detection
 from test_assemble import _dora_dets, _gt, _hand_dets, _meld_dets, _river_dets
 
 H13 = ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m",
@@ -21,7 +22,10 @@ class FakeClassifier:
 
 
 class FakeHudReader:
-    pass
+    # The HUD micro-readers are out of scope for these fixtures; returning empty
+    # text keeps every HUD slot None, exactly as when no reader ran at all.
+    def read(self, crop, cls): return ""
+
 
 
 def runtime():
@@ -158,11 +162,26 @@ def _board_dets():
     seat-2 pon of P claimed from relative seat 3."""
     return (_hand_dets(H13, drawn="5p")
             + _dora_dets(["5s"])
+            + _score_plate_dets()
             + _river_dets(0, ["9p"])
             + _river_dets(2, ["S"])
             + _river_dets(3, ["W"])
             + _meld_dets(2, [_gt("pon", ["P", "P", "P"], called="P",
                                  from_seat_rel=3, seat=2)]))
+
+
+def _score_plate_dets():
+    """The four centre-panel score plates. Every real Majsoul board renders them,
+    and their PRESENCE is what tells 4-player from 3-player (a sanma table shows
+    only three — recognize/mode.py). A fixture without them is not a board."""
+    from majsoul_eye.hud import HUD_NAME_TO_ID
+    names = ("score_self", "score_right", "score_across", "score_left")
+    out = []
+    for i, name in enumerate(names):
+        cx, cy = 900 + 30 * i, 540
+        out.append(Detection(xyxy=(cx - 20, cy - 10, cx + 20, cy + 10), name=name,
+                             tile=None, cls=HUD_NAME_TO_ID[name], score=0.9, poly=None))
+    return out
 
 
 def _shift(dets, k, ox, oy):

@@ -49,8 +49,8 @@ def _long_edge_sideways(pts, u, v) -> bool:
     return abs(float(np.dot(le, u))) > abs(float(np.dot(le, v)))
 
 
-def _river_frame(seat: int):
-    g = P.DISCARD_GRID[seat]
+def _river_frame(seat: int, geom: P.BoardGeometry = P.GEOMETRY_4P):
+    g = geom.discard_grid[seat]
     rd = P.DISCARD_READ[seat]
     o = np.array(g["o"], float)
     dcol = np.array(g["dcol"], float)
@@ -62,14 +62,14 @@ def _river_frame(seat: int):
     return disc0, colu, rowu, float(np.linalg.norm(dcol))
 
 
-def _assign_river_with_sources(seat: int, items):
+def _assign_river_with_sources(seat: int, items, geom: P.BoardGeometry = P.GEOMETRY_4P):
     """items -> ordered ``(ObservedRiverTile, Detection)`` pairs + violations.
 
     Row = nearest DISCARD_ROW_OFFSETS entry; order within a row = along-column
     projection (handles the riichi extra-shift and the >18 overflow, since only
     ORDER matters). Sideways = footprint longer along the column axis."""
-    disc0, colu, rowu, col_pitch = _river_frame(seat)
-    offs = P.DISCARD_ROW_OFFSETS[seat]
+    disc0, colu, rowu, col_pitch = _river_frame(seat, geom)
+    offs = geom.discard_row_offsets[seat]
     row_pitch = offs[1] - offs[0]
     rows: dict[int, list] = {0: [], 1: [], 2: []}
     viol: list[str] = []
@@ -102,15 +102,87 @@ def _assign_river_with_sources(seat: int, items):
     return out, viol
 
 
-def _assign_river(seat: int, items):
-    assigned, violations = _assign_river_with_sources(seat, items)
+def _assign_river(seat: int, items, geom: P.BoardGeometry = P.GEOMETRY_4P):
+    assigned, violations = _assign_river_with_sources(seat, items, geom)
     return [tile for tile, _ in assigned], violations
 
 
-def _strip_cells(seat: int, items):
+ZONE_RADIUS = 60.0        # beyond this a detection belongs to no seat zone
+
+
+def zone_distances(centre, seat: int, geom: P.BoardGeometry) -> tuple[float, float]:
+    """(distance to seat's river grid, distance to seat's meld strip), fullwarp px.
+
+    Shared by the routing loop and by recognize/mode.py's phantom-chair check, so
+    "is anything rendered in that chair" cannot drift away from "where would we
+    have routed it".
+    """
+    disc0, colu, rowu, col_pitch = _river_frame(seat, geom)
+    offs = geom.discard_row_offsets[seat]
+    u = float(np.dot(centre - disc0, colu))
+    v = float(np.dot(centre - disc0, rowu))
+    du = max(0.0, -u, u - 10 * col_pitch)
+    dv = min(abs(v - x) for x in offs)
+    d_river = float(np.hypot(du, dv))
+    cfg = geom.meld_strip2[seat]
+    a = float(np.dot(centre - np.array(cfg["corner"]), np.array(cfg["along"])))
+    cr = float(np.dot(centre - np.array(cfg["corner"]), np.array(cfg["cross"])))
+    da = max(0.0, -a, a - 16 * cfg["w"])
+    dc = max(0.0, -cr, cr - 2.2 * cfg["d"])
+    return d_river, float(np.hypot(da, dc))
+
+
+# --- nukidora pile (3P) ------------------------------------------------------
+# The pulled norths sit face-up in their own lane between the meld strip and the
+# river. They are ordinary `N` tile detections — the detector has no separate
+# class for them — so the ROUTER is what tells a pulled north from a north that
+# was merely discarded or melded.
+_MAX_NUKI = 4                     # only four norths exist
+
+
+def _nuki_distance(centre, seat: int, geom: P.BoardGeometry) -> float:
+    """Distance from a detection centre to seat ``seat``'s north-pile lane."""
+    cfg = geom.nuki_strip[seat]
+    anchor = np.array(cfg["anchor"], float)
+    step = np.array(cfg["step"], float)
+    unit = step / (np.linalg.norm(step) + 1e-9)
+    # The lane is the segment anchor .. anchor + 3*step (a 4-tile pile is the max).
+    along = float(np.dot(centre - anchor, unit))
+    along = min(max(along, 0.0), float(np.linalg.norm(step)) * (_MAX_NUKI - 1))
+    return float(np.linalg.norm(centre - (anchor + along * unit)))
+
+
+def _assign_nuki(seat: int, items, geom: P.BoardGeometry):
+    """North-pile detections -> (count, violations).
+
+    The pile grows one tile at a time along ``step``; the SELF pile floats ±12px
+    per round (pipeline.py:NUKI_STRIP_3P), so the slot index is read from a single
+    fitted along-offset rather than from absolute positions.
+    """
+    if not items:
+        return 0, []
+    cfg = geom.nuki_strip[seat]
+    anchor = np.array(cfg["anchor"], float)
+    step = np.array(cfg["step"], float)
+    pitch = float(np.linalg.norm(step))
+    unit = step / (pitch + 1e-9)
+    alongs = []
+    for det, pts in items:
+        centre = pts.mean(axis=0)
+        alongs.append(float(np.dot(centre - anchor, unit)))
+    # One shared offset for the whole pile (it floats as a unit, tile 0 anchored).
+    offset = min(alongs)
+    slots = sorted(round((a - offset) / pitch) for a in alongs)
+    if slots != list(range(len(items))) or len(items) > _MAX_NUKI:
+        return 0, [f"seat {seat} north pile unreadable "
+                   f"({len(items)} tiles, slots {slots})"]
+    return len(items), []
+
+
+def _strip_cells(seat: int, items, geom: P.BoardGeometry = P.GEOMETRY_4P):
     """Sort meld-zone detections into display cells walking from the corner.
     Returns cells = [{label, sideways, stacked: [label]}] in CORNER order."""
-    cfg = P.MELD_STRIP2[seat]
+    cfg = geom.meld_strip2[seat]
     corner = np.array(cfg["corner"], float)
     along = np.array(cfg["along"], float)
     cross = np.array(cfg["cross"], float)
@@ -199,7 +271,7 @@ def _match_group(seat, group):
     return None
 
 
-def _parse_melds_with_sources(seat: int, items):
+def _parse_melds_with_sources(seat: int, items, geom: P.BoardGeometry = P.GEOMETRY_4P):
     """Meld detections -> ``(ObservedMeld, source detections)`` pairs.
 
     Whole-strip recursive parse trying size 4 then 3 at each position. A strip
@@ -208,7 +280,7 @@ def _parse_melds_with_sources(seat: int, items):
     (a same-kind 3+4 collision needs >4 copies, which check_observed also
     rejects), so it only fires on detector noise — prefer no parse to a wrong
     one."""
-    cells = _strip_cells(seat, items)
+    cells = _strip_cells(seat, items, geom)
 
     def parse(index: int):
         """Complete parses from cell ``index``, capped at two."""
@@ -237,8 +309,8 @@ def _parse_melds_with_sources(seat: int, items):
     return parses[0], []
 
 
-def _parse_melds(seat: int, items):
-    parsed, violations = _parse_melds_with_sources(seat, items)
+def _parse_melds(seat: int, items, geom: P.BoardGeometry = P.GEOMETRY_4P):
+    parsed, violations = _parse_melds_with_sources(seat, items, geom)
     return [meld for meld, _ in parsed], violations
 
 
@@ -250,7 +322,17 @@ def _fill_hud(o, hud: dict) -> None:
     scores are all-or-nothing (reconstruct needs the full relative list);
     reach ORs the stick attribution over the sideways-derived flags."""
     sc = hud["scores"]
-    if all(sc[k] is not None for k in _REL_KEYS):
+    if o.sanma and o.phantom_rel is not None:
+        # Sanma renders THREE score plates: the phantom chair has none. Demanding
+        # all four (the 4P rule) would drop the scores of every sanma frame, and
+        # with them the 105000 conservation check — the very check that catches a
+        # mis-detected mode. The phantom's slot is a hard 0, matching the mjai 3P
+        # convention the reconstructor emits.
+        real = [k for i, k in enumerate(_REL_KEYS) if i != o.phantom_rel]
+        if all(sc[k] is not None for k in real):
+            o.scores = [0 if i == o.phantom_rel else sc[k]
+                        for i, k in enumerate(_REL_KEYS)]
+    elif all(sc[k] is not None for k in _REL_KEYS):
         o.scores = [sc[k] for k in _REL_KEYS]
     if hud["round"]:
         o.bakaze, o.kyoku = hud["round"][0], int(hud["round"][1])
@@ -280,7 +362,9 @@ def _has_side_columns(region) -> bool:
     return region.frame_w > region.bw * 1.01
 
 
-def _assemble_with_sources(dets, region: BoardRegion, frame_bgr=None, hud_reader=None):
+def _assemble_with_sources(dets, region: BoardRegion, frame_bgr=None, hud_reader=None,
+                           geom: P.BoardGeometry = P.GEOMETRY_4P,
+                           phantom_rel: int | None = None):
     """One frame's detections -> ``(ObservedState, field source tuples)``.
 
     HUD fields fill when BOTH frame_bgr and hud_reader are given. Wide (>16:9
@@ -295,12 +379,18 @@ def _assemble_with_sources(dets, region: BoardRegion, frame_bgr=None, hud_reader
     outside every calibrated zone after the homography and are dropped silently
     (concealed_counts stays None — cross-check only)."""
     o = ObservedState()
+    # The mode is decided BEFORE assembly (recognize/mode.py) and arrives here as
+    # the geometry plus the empty chair. check_observed is what VERIFIES it: a
+    # wrong mode fails 105000 / wall-55 / no-chi rather than producing a board.
+    o.sanma = geom.sanma
+    o.phantom_rel = phantom_rel
     Hs = P.build_homographies(CANON_W, CANON_H)
     hand_cand, dora_cand, table, wide_dora = [], [], [], []
     hud_dets = []
     conf: dict[str, list] = {}
     river_sources = []
     meld_sources = []
+    nuki_sources = []
     hud_sources = []
 
     def note(zone, det):
@@ -341,25 +431,24 @@ def _assemble_with_sources(dets, region: BoardRegion, frame_bgr=None, hud_reader
     # route table detections to the nearest seat zone (river vs meld)
     per_river: list[list] = [[] for _ in range(4)]
     per_meld: list[list] = [[] for _ in range(4)]
+    per_nuki: list[list] = [[] for _ in range(4)]
     for det, pts in table:
         c = pts.mean(axis=0)
         best = None                                    # (dist, kind, seat)
         for seat in range(4):
-            disc0, colu, rowu, col_pitch = _river_frame(seat)
-            offs = P.DISCARD_ROW_OFFSETS[seat]
-            u = float(np.dot(c - disc0, colu))
-            v = float(np.dot(c - disc0, rowu))
-            du = max(0.0, -u, u - 10 * col_pitch)
-            dv = min(abs(v - x) for x in offs)
-            d_river = float(np.hypot(du, dv))
-            cfg = P.MELD_STRIP2[seat]
-            a = float(np.dot(c - np.array(cfg["corner"]), np.array(cfg["along"])))
-            cr = float(np.dot(c - np.array(cfg["corner"]), np.array(cfg["cross"])))
-            da = max(0.0, -a, a - 16 * cfg["w"])
-            dc = max(0.0, -cr, cr - 2.2 * cfg["d"])
-            d_meld = float(np.hypot(da, dc))
+            d_river, d_meld = zone_distances(c, seat, geom)
             kinds = (("meld", d_meld),) if det.tile == "back" else \
                     (("river", d_river), ("meld", d_meld))
+            if geom.nuki_strip is not None and det.tile == "N":
+                # Listed FIRST so it wins ties: the routing loop below keeps the
+                # strictly-smaller distance, so the first-listed kind takes a tie.
+                # This matters because the lanes are adjacent by construction —
+                # sanma's SELF meld corner sits 46px further inward than 4P's
+                # PRECISELY because the north lane took the 4P corner
+                # (pipeline.py). An N pulled into the meld strip becomes a bogus
+                # meld cell and the whole strip then fails to parse.
+                # Gated on tile == "N": any other tile in that lane is a real stray.
+                kinds = (("nuki", _nuki_distance(c, seat, geom)),) + kinds
             for kind, dist in kinds:
                 if best is None or dist < best[0]:
                     best = (dist, kind, seat)
@@ -392,11 +481,12 @@ def _assemble_with_sources(dets, region: BoardRegion, frame_bgr=None, hud_reader
             # the far strip (seat 2): measured lying <= 96 vs standing >= 120
             # fullwarp units (d ~ 92) -> threshold 1.15*d. Hero (seat 0) never
             # shows standing backs, so is exempt.
-            cfg = P.MELD_STRIP2[best[2]]
+            cfg = geom.meld_strip2[best[2]]
             pu = pts @ np.array(cfg["along"] if best[2] in (1, 3) else cfg["cross"])
             if float(pu.max() - pu.min()) > 1.15 * cfg["d"]:
                 continue
-        (per_river if best[1] == "river" else per_meld)[best[2]].append((det, pts))
+        bucket = {"river": per_river, "meld": per_meld, "nuki": per_nuki}[best[1]]
+        bucket[best[2]].append((det, pts))
         note(f"{best[1]}{best[2]}", det)
 
     # wide-frame dora rescue: the held screen-corner strays must form ONE
@@ -416,19 +506,27 @@ def _assemble_with_sources(dets, region: BoardRegion, frame_bgr=None, hud_reader
             note("dora", d)
 
     for seat in range(4):
-        assigned, v1 = _assign_river_with_sources(seat, per_river[seat])
+        assigned, v1 = _assign_river_with_sources(seat, per_river[seat], geom)
         o.rivers[seat] = [tile for tile, _ in assigned]
         river_sources.extend(
             (f"river:{seat}:{index}", tile.pai, [det])
             for index, (tile, det) in enumerate(assigned)
         )
-        parsed, v2 = _parse_melds_with_sources(seat, per_meld[seat])
+        parsed, v2 = _parse_melds_with_sources(seat, per_meld[seat], geom)
         o.melds[seat] = [meld for meld, _ in parsed]
         meld_sources.extend(
             (f"meld:{seat}:{index}", meld, detections)
             for index, (meld, detections) in enumerate(parsed)
         )
-        o.violations.extend(v1 + v2)
+        v3: list[str] = []
+        if geom.nuki_strip is not None:
+            count, v3 = _assign_nuki(seat, per_nuki[seat], geom)
+            o.nukidora[seat] = count
+            if per_nuki[seat]:
+                # Carry the boxes so the count is evidenced like every other field.
+                nuki_sources.append((f"nuki:{seat}", count,
+                                     [det for det, _ in per_nuki[seat]]))
+        o.violations.extend(v1 + v2 + v3)
         o.reach[seat] = any(t.sideways for t in o.rivers[seat])
     if frame_bgr is not None and hud_reader is not None and hud_dets:
         hud = assemble_hud_with_evidence(hud_dets, hud_reader, frame_bgr)
@@ -453,15 +551,19 @@ def _assemble_with_sources(dets, region: BoardRegion, frame_bgr=None, hud_reader
     )
     field_sources.extend(river_sources)
     field_sources.extend(meld_sources)
+    field_sources.extend(nuki_sources)
     field_sources.extend(hud_sources)
     return o, field_sources
 
 
 def assemble_with_evidence(dets, region: BoardRegion, frame_bgr=None, hud_reader=None,
                            tile_classifier=None,
-                           candidate_policy: CandidatePolicy | None = None) -> AssemblyResult:
+                           candidate_policy: CandidatePolicy | None = None,
+                           geom: P.BoardGeometry = P.GEOMETRY_4P,
+                           phantom_rel: int | None = None) -> AssemblyResult:
     observed, field_sources = _assemble_with_sources(
-        dets, region, frame_bgr=frame_bgr, hud_reader=hud_reader)
+        dets, region, frame_bgr=frame_bgr, hud_reader=hud_reader, geom=geom,
+        phantom_rel=phantom_rel)
     fields = [FieldObservation(key, value,
                                min((det.score for det in sources), default=None),
                                list(sources))
@@ -472,6 +574,9 @@ def assemble_with_evidence(dets, region: BoardRegion, frame_bgr=None, hud_reader
     return AssemblyResult(observed, fields, list(observed.violations))
 
 
-def assemble(dets, region: BoardRegion, frame_bgr=None, hud_reader=None) -> ObservedState:
+def assemble(dets, region: BoardRegion, frame_bgr=None, hud_reader=None,
+             geom: P.BoardGeometry = P.GEOMETRY_4P,
+             phantom_rel: int | None = None) -> ObservedState:
     return assemble_with_evidence(dets, region, frame_bgr=frame_bgr,
-                                  hud_reader=hud_reader).observed
+                                  hud_reader=hud_reader, geom=geom,
+                                  phantom_rel=phantom_rel).observed

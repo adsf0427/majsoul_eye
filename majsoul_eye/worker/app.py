@@ -140,12 +140,16 @@ def create_app(runtime, *, max_pending: int = 8, inference_concurrency: int = 1,
                           request_id)
         try:
             board_rect = _parse_board_rect(request.headers.get("X-Board-Rect", ""))
+            board_mode = (request.headers.get("X-Board-Mode") or "auto").strip().lower()
+            if board_mode not in ("auto", "3p", "4p"):
+                return _error(400, "INVALID_REQUEST",
+                              "X-Board-Mode must be auto, 3p or 4p", request_id)
         except ValueError:
             return _error(400, "INVALID_REQUEST", "invalid X-Board-Rect", request_id)
         context = RecognitionContext(
             request_id, required["X-Draft-ID"], required["X-Image-SHA256"],
             required["X-Layout-ID"],
-            allow == "1", None, board_rect)
+            allow == "1", None, board_rect, board_mode)
         body = await request.body()
         try:
             return await _invoke(recognition_gate, request_timeout_seconds,

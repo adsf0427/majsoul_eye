@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Tuple
 
@@ -575,6 +576,44 @@ _MODE_TABLES = {
     True:  _copy_tables(DISCARD_GRID_3P, DISCARD_ROW_OFFSETS_3P, MELD_STRIP2_3P),
 }
 _SANMA_ACTIVE = False
+
+
+@dataclass(frozen=True)
+class BoardGeometry:
+    """An IMMUTABLE per-mode geometry bundle, passed explicitly.
+
+    ``set_sanma()`` below swaps the module-level tables IN PLACE, process-wide.
+    That is fine for the offline annotator and the calibration tools (single
+    frame, single thread), but the recognition worker is a long-lived server that
+    serves both modes: a per-request ``set_sanma()`` would corrupt a CONCURRENT
+    request of the other mode, and it would do it silently — the wrong geometry
+    does not raise, it just quietly reads a different, plausible, WRONG board.
+    So recognition takes its geometry as an argument and never touches the globals.
+    """
+    sanma: bool
+    discard_grid: dict
+    discard_row_offsets: dict
+    meld_strip2: dict
+    nuki_strip: dict | None          # None in 4P: there is no north pile
+
+
+def _frozen(sanma: bool) -> BoardGeometry:
+    # Built from the PRISTINE import-time snapshot, never from the live dicts.
+    # Aliasing them would mean one set_sanma(True) anywhere in the process (a
+    # test, a calibration script) permanently poisons the recogniser's 4P
+    # geometry — the exact class of silent corruption this class exists to stop.
+    grid, offs, strip = _copy_tables(*_MODE_TABLES[sanma])
+    nuki = ({seat: dict(cfg) for seat, cfg in NUKI_STRIP_3P.items()}
+            if sanma else None)
+    return BoardGeometry(sanma, grid, offs, strip, nuki)
+
+
+GEOMETRY_4P = _frozen(False)
+GEOMETRY_3P = _frozen(True)
+
+
+def geometry_for(sanma: bool) -> BoardGeometry:
+    return GEOMETRY_3P if sanma else GEOMETRY_4P
 
 
 def set_sanma(flag: bool) -> None:

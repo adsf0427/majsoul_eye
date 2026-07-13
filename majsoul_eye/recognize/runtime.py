@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from majsoul_eye.annotate import pipeline as P
 from majsoul_eye.normalize import BoardRegion, clipped_sides, locate_anchor
 from majsoul_eye.recognize.accuracy_gate import verify_layout_support
 from majsoul_eye.recognize.assemble import assemble_with_evidence
@@ -14,6 +15,7 @@ from majsoul_eye.recognize.detector import TileDetector
 from majsoul_eye.recognize.evidence import CandidatePolicy
 from majsoul_eye.recognize.hudreader import HudReader
 from majsoul_eye.recognize.manifest import load_model_manifest, verify_model_assets
+from majsoul_eye.recognize.mode import detect_mode
 from majsoul_eye.state.decision import analyze_hero_decision
 from majsoul_eye.state.reconstruct import reconstruct
 from majsoul_eye.what_cut.adapter import draft_to_observed
@@ -38,6 +40,10 @@ class RecognitionContext:
     # User-supplied board rect (ox, oy, bw, bh) in source-image px, from the
     # manual-calibration fallback. Overrides the landmark fit when present.
     board_rect: tuple[int, int, int, int] | None = None
+    # User-supplied player count: "auto" | "3p" | "4p". A forced mode picks the
+    # GEOMETRY; it never buys truth — every conservation check still runs, so a
+    # wrong override still blocks rather than producing a board.
+    board_mode: str = "auto"
 
 
 class RuntimeFailure(RuntimeError):
@@ -175,19 +181,23 @@ class RecognitionRuntime:
         policy = CandidatePolicy(candidates["calibrationVersion"], candidates["topK"])
         dets = self.detector.predict(image)
         region = self._locate(image, dets, context)
+        mode = detect_mode(dets, region, context.board_mode)
+        geom = P.geometry_for(mode.sanma)
         assembly = assemble_with_evidence(
             dets, region,
             frame_bgr=image, hud_reader=self.hud_reader,
-            tile_classifier=self.classifier, candidate_policy=policy)
+            tile_classifier=self.classifier, candidate_policy=policy,
+            geom=geom, phantom_rel=mode.phantom_rel)
         draft = build_recognized_draft(
             assembly, DraftBuildContext(context.draft_id, context.image_ref,
                                         context.image_sha256, image.shape[1], image.shape[0]),
             self.metadata())
-        issues = [{"code": "RECOGNITION_STRUCTURE", "severity": "blocking",
-                   "fieldPath": None, "evidenceIds": [],
-                   "messageKey": "whatCut.issue.RECOGNITION_STRUCTURE",
-                   "params": {"message": message}}
-                  for message in assembly.issues]
+        issues = list(mode.issues)
+        issues += [{"code": "RECOGNITION_STRUCTURE", "severity": "blocking",
+                    "fieldPath": None, "evidenceIds": [],
+                    "messageKey": "whatCut.issue.RECOGNITION_STRUCTURE",
+                    "params": {"message": message}}
+                   for message in assembly.issues]
         adapted = draft_to_observed(draft)
         issues.extend(adapted.issues)
         if adapted.observed is not None:
