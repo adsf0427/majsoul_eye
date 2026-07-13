@@ -12,8 +12,10 @@ def manifest(asset, digest):
     return {"schemaVersion": 1, "manifestVersion": "test-v1",
             "layout": {"layoutId": "majsoul-desktop-16x9-v1",
                        "minFrameWidth": 640, "minFrameHeight": 360,
-                       "minBoardWidth": 1280, "minBoardHeight": 720,
+                       "minBoardWidth": 1208, "minBoardHeight": 680,
                        "anchorToleranceCanon": 30.0, "maxResidualCanon": 8.0,
+                       "maxResidualCanonRelaxed": 16.0,
+                       "relaxedResidualMinInliers": 12,
                        "minHandInliers": 4, "clipToleranceFrac": 0.005},
             "models": {name: {"path": asset, "sha256": digest,
                                "required": True}

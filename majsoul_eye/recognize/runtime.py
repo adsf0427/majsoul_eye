@@ -7,7 +7,9 @@ import cv2
 import numpy as np
 
 from majsoul_eye.annotate import pipeline as P
-from majsoul_eye.normalize import BoardRegion, clipped_sides, locate_anchor
+from majsoul_eye.normalize import (
+    BoardRegion, clipped_required_regions, clipped_sides, locate_anchor,
+)
 from majsoul_eye.recognize.accuracy_gate import verify_layout_support
 from majsoul_eye.recognize.assemble import assemble_with_evidence
 from majsoul_eye.recognize.classifier import TileClassifier
@@ -21,6 +23,7 @@ from majsoul_eye.state.reconstruct import reconstruct
 from majsoul_eye.what_cut.adapter import draft_to_observed
 from majsoul_eye.what_cut.from_recognition import (
     DraftBuildContext, apply_history_baseline, build_recognized_draft,
+    recognized_field_paths,
 )
 from majsoul_eye.what_cut.schema import (
     FabricatedHistoryV1, RecognizeWhatCutData, ReconstructWhatCutData,
@@ -143,8 +146,14 @@ class RecognitionRuntime:
         """Find the board, then judge whether enough of it is actually in frame.
 
         The aspect of the SCREENSHOT says nothing — a phone letterboxes the 16:9
-        table between HUD columns, a window insets it under chrome. What matters
-        is (a) can we pin the board, and (b) is all of it present.
+        table between HUD columns, a window insets it under chrome, and an
+        off-16:9 device (4:3 iPad) legitimately crops the canonical scene's
+        decorative margins. What matters is (a) can we pin the board, and (b) are
+        the REQUIRED parts — the hero hand row and the center panel — present.
+        A rect that merely sticks out of the frame is tolerated and reported
+        (``clipped_sides``) so the caller can attach a correctable warning issue.
+
+        Returns ``(region, tolerated_clip_sides)``.
         """
         layout = self.manifest.raw["layout"]
         if context.board_rect is not None:              # user-calibrated: trust it
@@ -153,7 +162,16 @@ class RecognitionRuntime:
         else:
             found = locate_anchor(image, dets,
                                   tol=layout["anchorToleranceCanon"])
-            if found is None or found.residual > layout["maxResidualCanon"]:
+            # Off-16:9 devices (4:3 iPads) draw the same scene with a few
+            # canon-px of systematic layout deviation, so a CORRECT fit there
+            # carries residual ~11. A fit backed by many inlier landmarks
+            # cannot be a wrong-similarity lock-in — high consensus buys the
+            # relaxed ceiling; low-consensus fits keep the strict one.
+            if found is not None and found.inliers >= layout["relaxedResidualMinInliers"]:
+                residual_cap = layout["maxResidualCanonRelaxed"]
+            else:
+                residual_cap = layout["maxResidualCanon"]
+            if found is None or found.residual > residual_cap:
                 raise RuntimeFailure(
                     "LOCALIZATION_FAILED",
                     "cannot locate the board from this screenshot")
@@ -170,9 +188,13 @@ class RecognitionRuntime:
                                  "the board is rendered too small to read")
         sides = clipped_sides(region, layout["clipToleranceFrac"])
         if sides:
-            raise RuntimeFailure("BOARD_CLIPPED",
-                                 f"the board is cropped: {', '.join(sides)}")
-        return region
+            missing = clipped_required_regions(region, layout["clipToleranceFrac"])
+            if missing:
+                raise RuntimeFailure(
+                    "BOARD_CLIPPED",
+                    f"the board is cropped ({', '.join(sides)}) and required "
+                    f"content is cut off: {', '.join(missing)}")
+        return region, sides
 
     def recognize_bytes(self, image_bytes: bytes,
                         context: RecognitionContext) -> RecognizeWhatCutData:
@@ -180,7 +202,7 @@ class RecognitionRuntime:
         candidates = self.manifest.raw["candidates"]
         policy = CandidatePolicy(candidates["calibrationVersion"], candidates["topK"])
         dets = self.detector.predict(image)
-        region = self._locate(image, dets, context)
+        region, tolerated_clip = self._locate(image, dets, context)
         mode = detect_mode(dets, region, context.board_mode)
         geom = P.geometry_for(mode.sanma)
         assembly = assemble_with_evidence(
@@ -188,11 +210,38 @@ class RecognitionRuntime:
             frame_bgr=image, hud_reader=self.hud_reader,
             tile_classifier=self.classifier, candidate_policy=policy,
             geom=geom, phantom_rel=mode.phantom_rel)
+        # The draft schema is 4-player-only for now, but sanma assembly can emit
+        # elements it cannot hold (the nuki pile). Shed those into the ordinary
+        # structural-issue channel instead of crashing the whole recognition —
+        # a worker 500 tells the user nothing; a named blocking issue does.
+        unmapped = []
+        mappable = []
+        for field in assembly.fields:
+            try:
+                recognized_field_paths(field.field_key)
+            except ValueError:
+                unmapped.append(field.field_key)
+                continue
+            mappable.append(field)
+        if unmapped:
+            assembly.fields[:] = mappable
+            assembly.issues.append(
+                "recognized elements with no editable draft field yet: "
+                + ", ".join(sorted(unmapped)))
         draft = build_recognized_draft(
             assembly, DraftBuildContext(context.draft_id, context.image_ref,
                                         context.image_sha256, image.shape[1], image.shape[0]),
             self.metadata())
         issues = list(mode.issues)
+        if tolerated_clip:
+            # The board sticks out of the frame but the hand row + center panel
+            # are visible: recognition proceeded. Whatever hung off the clipped
+            # edges (a river tail, the screen-anchored dora strip) surfaces as
+            # ordinary correctable draft issues — this warning names the cause.
+            issues.append({"code": "BOARD_EDGE_CLIPPED", "severity": "warning",
+                           "fieldPath": None, "evidenceIds": [],
+                           "messageKey": "whatCut.issue.BOARD_EDGE_CLIPPED",
+                           "params": {"sides": ", ".join(tolerated_clip)}})
         issues += [{"code": "RECOGNITION_STRUCTURE", "severity": "blocking",
                     "fieldPath": None, "evidenceIds": [],
                     "messageKey": "whatCut.issue.RECOGNITION_STRUCTURE",

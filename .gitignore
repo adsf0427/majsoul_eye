@@ -31,6 +31,8 @@ Thumbs.db
 # Captures, datasets, and generated labels
 captures/
 datasets/
+# Failed-upload corpus snapshots from prod (real user screenshots; never track)
+corpus/
 *.jsonl
 *.jsonl.log
 # Deal-frame purge manifest — regenerable via purge_deal_frames.py --write-manifest;

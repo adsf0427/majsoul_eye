@@ -34,8 +34,10 @@ def runtime():
         "manifest_version": "test-v1", "layout_id": "majsoul-desktop-16x9-v1",
         "support_status": "experimental", "manifest_sha256": "a" * 64,
         "raw": {"layout": {"minFrameWidth": 640, "minFrameHeight": 360,
-                            "minBoardWidth": 1280, "minBoardHeight": 720,
+                            "minBoardWidth": 1208, "minBoardHeight": 680,
                             "anchorToleranceCanon": 30.0, "maxResidualCanon": 8.0,
+                            "maxResidualCanonRelaxed": 16.0,
+                            "relaxedResidualMinInliers": 12,
                             "minHandInliers": 4, "clipToleranceFrac": 0.005},
                 "candidates": {"topK": 3, "calibrationVersion": None}},
         "assets": {"detector": type("A", (), {"sha256": "b" * 64})(),
@@ -102,15 +104,15 @@ def test_aspect_alone_no_longer_rejects_a_screenshot():
     assert data["schemaVersion"] == 1
 
 
-def test_board_cropped_out_of_frame_is_named_as_such():
+def test_clipped_hand_row_is_still_rejected():
     body = png(1280, 720)
-    try:  # board sticks 200px off the right edge
-        runtime().recognize_bytes(body, context(body, rect=(200, 0, 1280, 720)))
+    try:  # the hand row itself hangs off the left edge
+        runtime().recognize_bytes(body, context(body, rect=(-500, 0, 1280, 720)))
     except RuntimeFailure as exc:
         assert exc.code == "BOARD_CLIPPED"
-        assert "right" in str(exc)
+        assert "left" in str(exc) and "hand" in str(exc)
     else:
-        raise AssertionError("a cropped board must be rejected, and say so")
+        raise AssertionError("a board missing required content must be rejected")
 
 
 def test_board_rendered_too_small_is_named_as_such():
@@ -274,6 +276,29 @@ def test_the_same_board_reads_identically_from_a_phone_and_from_a_desktop():
     assert _semantic(phone["draft"]) == _semantic(desktop["draft"])
 
 
+def test_decorative_overhang_yields_a_draft_plus_a_named_warning():
+    """An off-16:9 device (4:3 / 1.44:1 iPad) legitimately crops the canonical
+    scene's margins: the fit is correct, the rect sticks out of the frame, and
+    every gameplay element is on screen. That used to dead-end as BOARD_CLIPPED;
+    it must now produce the SAME board as the desktop frame, plus one warning
+    that names the tolerated clip."""
+    desktop_body = png(1920, 1080)
+    desktop = _board_runtime().recognize_bytes(desktop_body, context(
+        desktop_body, rect=None))
+
+    # Same canonical detections, but the frame ends 100px before the board does.
+    tablet_body = png(1820, 1080)
+    tablet = _board_runtime().recognize_bytes(tablet_body, context(
+        tablet_body, rect=None))
+
+    assert [i["code"] for i in tablet["issues"]] == ["BOARD_EDGE_CLIPPED"]
+    clip = tablet["issues"][0]
+    assert clip["severity"] == "warning"
+    assert clip["params"]["sides"] == "right"
+    assert clip["messageKey"] == "whatCut.issue.BOARD_EDGE_CLIPPED"
+    assert _semantic(tablet["draft"]) == _semantic(desktop["draft"])
+
+
 def test_a_board_under_browser_chrome_reads_identically_too():
     """Windowed capture: the table is inset and smaller, nothing else changes."""
     desktop_body = png(1920, 1080)
@@ -288,6 +313,37 @@ def test_a_board_under_browser_chrome_reads_identically_too():
 
     assert window["issues"] == []
     assert _semantic(window["draft"]) == _semantic(desktop["draft"])
+
+
+def test_high_consensus_fit_survives_layout_deviation_residual():
+    """A 4:3 tablet renders the same scene a few canon-px off the 16:9 layout,
+    so a CORRECT fit there carries residual ~11 while EVERY landmark agrees.
+    Consensus buys the relaxed ceiling; a sparse fit must still be refused."""
+    import majsoul_eye.recognize.runtime as runtime_module
+    from majsoul_eye.normalize import BoardRegion, Localization
+
+    def fake(residual, inliers):
+        region = BoardRegion(0, 0, 1920, 1080, 1920, 1080)
+        return Localization(region=region, method="anchor", inliers=inliers,
+                            total=21, residual=residual, panel_inliers=7,
+                            hand_inliers=max(4, inliers - 7))
+
+    original = runtime_module.locate_anchor
+    body = png(1920, 1080)
+    try:
+        runtime_module.locate_anchor = lambda image, dets, tol=30.0: fake(11.0, 21)
+        data = _board_runtime().recognize_bytes(body, context(body, rect=None))
+        assert data["issues"] == []
+
+        runtime_module.locate_anchor = lambda image, dets, tol=30.0: fake(11.0, 5)
+        try:
+            _board_runtime().recognize_bytes(body, context(body, rect=None))
+        except RuntimeFailure as exc:
+            assert exc.code == "LOCALIZATION_FAILED"
+        else:
+            raise AssertionError("a sparse high-residual fit must still be refused")
+    finally:
+        runtime_module.locate_anchor = original
 
 
 def test_reconstruct_with_stale_revision_reports_stale_revision():

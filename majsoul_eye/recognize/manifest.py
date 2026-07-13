@@ -61,10 +61,21 @@ def load_model_manifest(path: str) -> LoadedModelManifest:
     # The board is found by landmark fit, not assumed from the frame's aspect, so
     # the contract pins the FIT's quality bars and the BOARD's minimum size — the
     # frame floor is only a cheap "this is not a thumbnail" guard before inference.
+    # minBoard floor 1280x720 -> 1208x680 (2026-07-13): the self-consistency
+    # downscale sweep (scripts/eval/sweep_board_floor.py) reads boards perfectly
+    # down to 708px and cleanly at 680, while prod phones render at 708 — the
+    # old 720 floor rejected them by 12px. Below ~650 readability truly decays.
+    # Relaxed residual ceiling (2026-07-13): off-16:9 devices (4:3 iPads) render
+    # the same scene with a few canon-px of systematic layout deviation, so a
+    # CORRECT fit there carries residual ~11 — over the 8.0 bar. A fit backed by
+    # >=12 inlier landmarks cannot be a lock-in on the wrong similarity, so high
+    # consensus buys the relaxed ceiling; low-consensus fits keep the strict one.
     expected_layout = {"layoutId": "majsoul-desktop-16x9-v1",
                        "minFrameWidth": 640, "minFrameHeight": 360,
-                       "minBoardWidth": 1280, "minBoardHeight": 720,
+                       "minBoardWidth": 1208, "minBoardHeight": 680,
                        "anchorToleranceCanon": 30.0, "maxResidualCanon": 8.0,
+                       "maxResidualCanonRelaxed": 16.0,
+                       "relaxedResidualMinInliers": 12,
                        "minHandInliers": 4, "clipToleranceFrac": 0.005}
     if any(layout.get(key) != value for key, value in expected_layout.items()):
         raise ManifestError("MODEL_MANIFEST_MISMATCH", "desktop layout contract drift")

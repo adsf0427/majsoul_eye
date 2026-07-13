@@ -357,6 +357,41 @@ def clipped_sides(region: BoardRegion, tol_frac: float = 0.005) -> list[str]:
     return sides
 
 
+def clipped_required_regions(region: BoardRegion, tol_frac: float = 0.005) -> list[str]:
+    """Which REQUIRED canonical regions fall (partly) outside the frame.
+
+    A clipped board edge is not, by itself, an unanswerable screenshot: on off-16:9
+    devices (4:3 / 1.44:1 iPads, sub-16:9 windows) the game legitimately crops the
+    canonical scene's margins while keeping every gameplay element on screen, so a
+    correct fit routinely sticks out of the frame. What recognition cannot proceed
+    without is (a) the hero hand row — the what-cut question itself — and (b) the
+    center HUD panel (round/scores/seat) that pins the game state. Anything else a
+    clipped edge may cost (an opponent's river tail, the screen-anchored dora
+    strip) degrades to a correctable draft issue downstream, not a dead end.
+
+    Returns a subset of ``["hand", "panel"]``; empty means every required region
+    is inside the frame (within the same fit-jitter tolerance as
+    :func:`clipped_sides`).
+    """
+    from .coords import HAND, HUD_SEEDS                 # local: coords is heavier
+
+    hand_boxes = [HAND.slot_box(0), HAND.slot_box(13, is_tsumo=True)]
+    panel_boxes = [HUD_SEEDS[name] for name in PANEL_LANDMARKS]
+    tol = tol_frac * region.bw
+    missing = []
+    for name, boxes in (("hand", hand_boxes), ("panel", panel_boxes)):
+        # Normalized canonical box -> image px: img_x = ox + fx * bw (the region
+        # IS the canonical rect mapped into the image).
+        x0 = region.ox + min(b.x0 for b in boxes) * region.bw
+        y0 = region.oy + min(b.y0 for b in boxes) * region.bh
+        x1 = region.ox + max(b.x1 for b in boxes) * region.bw
+        y1 = region.oy + max(b.y1 for b in boxes) * region.bh
+        if (x0 < -tol or y0 < -tol
+                or x1 > region.frame_w + tol or y1 > region.frame_h + tol):
+            missing.append(name)
+    return missing
+
+
 class AnchorLocator:
     """Landmark localizer for arbitrary screenshots (phone, windowed, cropped).
 
