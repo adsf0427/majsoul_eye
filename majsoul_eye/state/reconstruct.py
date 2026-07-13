@@ -135,28 +135,46 @@ def _iter_skeletons(obs: ObservedState, oya_rel: int,
                 for river in rivers]
     must_reach = [bool(obs.reach[seat]) and sideways[seat] is None
                   for seat in range(4)]
+    # Sanma: the turn ring skips the phantom chair. Everything else stays 4-wide —
+    # the phantom's counts/creation_counts are 0, so all_done is satisfied for it
+    # for free and no other loop needs a guard.
+    live = [seat for seat in range(4)
+            if not (obs.sanma and seat == obs.phantom_rel)]
+    next_seat = {seat: live[(live.index(seat) + 1) % len(live)] for seat in live}
+    # A screenshot shows only HOW MANY norths each seat pulled, never WHEN. The
+    # timing is therefore chosen, not searched: searching it is C(turns, k) per
+    # seat (~3e3 each, ~1e10 across three seats) against a 4096-skeleton budget.
+    # nuki_full = the mask every complete skeleton must reach.
+    nuki_full = sum(1 << seat for seat in range(4) if obs.nukidora[seat])
 
     def declared(seat, cursors, reach_ghost_mask):
         if sideways[seat] is None:
             return bool(reach_ghost_mask >> seat & 1)
         return cursors[seat] > sideways[seat] or bool(reach_ghost_mask >> seat & 1)
 
-    def all_done(cursors, creation_index, kakan_mask, reach_ghost_mask):
+    def all_done(cursors, creation_index, kakan_mask, reach_ghost_mask, nuki_mask):
         return (list(cursors) == counts
                 and list(creation_index) == creation_counts
                 and kakan_mask == (1 << len(kakans)) - 1
+                and nuki_mask == nuki_full
                 and all(reach_ghost_mask >> seat & 1 for seat in range(4)
                         if must_reach[seat]))
 
-    def go(cursors, creation_index, kakan_mask, reach_ghost_mask, actor, prefix):
+    def go(cursors, creation_index, kakan_mask, reach_ghost_mask, nuki_mask,
+           actor, prefix):
         if budget.yielded >= budget.limit:
             budget.exhausted = True
             return
-        state = (cursors, creation_index, kakan_mask, reach_ghost_mask, actor)
+        # nuki_mask MUST be part of the cycle-guard key: two prefixes that reach
+        # the same turn state with different nuki progress are different states,
+        # and collapsing them turns the guard into a pruner that silently drops
+        # valid skeletons.
+        state = (cursors, creation_index, kakan_mask, reach_ghost_mask, nuki_mask,
+                 actor)
         if state in active:
             return
         active.add(state)
-        if all_done(cursors, creation_index, kakan_mask, reach_ghost_mask):
+        if all_done(cursors, creation_index, kakan_mask, reach_ghost_mask, nuki_mask):
             tail = [("draw", 0)] if obs.drawn_tile is not None and actor == 0 else []
             if obs.drawn_tile is None or tail:
                 budget.yielded += 1
@@ -164,13 +182,54 @@ def _iter_skeletons(obs: ObservedState, oya_rel: int,
             active.remove(state)
             return
         yield from decide(cursors, creation_index, kakan_mask, reach_ghost_mask,
-                          actor, True, prefix + [("draw", actor)])
+                          nuki_mask, actor, True, prefix + [("draw", actor)])
         active.remove(state)
 
-    def decide(cursors, creation_index, kakan_mask, reach_ghost_mask,
+    def decide(cursors, creation_index, kakan_mask, reach_ghost_mask, nuki_mask,
                actor, drew, prefix):
+        # A seat's norths are pulled at its FIRST draw-turn, all at once, as a
+        # forced non-branching prefix (each nuki takes a dead-wall replacement, so
+        # it is followed by its own draw — measured V1/V3). Gated on `drew`: that
+        # is what keeps a nuki out of the forced post-chi/pon discard, where the
+        # seat never drew and so cannot pull. Forced + non-branching => a sanma
+        # board costs exactly as many skeletons as the same 4P shape.
+        if drew and obs.nukidora[actor] and not (nuki_mask >> actor & 1):
+            forced = []
+            for _ in range(obs.nukidora[actor]):
+                forced += [("nuki", actor), ("draw", actor)]
+            next_mask = nuki_mask | (1 << actor)
+            settled = all_done(cursors, creation_index, kakan_mask,
+                               reach_ghost_mask, next_mask)
+            if actor == 0 and obs.drawn_tile is None and settled:
+                # HERO's north-pull gap: the pile shows a north but no replacement
+                # tile has landed (hand 13, empty tsumo slot). Like the hero's
+                # chi/pon gap — and unlike an opponent's — this is FULLY VISIBLE in
+                # one frame, so it is a real state, not a capture artifact: the
+                # sequence simply ends ON the pull, replacement unemitted.
+                if budget.yielded < budget.limit:
+                    budget.yielded += 1
+                    yield prefix + forced[:-1]     # drop the trailing replacement
+                else:
+                    budget.exhausted = True
+                return
+            if actor != 0 and settled:
+                # An opponent whose ONLY evidence of having taken a turn is the
+                # north pile: they drew, pulled, and have not discarded. End here.
+                # Their hand is hidden, so whether the replacement has landed is
+                # unobservable — we always emit it, and the wall's ±1 tolerance
+                # absorbs the difference.
+                if budget.yielded < budget.limit:
+                    budget.yielded += 1
+                    yield prefix + forced
+                else:
+                    budget.exhausted = True
+                return
+            yield from decide(cursors, creation_index, kakan_mask, reach_ghost_mask,
+                              next_mask, actor, True, prefix + forced)
+            return
         if (drew and actor == 0 and obs.drawn_tile is not None
-                and all_done(cursors, creation_index, kakan_mask, reach_ghost_mask)):
+                and all_done(cursors, creation_index, kakan_mask, reach_ghost_mask,
+                             nuki_mask)):
             if budget.yielded < budget.limit:
                 budget.yielded += 1
                 yield prefix
@@ -187,17 +246,17 @@ def _iter_skeletons(obs: ObservedState, oya_rel: int,
             if is_pending_declaration:
                 if (obs.drawn_tile is None and pending_item is None
                         and all_done(tuple(next_cursors), creation_index,
-                                     kakan_mask, reach_ghost_mask)
+                                     kakan_mask, reach_ghost_mask, nuki_mask)
                         and budget.yielded < budget.limit):
                     budget.yielded += 1
                     yield prefix + [discard]
                 elif (obs.drawn_tile is None and pending_item is None
                       and all_done(tuple(next_cursors), creation_index,
-                                   kakan_mask, reach_ghost_mask)):
+                                   kakan_mask, reach_ghost_mask, nuki_mask)):
                     budget.exhausted = True
             else:
                 yield from go(tuple(next_cursors), creation_index, kakan_mask,
-                              reach_ghost_mask, (actor + 1) % 4,
+                              reach_ghost_mask, nuki_mask, next_seat[actor],
                               prefix + [discard])
 
         if drew:
@@ -207,7 +266,7 @@ def _iter_skeletons(obs: ObservedState, oya_rel: int,
                 next_creation = list(creation_index)
                 next_creation[actor] += 1
                 yield from decide(cursors, tuple(next_creation), kakan_mask,
-                                  reach_ghost_mask, actor, True,
+                                  reach_ghost_mask, nuki_mask, actor, True,
                                   prefix + [("ankan", item), ("draw", actor)])
             if not declared(actor, cursors, reach_ghost_mask):
                 for kakan_index, item in enumerate(kakans):
@@ -219,10 +278,10 @@ def _iter_skeletons(obs: ObservedState, oya_rel: int,
                         continue
                     yield from decide(cursors, creation_index,
                                       kakan_mask | (1 << kakan_index),
-                                      reach_ghost_mask, actor, True,
+                                      reach_ghost_mask, nuki_mask, actor, True,
                                       prefix + [("kakan", item), ("draw", actor)])
 
-        for caller in range(4):
+        for caller in live:
             if caller == actor or creation_index[caller] >= creation_counts[caller]:
                 continue
             item = creation[caller][creation_index[caller]]
@@ -246,24 +305,24 @@ def _iter_skeletons(obs: ObservedState, oya_rel: int,
                 called = [ghost, ("call", item)]
                 if item is pending_item:
                     if (all_done(cursors, tuple(next_creation), kakan_mask,
-                                 next_reach_mask)
+                                 next_reach_mask, nuki_mask)
                             and budget.yielded < budget.limit):
                         budget.yielded += 1
                         yield prefix + called
                     elif all_done(cursors, tuple(next_creation), kakan_mask,
-                                  next_reach_mask):
+                                  next_reach_mask, nuki_mask):
                         budget.exhausted = True
                     continue
                 if item.kind == "daiminkan":
                     yield from decide(cursors, tuple(next_creation), kakan_mask,
-                                      next_reach_mask, caller, True,
+                                      next_reach_mask, nuki_mask, caller, True,
                                       prefix + called + [("draw", caller)])
                 else:
                     yield from decide(cursors, tuple(next_creation), kakan_mask,
-                                      next_reach_mask, caller, False,
+                                      next_reach_mask, nuki_mask, caller, False,
                                       prefix + called)
 
-    yield from go((0, 0, 0, 0), (0, 0, 0, 0), 0, 0, oya_rel, [])
+    yield from go((0, 0, 0, 0), (0, 0, 0, 0), 0, 0, 0, oya_rel, [])
 
 
 # --- emission -----------------------------------------------------------------
@@ -324,6 +383,13 @@ def _emit(obs: ObservedState, ops: list, oya_rel: int,
             events.append({"type": "kakan", "actor": item.owner,
                            "pai": item.pai, "consumed": list(item.consumed)})
             flip_dora()
+        elif kind == "nuki":
+            # NO flip_dora(). A nukidora takes a dead-wall replacement like a kan
+            # (which is why it costs a wall tile — observe.LIVE_WALL) but it does
+            # NOT turn a new indicator: MEASURED 0 dora events across 472 nukidora,
+            # and #dora == #kan exactly (verify_sanma_rules V2). The symmetry with
+            # kan is real for the wall and false for the dora; do not "fix" it.
+            events.append({"type": "nukidora", "actor": op[1], "pai": "N"})
     return events, {"haipai": haipai, "reach_count": reach_count}
 
 
@@ -331,10 +397,38 @@ def _emit(obs: ObservedState, ops: list, oya_rel: int,
 
 def _abs_map(obs: ObservedState, oya_rel: int):
     """(hero_abs, oya_abs, kyoku). Without HUD: hero_abs=0, kyoku=oya_rel+1."""
+    if obs.sanma:
+        # Dealers rotate over 3 chairs: oya == (kyoku-1) % 3 (MEASURED, 195/195).
+        if obs.kyoku is not None:
+            oya_abs = (obs.kyoku - 1) % 3
+            return (oya_abs - oya_rel) % 4, oya_abs, obs.kyoku
+        # No HUD kyoku: the phantom slot ALONE pins the hero's chair, because the
+        # phantom is always absolute chair 3 (phantom_rel = (3 - hero_abs) % 4).
+        hero_abs = (3 - obs.phantom_rel) % 4 if obs.phantom_rel is not None else 0
+        oya_abs = (hero_abs + oya_rel) % 4
+        return hero_abs, oya_abs, oya_abs + 1
     if obs.kyoku is not None:
         oya_abs = obs.kyoku - 1
         return (oya_abs - oya_rel) % 4, oya_abs, obs.kyoku
     return 0, oya_rel, oya_rel + 1
+
+
+def _oya_candidates(obs: ObservedState) -> list[int]:
+    """Dealer candidates in REL space, narrowed by the hero's seat wind if read."""
+    if obs.sanma:
+        live = [r for r in range(4) if r != obs.phantom_rel]
+        if obs.seat_wind_self is None or obs.phantom_rel is None:
+            return live                     # the oya is never the phantom
+        # Winds rotate mod 3 while seats are numbered mod 4, so the wind alone
+        # does NOT determine oya_rel the way it does in 4P — it needs the hero's
+        # chair, which the phantom slot supplies.
+        hero_abs = (3 - obs.phantom_rel) % 4
+        k = "ESW".index(obs.seat_wind_self)     # hero sits k seats after the oya
+        oya_abs = (hero_abs - k) % 3
+        return [(oya_abs - hero_abs) % 4]
+    if obs.seat_wind_self is not None:
+        return [(4 - WINDS.index(obs.seat_wind_self)) % 4]
+    return [0, 1, 2, 3]
 
 
 def _relabel(events: list, hero_abs: int) -> list:
@@ -366,10 +460,7 @@ def reconstruct(obs: ObservedState,
     if violations:
         return _reconstruction_failure("OBSERVED_STATE_INVALID",
                                        "; ".join(violations))
-    if obs.seat_wind_self is not None:
-        cand = [(4 - WINDS.index(obs.seat_wind_self)) % 4]
-    else:
-        cand = [0, 1, 2, 3]
+    cand = _oya_candidates(obs)
     # kyotaku short by one => exactly one riichi is mid-declaration; its seat
     # must be one whose sideways tile is still its newest discard (candidates
     # from _pending_reach_seats; check_observed already rejected other deficits)
@@ -423,9 +514,16 @@ def reconstruct(obs: ObservedState,
             actualCount=len(info["haipai"]))
     hero_abs, oya_abs, kyoku = _abs_map(obs, chosen)
     n_reach = sum(info["reach_count"])
-    scores_rel = list(obs.scores) if obs.scores is not None else [25000] * 4
+    if obs.scores is not None:
+        scores_rel = list(obs.scores)
+    elif obs.sanma:
+        # 35000 x 3, and a 0 in the phantom slot: the mjai 3P convention, which is
+        # the shape Mortal3p actually consumes (MEASURED V6, 195/195 kyoku).
+        scores_rel = [0 if r == obs.phantom_rel else 35000 for r in range(4)]
+    else:
+        scores_rel = [25000] * 4
     scores_abs = [25000] * 4
-    for r in range(4):
+    for r in range(4):   # every abs seat is written, so the init value is inert
         scores_abs[(hero_abs + r) % 4] = scores_rel[r] + 1000 * info["reach_count"][r]
     kyotaku = (obs.kyotaku if obs.kyotaku is not None else n_reach) - n_reach
     tehais: list = [["?"] * 13 for _ in range(4)]

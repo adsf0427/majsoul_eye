@@ -173,6 +173,13 @@ def validate_history_semantics(events: list[dict]) -> list[str]:
         elif kind in ("chi", "pon"):
             awaiting_discard = event["actor"]
             last_draw.pop(event["actor"], None)
+        elif kind == "nukidora":
+            # Deliberately inert, and that is the assertion. A north pull owes no
+            # discard (its replacement tsumo follows immediately — V3), and it does
+            # not spoil the draw bookkeeping either, because that same tsumo
+            # overwrites last_draw. Handling it as a call would wrongly forbid the
+            # following tsumogiri; clearing last_draw would wrongly forbid it too.
+            pass
         elif kind == "reach_accepted":
             reached[event["actor"]] = True
     return violations
@@ -222,6 +229,18 @@ def solve_hidden_history(obs, ops: list, overrides: ReconstructionOverrides,
         final_hand.append(obs.drawn_tile)
     assignments = {}
 
+    # Hero draws that immediately FEED a north pull. Walking backwards we un-do
+    # the nuki first (which puts an N back in the hand), so at these draws an N is
+    # always available — and "drew the north, pulled it at once" is the plausible
+    # history. Without this nudge _tile_order ranks N 33rd, so the DFS exhausts
+    # every other tile first, i.e. it tries hardest to leave all the pulled norths
+    # sitting in the fabricated haipai. A PREFERENCE, not a rule: a hero who held
+    # the north from the deal and pulled it on a turn they drew something else is
+    # still reachable by backtracking.
+    nuki_feeding = {index - 1 for index, op in enumerate(ops)
+                    if op[0] == "nuki" and op[1] == 0 and index > 0
+                    and ops[index - 1][0] == "draw" and ops[index - 1][1] == 0}
+
     def reverse(index: int, hand: list[str]):
         if node_budget.exhausted:
             return None
@@ -244,6 +263,11 @@ def solve_hidden_history(obs, ops: list, overrides: ReconstructionOverrides,
             return reverse(index - 1, hand + list(op[1].consumed))
         if kind == "kakan" and op[1].owner == 0:
             return reverse(index - 1, hand + [op[1].pai])
+        if kind == "nuki" and op[1] == 0:
+            # Forward, a north left the hand for the table pile; backward, it
+            # comes home. Hand size is conserved across the pair (nuki -1, its
+            # replacement draw +1), so the 13-tile haipai check still lands.
+            return reverse(index - 1, hand + ["N"])
         if kind == "draw" and op[1] == 0:
             site = site_for_draw.get(index)
             if site is not None and effective[site.op_index]:
@@ -252,6 +276,8 @@ def solve_hidden_history(obs, ops: list, overrides: ReconstructionOverrides,
                 candidates = [obs.drawn_tile]
             else:
                 candidates = sorted(set(hand), key=_tile_order)
+                if index in nuki_feeding and "N" in hand:
+                    candidates = ["N"] + [t for t in candidates if t != "N"]
             for pai in candidates:
                 if pai not in hand:
                     continue
@@ -313,6 +339,14 @@ def solve_hidden_history(obs, ops: list, overrides: ReconstructionOverrides,
             operations.append({"kind": op[0], "actorRelSeat": item.owner,
                                "targetRelSeat": None, "riverIndex": None,
                                "meldIndex": item.mi, "pai": item.pai or None,
+                               "tsumogiri": None, "reach": False})
+        elif op[0] == "nuki":
+            # A north pull is not a meld and not a discard site, so it has no
+            # meldIndex/riverIndex — but it IS part of the history the solver
+            # chose, and a record that omitted it would not replay.
+            operations.append({"kind": "nuki", "actorRelSeat": op[1],
+                               "targetRelSeat": None, "riverIndex": None,
+                               "meldIndex": None, "pai": "N",
                                "tsumogiri": None, "reach": False})
 
     selected = {"solverVersion": "hidden-history-v1", "oyaRelSeat": oya_rel,

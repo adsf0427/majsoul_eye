@@ -17,8 +17,8 @@ from majsoul_eye.what_cut.schema import (
     SelectedHistoryV1, WhatCutDecisionV1, WhatCutIssueV1,
 )
 
-_GROUP = {"dahai": 0, "reach": 1, "ankan": 2, "kakan": 3,
-          "hora": 4, "ryukyoku": 5}
+_GROUP = {"dahai": 0, "reach": 1, "ankan": 2, "kakan": 3, "nukidora": 4,
+          "hora": 5, "ryukyoku": 6}
 _RED_136 = {"5mr": 16, "5pr": 52, "5sr": 88}
 _RED_IDS = set(_RED_136.values())
 
@@ -270,11 +270,21 @@ def analyze_hero_decision(obs: ObservedState,
             for tile in discards:
                 if red_to_normal(tile) in pon_bases:
                     actions.append(f"kakan:{tile}")
+        if obs.sanma and any(red_to_normal(tile) == "N" for tile in current):
+            # Under an ACCEPTED riichi the hand is frozen, so only the north you
+            # just drew may be pulled — measured 13/13 with zero counterexamples
+            # among the observable riichi pulls (verify_sanma_rules V10). Outside
+            # riichi, pulling from hand is ordinary (87 observed).
+            if not obs.reach[0] or red_to_normal(obs.drawn_tile) == "N":
+                actions.append("nukidora:N")
 
     actions = sorted(set(actions), key=DecisionAnalysis.action_sort_key)
     decision = {"actorRelSeat": 0, "kind": "action",
                 "legalDiscards": discards, "legalActions": actions,
                 "candidateCount": len(actions)}
+    # Deliberately keyed on DISCARDS, not on len(actions): the product question is
+    # 何切 ("which tile to cut"), so a lone cuttable tile is no question even when
+    # an ankan or a north pull is also on offer. Pinned by test_what_cut_decision.
     if len(discards) < 2:
         issues.append(_issue("NO_MEANINGFUL_CHOICE"))
     return DecisionAnalysis(decision, issues)

@@ -157,7 +157,7 @@ class HistoryBaselineItemV1(TypedDict):
 
 
 class SelectedHistoryOpV1(TypedDict):
-    kind: Literal["draw", "river", "ghost", "call", "ankan", "kakan"]
+    kind: Literal["draw", "river", "ghost", "call", "ankan", "kakan", "nuki"]
     actorRelSeat: Literal[0, 1, 2, 3]
     targetRelSeat: Literal[0, 1, 2, 3] | None
     riverIndex: int | None

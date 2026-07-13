@@ -50,6 +50,9 @@ def obs_key(o):
                   for ms in o.melds],
         "hand": sorted(o.hero_hand), "drawn": o.drawn_tile,
         "dora": list(o.dora_markers), "reach": list(o.reach),
+        # Without this the round-trip never compares the nukidora piles, and the
+        # whole oracle is blind to the one zone sanma adds.
+        "nuki": list(o.nukidora),
     }
 
 
