@@ -1801,6 +1801,17 @@ worker 全链落地，本节钉死对外契约与当前**度量状态**。权威
   - `tests/test_samples_golden.py` + `tests/samples_golden.json`（11KB）—— 16 张真实截图的期望值进 git，
     图片（48MB）仍不进；`samples/` 缺失时**大声 skip**，绝不静默通过。
 
+### 1.67 worker 入口进包：`python -m majsoul_eye.worker`（2026-07-17）
+
+- **动机（发布缺陷 E1）**：自包含发布 payload 只装 `majsoul_eye/` 包（`scripts/` 被整目录裁剪，
+  因其携带集群路径），而 worker 的唯一启动入口是 `scripts/recognize/serve_worker.py`——
+  **装出来的 release 根本没法启动识别 worker**。冒烟矩阵行⑨抓到。
+- **改法**：serve 逻辑原样移进包内 `majsoul_eye/worker/serve.py`（`main()`），新增
+  `majsoul_eye/worker/__main__.py`⇒`python -m majsoul_eye.worker --manifest … --eye-revision …`
+  即可起服务；`scripts/recognize/serve_worker.py` 变成三行委托 wrapper，dev 用法不变。
+  `tests/test_worker_entry.py` 钉住:包入口 importable + `-m majsoul_eye.worker --help` 可跑。
+- 非 pipeline 阶段变更（运行时服务入口），数据/训练零影响。
+
 ---
 
 ## 二、关键经验（实测结论）
