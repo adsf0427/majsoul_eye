@@ -2,6 +2,8 @@
 import glob
 import os
 
+import pytest
+
 from majsoul_eye.annotate.meldsnap import round_meld_consensus
 
 
@@ -48,7 +50,10 @@ def test_game_meld_overrides_smoke():
     from majsoul_eye.annotate.meldsnap import game_meld_overrides
     from majsoul_eye.capture.gtframes import build_seq_state, load_frames
     caps = sorted(glob.glob("captures/raw/ai_session/run_*/game*/game*.jsonl"))
-    assert caps, "no AI captures found — run from repo root"
+    if not caps:
+        # The AI-session capture corpus lives only on the dev machine
+        # (gitignored); a clean clone / release gate cannot exercise this.
+        pytest.skip("local capture corpus unavailable")
     hom = build_homographies(1920, 1080)
     exercised = 0
     for cap in caps:

@@ -5,6 +5,7 @@ black frame exercises structure + the reliability gate (nothing renders -> every
 box reliable=False). iter_tile_boxes / crop_box are the seam build_dataset uses.
 """
 import numpy as np
+import pytest
 
 from majsoul_eye.state.replay import BoardState, Meld, RiverTile
 from majsoul_eye.annotate import build_homographies, annotate_frame, iter_tile_boxes, crop_box
@@ -109,7 +110,10 @@ def test_meld_snap_override_shifts_and_flags():
         if seq_c is not None:
             ss, fr, seq = ss_c, fr_c, seq_c
             break
-    assert seq is not None, "no capture with a settled meld frame found"
+    if seq is None:
+        # The AI-session capture corpus lives only on the dev machine
+        # (gitignored); a clean clone / release gate cannot exercise this.
+        pytest.skip("local capture corpus unavailable")
     hom = build_homographies(1920, 1080)
     img = cv2.imread(fr[seq])
     if img.shape[1] != 1920:
