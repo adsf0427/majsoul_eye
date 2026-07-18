@@ -40,10 +40,9 @@ def runtime():
                             "relaxedResidualMinInliers": 12,
                             "minHandInliers": 4, "clipToleranceFrac": 0.005},
                 "candidates": {"topK": 3, "calibrationVersion": None}},
-        "assets": {"detector": type("A", (), {"sha256": "b" * 64})(),
-                   "classifier": type("A", (), {"sha256": "c" * 64})(),
-                   "hudReader": type("A", (), {"sha256": "d" * 64})()},
     })()
+    instance.asset_shas = {"detector": "b" * 64, "classifier": "c" * 64,
+                          "hudReader": "d" * 64}
     instance.detector = FakeDetector()
     instance.classifier = FakeClassifier()
     instance.hud_reader = FakeHudReader()

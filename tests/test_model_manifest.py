@@ -8,7 +8,10 @@ from majsoul_eye.recognize.manifest import (
 )
 
 
-def manifest(asset, digest):
+def manifest(asset, digest=None):
+    spec = {"path": asset, "required": True}
+    if digest is not None:
+        spec["sha256"] = digest  # legacy shape: tolerated, ignored
     return {"schemaVersion": 1, "manifestVersion": "test-v1",
             "layout": {"layoutId": "majsoul-desktop-16x9-v1",
                        "minFrameWidth": 640, "minFrameHeight": 360,
@@ -17,8 +20,7 @@ def manifest(asset, digest):
                        "maxResidualCanonRelaxed": 16.0,
                        "relaxedResidualMinInliers": 12,
                        "minHandInliers": 4, "clipToleranceFrac": 0.005},
-            "models": {name: {"path": asset, "sha256": digest,
-                               "required": True}
+            "models": {name: dict(spec)
                        for name in ("detector", "classifier", "hudReader")},
             "inference": {"detectorConf": 0.25, "imgsz": 1280},
             "candidates": {"topK": 3, "calibrationVersion": None,
@@ -30,30 +32,39 @@ def manifest(asset, digest):
                            "reportChecksumPath": "model-manifest.internal-v1.accuracy.json.sha256"}}
 
 
-def test_manifest_resolves_relative_asset_and_verifies_sha():
+def test_manifest_resolves_relative_asset_and_verifies_presence():
     with tempfile.TemporaryDirectory() as td:
         asset = os.path.join(td, "detector.pt")
         open(asset, "wb").write(b"model")
-        digest = hashlib.sha256(b"model").hexdigest()
         path = os.path.join(td, "manifest.json")
-        open(path, "w", encoding="utf-8").write(json.dumps(manifest("detector.pt", digest)))
+        open(path, "w", encoding="utf-8").write(json.dumps(manifest("detector.pt")))
         loaded = load_model_manifest(path)
         verify_model_assets(loaded)
         assert loaded.assets["detector"].path == asset
 
 
-def test_mismatched_sha_is_stable_manifest_error():
+def test_missing_required_model_is_stable_manifest_error():
     with tempfile.TemporaryDirectory() as td:
-        open(os.path.join(td, "detector.pt"), "wb").write(b"wrong")
         path = os.path.join(td, "manifest.json")
-        open(path, "w", encoding="utf-8").write(json.dumps(manifest("detector.pt", "0" * 64)))
+        open(path, "w", encoding="utf-8").write(json.dumps(manifest("detector.pt")))
         try:
             verify_model_assets(load_model_manifest(path))
         except ManifestError as exc:
             assert exc.code == "MODEL_MANIFEST_MISMATCH"
             assert exc.asset == "detector"
         else:
-            raise AssertionError("bad model SHA must fail readiness")
+            raise AssertionError("missing required model must fail readiness")
+
+
+def test_legacy_sha_field_is_tolerated_and_ignored():
+    # Digest comparison was retired (lite policy): a legacy manifest that still
+    # carries sha256 keys loads, and mismatched bytes are NOT an error.
+    with tempfile.TemporaryDirectory() as td:
+        open(os.path.join(td, "detector.pt"), "wb").write(b"wrong")
+        path = os.path.join(td, "manifest.json")
+        open(path, "w", encoding="utf-8").write(
+            json.dumps(manifest("detector.pt", hashlib.sha256(b"model").hexdigest())))
+        verify_model_assets(load_model_manifest(path))
 
 
 def test_manifest_rejects_candidate_autoreplace_and_asset_escape():

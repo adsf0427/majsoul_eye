@@ -16,7 +16,8 @@ from majsoul_eye.recognize.classifier import TileClassifier
 from majsoul_eye.recognize.detector import TileDetector
 from majsoul_eye.recognize.evidence import CandidatePolicy
 from majsoul_eye.recognize.hudreader import HudReader
-from majsoul_eye.recognize.manifest import load_model_manifest, verify_model_assets
+from majsoul_eye.recognize.manifest import (_sha256, load_model_manifest,
+                                            verify_model_assets)
 from majsoul_eye.recognize.mode import detect_mode
 from majsoul_eye.state.decision import analyze_hero_decision
 from majsoul_eye.state.reconstruct import reconstruct
@@ -92,6 +93,11 @@ class RecognitionRuntime:
             verify_layout_support(manifest)
         self = cls.__new__(cls)
         self.manifest, self.eye_revision = manifest, eye_revision
+        # metadata() reports the digests of the weights that actually loaded
+        # (observed at startup), not manifest claims — the manifest carries no
+        # digest obligation anymore
+        self.asset_shas = {name: _sha256(asset.path)
+                           for name, asset in manifest.assets.items()}
         inference = manifest.raw["inference"]
         self.detector = detector_factory(manifest.assets["detector"].path,
                                          device=device,
@@ -113,12 +119,12 @@ class RecognitionRuntime:
         self.hud_reader.read(tile, "seat_wind_self")
 
     def metadata(self) -> WhatCutRecognizerV1:
-        assets = self.manifest.assets
+        shas = self.asset_shas
         return {"manifestVersion": self.manifest.manifest_version,
                 "layoutId": self.manifest.layout_id,
-                "detectorSha": assets["detector"].sha256,
-                "classifierSha": assets["classifier"].sha256,
-                "hudReaderSha": assets["hudReader"].sha256,
+                "detectorSha": shas["detector"],
+                "classifierSha": shas["classifier"],
+                "hudReaderSha": shas["hudReader"],
                 "eyeRevision": self.eye_revision,
                 "supportStatus": self.manifest.support_status}
 

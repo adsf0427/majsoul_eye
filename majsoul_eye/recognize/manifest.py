@@ -16,7 +16,6 @@ class ManifestError(RuntimeError):
 class ModelAsset:
     name: str
     path: str
-    sha256: str
     required: bool
 
 
@@ -114,11 +113,15 @@ def load_model_manifest(path: str) -> LoadedModelManifest:
     assets = {}
     for name in ("detector", "classifier", "hudReader"):
         spec = models[name]
-        if (not isinstance(spec, dict) or set(spec) != {"path", "sha256", "required"}
+        # The manifest is the category/layout contract only (lite policy,
+        # 2026-07-17): weight bytes are pinned by the superproject asset lock,
+        # so specs carry no digest obligation. A legacy "sha256" key is
+        # tolerated and ignored.
+        if (not isinstance(spec, dict)
+                or not {"path", "required"} <= set(spec)
+                or set(spec) - {"path", "required", "sha256"}
                 or not isinstance(spec["path"], str) or not spec["path"]
-                or spec["required"] is not True
-                or not isinstance(spec["sha256"], str) or len(spec["sha256"]) != 64
-                or any(ch not in "0123456789abcdef" for ch in spec["sha256"])):
+                or spec["required"] is not True):
             raise ManifestError("MODEL_MANIFEST_MISMATCH", "invalid model asset", name)
         resolved = os.path.abspath(os.path.join(root, spec["path"]))
         try:
@@ -127,15 +130,15 @@ def load_model_manifest(path: str) -> LoadedModelManifest:
             confined = False
         if not confined:
             raise ManifestError("MODEL_MANIFEST_MISMATCH", "asset escapes manifest directory", name)
-        assets[name] = ModelAsset(name, resolved, spec["sha256"], bool(spec["required"]))
+        assets[name] = ModelAsset(name, resolved, bool(spec["required"]))
     return LoadedModelManifest(absolute, raw, hashlib.sha256(raw_bytes).hexdigest(), assets)
 
 
 def verify_model_assets(manifest: LoadedModelManifest) -> None:
+    """Presence check only. Content digests are no longer compared here — the
+    accepted cost is that a weights-vs-category-table mismatch has no machine
+    check and shows up as degraded recognition quality, not an error."""
     for name, asset in manifest.assets.items():
         if not os.path.isfile(asset.path):
             if asset.required:
                 raise ManifestError("MODEL_MANIFEST_MISMATCH", "required model missing", name)
-            continue
-        if _sha256(asset.path) != asset.sha256:
-            raise ManifestError("MODEL_MANIFEST_MISMATCH", "model SHA-256 mismatch", name)

@@ -185,18 +185,20 @@ foreach ($t in Get-ChildItem tests/test_*.py) { python $t.FullName; if ($LASTEXI
 
 ### 运行时识别（manifest-first）
 
-The shipped recognition chain is **manifest-first**: one immutable
-`model-manifest.internal-v1.json` names the exact detector/classifier/HUD-reader
-assets by SHA-256, and the runtime is loaded **once** (`manifest -> one-time
-runtime -> draft -> override-aware reconstruct`). There is no mtime-based weight
-guessing and no loose `--weights` paths.
+The shipped recognition chain is **manifest-first**: one
+`model-manifest.internal-v1.json` names the detector/classifier/HUD-reader
+asset files and pins the layout contract, and the runtime is loaded **once**
+(`manifest -> one-time runtime -> draft -> override-aware reconstruct`). There
+is no mtime-based weight guessing and no loose `--weights` paths. The manifest
+carries no digest obligation (2026-07-18): weight bytes are pinned by the
+superproject asset lock, and `metadata()` reports the digests observed at load.
 
 ```bash
 # Quick single-frame inspection (JSON lines: WhatCutDraftV1 + ObservedState + mjai):
 PYTHONPATH=. python scripts/recognize/recognize_frame.py --allow-experimental shot.png
 
-# Shared worker — readiness self-check (verifies assets and, for supported
-# layouts, the fixed-SHA golden report), no bind:
+# Shared worker — readiness self-check (asset presence + layout contract and,
+# for supported layouts, the golden report), no bind:
 EYE_REVISION="$(git rev-parse HEAD)" PYTHONPATH=. python \
   scripts/recognize/serve_worker.py \
   --manifest majsoul_eye/recognize/model-manifest.internal-v1.json --check-only

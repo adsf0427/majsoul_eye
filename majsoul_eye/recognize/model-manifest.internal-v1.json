@@ -17,17 +17,14 @@
   "models": {
     "detector": {
       "path": "tile_detector.pt",
-      "sha256": "fe68e22cb0e40db19274fac94a006ab31cdae18a1fd7e02c38b63d90bdaf084b",
       "required": true
     },
     "classifier": {
       "path": "tile_classifier.pt",
-      "sha256": "a6e13f9a7835a1a59e3289794da64df910fc6761ba71f7c5aa2af0f1a2d149bb",
       "required": true
     },
     "hudReader": {
       "path": "hud_reader.pt",
-      "sha256": "b205d12461435896ff435bf34fe622ec9cfe075d6f31ac978ee2aa0c8fe2ff3d",
       "required": true
     }
   },
