@@ -214,3 +214,26 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
     print("test_what_cut_adapter OK")
+
+
+def test_v1_draft_projects_four_player_defaults():
+    draft = minimal_draft()
+    draft["historyOverrides"]["ghostDiscards"] = []
+    result = draft_to_observed(draft)
+    assert result.observed is not None
+    assert result.observed.sanma is False
+    assert result.observed.phantom_rel is None
+    assert result.observed.nukidora == [0, 0, 0, 0]
+
+
+def test_v2_sanma_draft_projects_mode_and_nuki_counts():
+    from test_what_cut_schema import minimal_draft_v2
+
+    draft = minimal_draft_v2(3)
+    draft["players"][0]["nukiCount"] = 1
+    draft["players"][2]["nukiCount"] = 2
+    result = draft_to_observed(draft)
+    assert result.observed is not None
+    assert result.observed.sanma is True
+    assert result.observed.phantom_rel == 3
+    assert result.observed.nukidora == [1, 0, 2, 0]

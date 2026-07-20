@@ -47,6 +47,9 @@ def recognized_field_paths(field_key: str) -> tuple[str, ...]:
     score = re.fullmatch(r"round\.scores\.([0-3])", field_key)
     if score is not None:
         return (f"round.scores.{score.group(1)}",)
+    nuki = re.fullmatch(r"nuki:([0-3])", field_key)
+    if nuki is not None:
+        return (f"players.{nuki.group(1)}.nukiCount",)
     for pattern, render in _ITEM_KEY_PATTERNS:
         match = pattern.fullmatch(field_key)
         if match is not None:
@@ -59,6 +62,8 @@ def _draft_editable_field_paths(draft: WhatCutDraftV1) -> set[str]:
              ("gameLength", "bakaze", "kyoku", "honba", "kyotaku",
               "leftTileCount", "seatWindSelf")}
     paths.update(f"round.scores.{seat}" for seat in range(4))
+    if draft["nPlayers"] == 3:
+        paths.update(f"players.{seat}.nukiCount" for seat in range(4))
     paths.update(f"doraMarkers.{item['id']}.pai" for item in draft["doraMarkers"])
     for player in draft["players"]:
         if player["hand"] is not None:
@@ -112,7 +117,8 @@ def build_recognized_draft(assembly: AssemblyResult, context: DraftBuildContext,
         players.append({"relSeat": seat, "hand": hand, "drawnTile": drawn,
                         "concealedCount": observed.concealed_counts[seat],
                         "reach": observed.reach[seat], "rivers": rivers,
-                        "melds": melds})
+                        "melds": melds,
+                        "nukiCount": observed.nukidora[seat]})
 
     ghosts = []
     for caller in range(4):
@@ -126,8 +132,9 @@ def build_recognized_draft(assembly: AssemblyResult, context: DraftBuildContext,
                            "tsumogiri": _mark(False)})
 
     draft: WhatCutDraftV1 = {
-            "schemaVersion": 1, "draftId": context.draft_id, "revision": 0,
-            "nPlayers": 4, "seatFrame": "screen-relative",
+            "schemaVersion": 2, "draftId": context.draft_id, "revision": 0,
+            "nPlayers": 3 if observed.sanma else 4,
+            "seatFrame": "screen-relative",
             "source": {"kind": "screenshot", "imageRef": context.image_ref,
                        "imageHash": context.image_hash, "width": context.width,
                        "height": context.height},
@@ -138,7 +145,9 @@ def build_recognized_draft(assembly: AssemblyResult, context: DraftBuildContext,
                       "leftTileCount": observed.left_tile_count,
                       "seatWindSelf": observed.seat_wind_self,
                       "scores": list(observed.scores) if observed.scores is not None
-                                else [None, None, None, None]},
+                                else [None, None, None, None],
+                      "phantomRelSeat": observed.phantom_rel
+                                        if observed.sanma else None},
             "doraMarkers": [{"id": f"dora:{i}", "pai": tile}
                             for i, tile in enumerate(observed.dora_markers)],
             "players": players, "annotations": {},

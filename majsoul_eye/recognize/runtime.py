@@ -210,10 +210,11 @@ class RecognitionRuntime:
             frame_bgr=image, hud_reader=self.hud_reader,
             tile_classifier=self.classifier, candidate_policy=policy,
             geom=geom, phantom_rel=mode.phantom_rel)
-        # The draft schema is 4-player-only for now, but sanma assembly can emit
-        # elements it cannot hold (the nuki pile). Shed those into the ordinary
-        # structural-issue channel instead of crashing the whole recognition —
-        # a worker 500 tells the user nothing; a named blocking issue does.
+        # Any recognized element the draft schema cannot hold yet is shed into
+        # the ordinary structural-issue channel instead of crashing the whole
+        # recognition — a worker 500 tells the user nothing; a named blocking
+        # issue does. (The nuki pile graduated to players[].nukiCount in
+        # schema v2; this stays as the safety net for the next new element.)
         unmapped = []
         mappable = []
         for field in assembly.fields:

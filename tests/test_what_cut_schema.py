@@ -102,14 +102,108 @@ def test_restore_uses_latest_baseline():
 
 def test_wrong_version_is_rejected():
     raw = minimal_draft()
-    raw["schemaVersion"] = 2
+    raw["schemaVersion"] = 3
     try:
         parse_what_cut_draft(raw)
     except DraftSchemaError as exc:
         assert exc.code == "UNSUPPORTED_SCHEMA"
         assert exc.path == "schemaVersion"
     else:
-        raise AssertionError("schema version 2 must be rejected")
+        raise AssertionError("schema version 3 must be rejected")
+
+
+def _reject(raw, path):
+    try:
+        parse_what_cut_draft(raw)
+    except DraftSchemaError as exc:
+        assert exc.code == "INVALID_DRAFT"
+        assert exc.path == path
+    else:
+        raise AssertionError(f"draft must be rejected at {path}")
+
+
+def minimal_draft_v2(n_players=4):
+    raw = minimal_draft()
+    raw["schemaVersion"] = 2
+    raw["nPlayers"] = n_players
+    raw["round"]["phantomRelSeat"] = None
+    for player in raw["players"]:
+        player["nukiCount"] = 0
+    if n_players == 3:
+        # Sanma keeps the 4-wide screen ring; make rel 3 the empty chair and
+        # strip the tiles that do not exist in a sanma wall.
+        raw["round"]["phantomRelSeat"] = 3
+        raw["round"]["scores"] = [35000, 35000, 35000, 0]
+        raw["players"][3]["concealedCount"] = 0
+        raw["players"][0]["hand"] = [
+            {"id": f"hand-{i}", "pai": p} for i, p in enumerate(
+                ["1m", "9m", "1p", "2p", "3p", "4p", "5p", "6p",
+                 "7p", "8p", "9p", "1s", "2s"])]
+        raw["historyOverrides"]["ghostDiscards"] = []
+    return raw
+
+
+def test_v2_four_player_round_trips():
+    parsed = parse_what_cut_draft(minimal_draft_v2())
+    assert parsed["schemaVersion"] == 2
+    assert parsed["round"]["phantomRelSeat"] is None
+
+
+def test_v2_sanma_round_trips():
+    parsed = parse_what_cut_draft(minimal_draft_v2(3))
+    assert parsed["nPlayers"] == 3
+    assert parsed["round"]["phantomRelSeat"] == 3
+
+
+def test_v1_must_not_carry_v2_keys():
+    raw = minimal_draft()
+    raw["round"]["phantomRelSeat"] = None
+    _reject(raw, "round")
+    raw = minimal_draft()
+    for player in raw["players"]:
+        player["nukiCount"] = 0
+    _reject(raw, "players.0")
+
+
+def test_v1_stays_four_player_only():
+    raw = minimal_draft()
+    raw["nPlayers"] = 3
+    _reject(raw, "nPlayers")
+
+
+def test_v2_requires_both_new_keys():
+    raw = minimal_draft_v2()
+    del raw["round"]["phantomRelSeat"]
+    _reject(raw, "round")
+    raw = minimal_draft_v2()
+    del raw["players"][2]["nukiCount"]
+    _reject(raw, "players.2")
+
+
+def test_v2_sanma_must_name_its_phantom():
+    for bad in (None, 0, 4, "3", 3.0):
+        raw = minimal_draft_v2(3)
+        raw["round"]["phantomRelSeat"] = bad
+        _reject(raw, "round.phantomRelSeat")
+
+
+def test_v2_four_player_keeps_phantom_null_and_nuki_zero():
+    raw = minimal_draft_v2()
+    raw["round"]["phantomRelSeat"] = 3
+    _reject(raw, "round.phantomRelSeat")
+    raw = minimal_draft_v2()
+    raw["players"][1]["nukiCount"] = 1
+    _reject(raw, "players.1.nukiCount")
+
+
+def test_v2_nuki_count_bounds():
+    for bad in (-1, 5, True, 2.0, None):
+        raw = minimal_draft_v2(3)
+        raw["players"][1]["nukiCount"] = bad
+        _reject(raw, "players.1.nukiCount")
+    raw = minimal_draft_v2(3)
+    raw["players"][1]["nukiCount"] = 4
+    assert parse_what_cut_draft(raw)["players"][1]["nukiCount"] == 4
 
 
 def test_evidence_requires_finite_fixed_length_geometry():
