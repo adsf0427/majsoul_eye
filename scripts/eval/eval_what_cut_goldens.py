@@ -9,7 +9,8 @@ import cv2
 import numpy as np
 
 from majsoul_eye.recognize.accuracy_gate import (
-    COMPARISON_VERSION, NEAR_DUPLICATE_HAMMING_MAX, evaluate_gate_metrics,
+    COMPARISON_VERSION, NEAR_DUPLICATE_HAMMING_MAX, build_accuracy_report,
+    evaluate_gate_metrics,
 )
 from majsoul_eye.recognize.manifest import load_model_manifest
 from majsoul_eye.recognize.runtime import (
@@ -42,6 +43,12 @@ def resolve_dataset_path(root: str, relative: str) -> str:
 def semantic_fields(draft: dict) -> list[tuple[str, object]]:
     fields = []
     round_ = draft["round"]
+    # Mode identity fields (comparison v2): a 3p board read as 4p — or a missed
+    # phantom seat / nuki pile — must surface as edits, not stay invisible.
+    fields.append(("nPlayers", draft.get("nPlayers", 4)))
+    fields.append(("round.phantomRelSeat", round_.get("phantomRelSeat")))
+    for seat, player in enumerate(draft["players"]):
+        fields.append((f"player.{seat}.nukiCount", player.get("nukiCount", 0)))
     for key in ("gameLength", "bakaze", "kyoku", "honba", "kyotaku",
                 "leftTileCount", "seatWindSelf"):
         fields.append((f"round.{key}", round_[key]))
@@ -123,10 +130,26 @@ def load_rows(path: str) -> list[dict]:
     return rows
 
 
+def parse_mode_goldens(specs: list[str]) -> dict[str, str]:
+    """Repeatable ``--goldens MODE=PATH`` -> {mode: path}. Every mode the
+    manifest declares must be given exactly once — a report missing a declared
+    mode can never promote the manifest, so refusing early is kinder."""
+    out = {}
+    for spec in specs:
+        mode, _, path = spec.partition("=")
+        if mode not in ("4p", "3p") or not path:
+            raise SystemExit(f"--goldens must be 4p=PATH or 3p=PATH, got {spec!r}")
+        if mode in out:
+            raise SystemExit(f"duplicate --goldens for mode {mode}")
+        out[mode] = path
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
-    parser.add_argument("--goldens", required=True)
+    parser.add_argument("--goldens", required=True, action="append",
+                        help="MODE=PATH, repeat per declared mode (4p=..., 3p=...)")
     parser.add_argument("--out", required=True)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--eye-revision", required=True)
@@ -144,51 +167,62 @@ def main():
     runtime = RecognitionRuntime.from_manifest(
         args.manifest, device=args.device, eye_revision=args.eye_revision,
         evaluation_mode=True)
-    rows = load_rows(args.goldens)
-    hashes = []
-    entered, edits, game_ids = [], [], []
-    dataset_versions = {row["datasetVersion"] for row in rows}
-    if len(dataset_versions) > 1:
-        raise SystemExit("golden rows must share one datasetVersion")
-    dataset_version = next(iter(dataset_versions),
-                           manifest.raw["goldenGate"]["datasetVersion"])
-    if dataset_version != manifest.raw["goldenGate"]["datasetVersion"]:
-        raise SystemExit("golden datasetVersion does not match manifest")
-    root = os.path.dirname(os.path.abspath(args.goldens))
-    for row in rows:
-        image_path = resolve_dataset_path(root, row["imagePath"])
-        image_bytes = open(image_path, "rb").read()
-        if hashlib.sha256(image_bytes).hexdigest() != row["imageSha256"]:
-            raise SystemExit(f"image SHA mismatch: {row['sampleId']}")
-        image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
-        if image is None:
-            raise SystemExit(f"cannot decode image: {row['sampleId']}")
-        hashes.append((row["sampleId"], dhash64(image)))
-        expected = parse_what_cut_draft(json.load(open(
-            resolve_dataset_path(root, row["expectedDraftPath"]), encoding="utf-8")))
-        context = RecognitionContext(row["sampleId"], f"eval:{row['sampleId']}",
-                                     row["imageSha256"], manifest.layout_id, True, None)
-        try:
-            sample_entered, modified = score_runtime_sample(
-                runtime, image_bytes, context, expected)
-            entered.append(sample_entered)
-            edits.append(modified)
-        except RuntimeFailure:
-            entered.append(False)
-            edits.append(len(semantic_fields(expected)))
-        game_ids.append(row["gameId"])
-    near = []
-    for left in range(len(hashes)):
-        for right in range(left + 1, len(hashes)):
-            if hamming64(hashes[left][1], hashes[right][1]) <= NEAR_DUPLICATE_HAMMING_MAX:
-                near.append((hashes[left][0], hashes[right][0]))
-    report = evaluate_gate_metrics(
+    mode_goldens = parse_mode_goldens(args.goldens)
+    if set(mode_goldens) != set(manifest.modes):
+        raise SystemExit(f"--goldens modes {sorted(mode_goldens)} must equal "
+                         f"manifest modes {sorted(manifest.modes)}")
+    mode_sections = {}
+    for mode, goldens_path in sorted(mode_goldens.items()):
+        rows = load_rows(goldens_path)
+        hashes = []
+        entered, edits, game_ids = [], [], []
+        dataset_versions = {row["datasetVersion"] for row in rows}
+        if len(dataset_versions) > 1:
+            raise SystemExit("golden rows must share one datasetVersion")
+        dataset_version = next(iter(dataset_versions),
+                               manifest.raw["goldenGate"]["datasetVersion"])
+        if dataset_version != manifest.raw["goldenGate"]["datasetVersion"]:
+            raise SystemExit("golden datasetVersion does not match manifest")
+        root = os.path.dirname(os.path.abspath(goldens_path))
+        for row in rows:
+            image_path = resolve_dataset_path(root, row["imagePath"])
+            image_bytes = open(image_path, "rb").read()
+            if hashlib.sha256(image_bytes).hexdigest() != row["imageSha256"]:
+                raise SystemExit(f"image SHA mismatch: {row['sampleId']}")
+            image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+            if image is None:
+                raise SystemExit(f"cannot decode image: {row['sampleId']}")
+            hashes.append((row["sampleId"], dhash64(image)))
+            expected = parse_what_cut_draft(json.load(open(
+                resolve_dataset_path(root, row["expectedDraftPath"]), encoding="utf-8")))
+            # board_mode stays "auto": mode detection is part of what the gate
+            # measures — a forced mode would grade an easier product than ships.
+            context = RecognitionContext(row["sampleId"], f"eval:{row['sampleId']}",
+                                         row["imageSha256"], manifest.layout_id, True, None)
+            try:
+                sample_entered, modified = score_runtime_sample(
+                    runtime, image_bytes, context, expected)
+                entered.append(sample_entered)
+                edits.append(modified)
+            except RuntimeFailure:
+                entered.append(False)
+                edits.append(len(semantic_fields(expected)))
+            game_ids.append(row["gameId"])
+        near = []
+        for left in range(len(hashes)):
+            for right in range(left + 1, len(hashes)):
+                if hamming64(hashes[left][1], hashes[right][1]) <= NEAR_DUPLICATE_HAMMING_MAX:
+                    near.append((hashes[left][0], hashes[right][0]))
+        section = evaluate_gate_metrics(
+            modified_fields=edits, game_ids=game_ids,
+            structurally_entered=entered, near_duplicate_pairs=near)
+        section["rawScreenshots"] = len(rows)
+        section["nearDuplicateSamplePairs"] = [list(pair) for pair in near]
+        mode_sections[mode] = section
+    report = build_accuracy_report(
         manifest_sha256=manifest.manifest_sha256,
-        dataset_version=dataset_version,
-        modified_fields=edits, game_ids=game_ids,
-        structurally_entered=entered, near_duplicate_pairs=near)
-    report["rawScreenshots"] = len(rows)
-    report["nearDuplicateSamplePairs"] = [list(pair) for pair in near]
+        dataset_version=manifest.raw["goldenGate"]["datasetVersion"],
+        modes=mode_sections)
     os.makedirs(os.path.dirname(report_path), exist_ok=True)
     payload = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     open(report_path, "w", encoding="utf-8").write(payload)

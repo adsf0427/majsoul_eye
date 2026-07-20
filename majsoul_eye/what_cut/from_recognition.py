@@ -89,9 +89,13 @@ def _annotation(field, evidence_ids):
             "evidenceIds": evidence_ids, "confirmedRevision": None}
 
 
-def build_recognized_draft(assembly: AssemblyResult, context: DraftBuildContext,
-                           recognizer: WhatCutRecognizerV1) -> WhatCutDraftV1:
-    observed = assembly.observed
+def draft_from_observed(observed, *, draft_id: str, source: dict,
+                        recognizer: WhatCutRecognizerV1 | None) -> WhatCutDraftV1:
+    """Project an ObservedState into a v2 draft skeleton (no annotations or
+    evidence). Shared by recognition (observed comes from assembly) and the
+    golden-set builder (observed comes from GT replay) — the expected draft
+    must be built by the SAME projection the recognizer uses, or every golden
+    would carry projection-convention diffs as fake edits."""
     players = []
     for seat in range(4):
         hand = None
@@ -131,13 +135,11 @@ def build_recognized_draft(assembly: AssemblyResult, context: DraftBuildContext,
                            "beforeMeldId": f"meld:{caller}:{meld_index}",
                            "tsumogiri": _mark(False)})
 
-    draft: WhatCutDraftV1 = {
-            "schemaVersion": 2, "draftId": context.draft_id, "revision": 0,
+    return {
+            "schemaVersion": 2, "draftId": draft_id, "revision": 0,
             "nPlayers": 3 if observed.sanma else 4,
             "seatFrame": "screen-relative",
-            "source": {"kind": "screenshot", "imageRef": context.image_ref,
-                       "imageHash": context.image_hash, "width": context.width,
-                       "height": context.height},
+            "source": source,
             "recognizer": recognizer,
             "round": {"gameLength": "hanchan", "bakaze": observed.bakaze,
                       "kyoku": observed.kyoku, "honba": observed.honba,
@@ -153,6 +155,16 @@ def build_recognized_draft(assembly: AssemblyResult, context: DraftBuildContext,
             "players": players, "annotations": {},
             "evidence": [],
             "historyOverrides": {"ghostDiscards": ghosts}}
+
+
+def build_recognized_draft(assembly: AssemblyResult, context: DraftBuildContext,
+                           recognizer: WhatCutRecognizerV1) -> WhatCutDraftV1:
+    draft = draft_from_observed(
+        assembly.observed, draft_id=context.draft_id,
+        source={"kind": "screenshot", "imageRef": context.image_ref,
+                "imageHash": context.image_hash, "width": context.width,
+                "height": context.height},
+        recognizer=recognizer)
 
     editable_paths = _draft_editable_field_paths(draft)
     for field in assembly.fields:

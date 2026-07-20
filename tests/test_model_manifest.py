@@ -24,8 +24,9 @@ def manifest(asset, digest):
             "candidates": {"topK": 3, "calibrationVersion": None,
                            "autoReplace": False},
             "supportStatus": "experimental",
+            "modes": ["4p", "3p"],
             "goldenGate": {"datasetVersion": "majsoul-desktop-16x9-gold-v1",
-                           "comparisonVersion": "what-cut-semantic-v1",
+                           "comparisonVersion": "what-cut-semantic-v2",
                            "reportPath": "model-manifest.internal-v1.accuracy.json",
                            "reportChecksumPath": "model-manifest.internal-v1.accuracy.json.sha256"}}
 
@@ -84,3 +85,26 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
     print("test_model_manifest OK")
+
+
+def test_manifest_rejects_bad_modes_declarations():
+    with tempfile.TemporaryDirectory() as td:
+        asset = os.path.join(td, "detector.pt")
+        open(asset, "wb").write(b"model")
+        digest = hashlib.sha256(b"model").hexdigest()
+        for bad in ([], ["3p"], ["4p", "4p"], ["4p", "2p"], "4p", None):
+            raw = manifest("detector.pt", digest)
+            raw["modes"] = bad
+            path = os.path.join(td, "manifest.json")
+            open(path, "w", encoding="utf-8").write(json.dumps(raw))
+            try:
+                load_model_manifest(path)
+            except ManifestError as exc:
+                assert exc.code == "MODEL_MANIFEST_MISMATCH"
+            else:
+                raise AssertionError(f"modes {bad!r} must be rejected")
+        raw = manifest("detector.pt", digest)
+        raw["modes"] = ["4p"]
+        path = os.path.join(td, "manifest.json")
+        open(path, "w", encoding="utf-8").write(json.dumps(raw))
+        assert load_model_manifest(path).modes == ("4p",)
