@@ -15,14 +15,15 @@ MIN_STRUCTURAL_ENTRY_RATE = 0.95
 MAX_MEDIAN_MODIFIED_FIELDS = 0
 MAX_P90_MODIFIED_FIELDS = 2
 NEAR_DUPLICATE_HAMMING_MAX = 4
-COMPARISON_VERSION = "what-cut-semantic-v1"
+# v2: the semantic diff gained the sanma mode fields (nPlayers, phantomRelSeat,
+# nukiCount) — a mode misread now counts as edits instead of being invisible.
+COMPARISON_VERSION = "what-cut-semantic-v2"
+# Board modes a manifest may declare. The layout is mode-agnostic (localization
+# is shared); the GATE is not — accuracy must be proven per mode.
+KNOWN_MODES = ("4p", "3p")
 
 
-class AccuracyReportV1(TypedDict):
-    schemaVersion: int
-    datasetVersion: str
-    comparisonVersion: str
-    manifestSha256: str
+class AccuracyModeReport(TypedDict):
     thresholds: dict[str, int | float]
     rawScreenshots: int
     effectiveScreenshots: int
@@ -36,15 +37,31 @@ class AccuracyReportV1(TypedDict):
     failures: list[str]
 
 
+class AccuracyReportV2(TypedDict):
+    """One report per manifest, one section per DECLARED mode.
+
+    A manifest is `supported` only when every mode it declares passes its own
+    section — a 4p-only golden run must never promote a manifest that also
+    serves sanma."""
+    schemaVersion: int
+    datasetVersion: str
+    comparisonVersion: str
+    manifestSha256: str
+    modes: dict[str, AccuracyModeReport]
+    passed: bool
+    failures: list[str]
+
+
 def _nearest_rank(values: list[int], percentile: float) -> int:
     ordered = sorted(values)
     return ordered[max(0, math.ceil(percentile * len(ordered)) - 1)]
 
 
-def evaluate_gate_metrics(*, manifest_sha256: str, dataset_version: str,
-                          modified_fields: list[int], game_ids: list[str],
+def evaluate_gate_metrics(*, modified_fields: list[int], game_ids: list[str],
                           structurally_entered: list[bool],
-                          near_duplicate_pairs: list[tuple[str, str]]) -> AccuracyReportV1:
+                          near_duplicate_pairs: list[tuple[str, str]]) -> AccuracyModeReport:
+    """One MODE's metrics -> its report section. Thresholds are identical per
+    mode: sanma buys no discount."""
     if not (len(modified_fields) == len(game_ids) == len(structurally_entered)):
         raise ValueError("golden metric vectors must have equal length")
     count = len(modified_fields)
@@ -62,15 +79,13 @@ def evaluate_gate_metrics(*, manifest_sha256: str, dataset_version: str,
         failures.append(f"medianModifiedFields {median} > {MAX_MEDIAN_MODIFIED_FIELDS}")
     if p90 > MAX_P90_MODIFIED_FIELDS:
         failures.append(f"p90ModifiedFields {p90} > {MAX_P90_MODIFIED_FIELDS}")
-    return {"schemaVersion": 1, "datasetVersion": dataset_version,
-            "comparisonVersion": COMPARISON_VERSION,
-            "thresholds": {"minScreenshots": MIN_SCREENSHOTS,
+    return {"thresholds": {"minScreenshots": MIN_SCREENSHOTS,
                            "minGames": MIN_GAMES,
                            "minStructuralEntryRate": MIN_STRUCTURAL_ENTRY_RATE,
                            "maxMedianModifiedFields": MAX_MEDIAN_MODIFIED_FIELDS,
                            "maxP90ModifiedFields": MAX_P90_MODIFIED_FIELDS,
                            "nearDuplicateHammingMax": NEAR_DUPLICATE_HAMMING_MAX},
-            "manifestSha256": manifest_sha256, "effectiveScreenshots": count,
+            "effectiveScreenshots": count,
             "rawScreenshots": count,
             "distinctGames": games, "nearDuplicatePairs": len(near_duplicate_pairs),
             "structuralEntryRate": entry_rate, "medianModifiedFields": median,
@@ -79,7 +94,20 @@ def evaluate_gate_metrics(*, manifest_sha256: str, dataset_version: str,
             "passed": not failures, "failures": failures}
 
 
-def load_accuracy_report(manifest: LoadedModelManifest) -> AccuracyReportV1:
+def build_accuracy_report(*, manifest_sha256: str, dataset_version: str,
+                          modes: dict[str, AccuracyModeReport]) -> AccuracyReportV2:
+    if not modes or any(mode not in KNOWN_MODES for mode in modes):
+        raise ValueError(f"report modes must be a non-empty subset of {KNOWN_MODES}")
+    failures = [f"mode {mode}: {failure}"
+                for mode in sorted(modes) for failure in modes[mode]["failures"]]
+    return {"schemaVersion": 2, "datasetVersion": dataset_version,
+            "comparisonVersion": COMPARISON_VERSION,
+            "manifestSha256": manifest_sha256,
+            "modes": {mode: modes[mode] for mode in sorted(modes)},
+            "passed": not failures, "failures": failures}
+
+
+def load_accuracy_report(manifest: LoadedModelManifest) -> AccuracyReportV2:
     gate = manifest.raw["goldenGate"]
     root = os.path.dirname(manifest.path)
     report_path = os.path.abspath(os.path.join(root, gate["reportPath"]))
@@ -97,61 +125,88 @@ def load_accuracy_report(manifest: LoadedModelManifest) -> AccuracyReportV1:
     return json.loads(report_bytes)
 
 
-def _validate_report(report: dict) -> None:
-    expected = {"schemaVersion", "datasetVersion", "comparisonVersion",
-        "manifestSha256", "thresholds",
+def _validate_mode_report(section: dict) -> None:
+    expected = {"thresholds",
         "rawScreenshots", "effectiveScreenshots", "distinctGames",
         "nearDuplicatePairs", "structuralEntryRate", "medianModifiedFields",
         "p90ModifiedFields", "nearDuplicateSamplePairs", "passed", "failures"}
     numeric_counts = ("rawScreenshots", "effectiveScreenshots", "distinctGames",
                       "nearDuplicatePairs", "p90ModifiedFields")
-    if (not isinstance(report, dict) or set(report) != expected
-            or report.get("schemaVersion") != 1
-            or not isinstance(report.get("datasetVersion"), str)
-            or not report["datasetVersion"]
-            or report.get("comparisonVersion") != COMPARISON_VERSION
-            or report.get("thresholds") != {
+    if (not isinstance(section, dict) or set(section) != expected
+            or section.get("thresholds") != {
                 "minScreenshots": MIN_SCREENSHOTS, "minGames": MIN_GAMES,
                 "minStructuralEntryRate": MIN_STRUCTURAL_ENTRY_RATE,
                 "maxMedianModifiedFields": MAX_MEDIAN_MODIFIED_FIELDS,
                 "maxP90ModifiedFields": MAX_P90_MODIFIED_FIELDS,
                 "nearDuplicateHammingMax": NEAR_DUPLICATE_HAMMING_MAX}
+            or any(type(section.get(key)) is not int or section[key] < 0
+                   for key in numeric_counts)
+            or not isinstance(section.get("medianModifiedFields"), (int, float))
+            or not math.isfinite(section["medianModifiedFields"])
+            or not isinstance(section.get("structuralEntryRate"), (int, float))
+            or not math.isfinite(section["structuralEntryRate"])
+            or not 0 <= section["structuralEntryRate"] <= 1
+            or type(section.get("passed")) is not bool
+            or not isinstance(section.get("failures"), list)
+            or any(not isinstance(value, str) for value in section["failures"])
+            or section["passed"] != (len(section["failures"]) == 0)
+            or section["rawScreenshots"] < section["effectiveScreenshots"]
+            or not isinstance(section.get("nearDuplicateSamplePairs"), list)
+            or len(section["nearDuplicateSamplePairs"]) != section["nearDuplicatePairs"]
+            or any(not isinstance(pair, list) or len(pair) != 2
+                   or any(not isinstance(sample_id, str) or not sample_id
+                          for sample_id in pair)
+                   for pair in section["nearDuplicateSamplePairs"])):
+        raise ManifestError("MODEL_MANIFEST_MISMATCH", "invalid accuracy report shape")
+
+
+def _validate_report(report: dict) -> None:
+    expected = {"schemaVersion", "datasetVersion", "comparisonVersion",
+                "manifestSha256", "modes", "passed", "failures"}
+    if (not isinstance(report, dict) or set(report) != expected
+            or report.get("schemaVersion") != 2
+            or not isinstance(report.get("datasetVersion"), str)
+            or not report["datasetVersion"]
+            or report.get("comparisonVersion") != COMPARISON_VERSION
             or not isinstance(report.get("manifestSha256"), str)
             or len(report["manifestSha256"]) != 64
             or any(ch not in "0123456789abcdef" for ch in report["manifestSha256"])
-            or any(type(report.get(key)) is not int or report[key] < 0
-                   for key in numeric_counts)
-            or not isinstance(report.get("medianModifiedFields"), (int, float))
-            or not math.isfinite(report["medianModifiedFields"])
-            or not isinstance(report.get("structuralEntryRate"), (int, float))
-            or not math.isfinite(report["structuralEntryRate"])
-            or not 0 <= report["structuralEntryRate"] <= 1
+            or not isinstance(report.get("modes"), dict) or not report["modes"]
+            or any(mode not in KNOWN_MODES for mode in report["modes"])
             or type(report.get("passed")) is not bool
             or not isinstance(report.get("failures"), list)
             or any(not isinstance(value, str) for value in report["failures"])
             or report["passed"] != (len(report["failures"]) == 0)
-            or report["rawScreenshots"] < report["effectiveScreenshots"]
-            or not isinstance(report.get("nearDuplicateSamplePairs"), list)
-            or len(report["nearDuplicateSamplePairs"]) != report["nearDuplicatePairs"]
-            or any(not isinstance(pair, list) or len(pair) != 2
-                   or any(not isinstance(sample_id, str) or not sample_id
-                          for sample_id in pair)
-                   for pair in report["nearDuplicateSamplePairs"])):
+            or report["passed"] != all(section.get("passed") is True
+                                       for section in report["modes"].values())):
         raise ManifestError("MODEL_MANIFEST_MISMATCH", "invalid accuracy report shape")
+    for section in report["modes"].values():
+        _validate_mode_report(section)
+
+
+def _verify_mode_section(section: AccuracyModeReport) -> bool:
+    return (section["passed"] and section["effectiveScreenshots"] >= MIN_SCREENSHOTS
+            and section["distinctGames"] >= MIN_GAMES
+            and section["nearDuplicatePairs"] == 0
+            and section["structuralEntryRate"] >= MIN_STRUCTURAL_ENTRY_RATE
+            and section["medianModifiedFields"] <= MAX_MEDIAN_MODIFIED_FIELDS
+            and section["p90ModifiedFields"] <= MAX_P90_MODIFIED_FIELDS)
 
 
 def verify_layout_support(manifest: LoadedModelManifest,
-                          report: AccuracyReportV1 | None = None) -> None:
+                          report: AccuracyReportV2 | None = None) -> None:
     if manifest.support_status == "experimental":
         return
     report = report or load_accuracy_report(manifest)
     _validate_report(report)
-    if (not report["passed"] or report["effectiveScreenshots"] < MIN_SCREENSHOTS
-            or report["distinctGames"] < MIN_GAMES
-            or report["nearDuplicatePairs"] != 0
-            or report["structuralEntryRate"] < MIN_STRUCTURAL_ENTRY_RATE
-            or report["medianModifiedFields"] > MAX_MEDIAN_MODIFIED_FIELDS
-            or report["p90ModifiedFields"] > MAX_P90_MODIFIED_FIELDS):
+    # Every DECLARED mode needs its own passing section — no more, no less. A
+    # report proving only 4p must not promote a manifest that also serves 3p,
+    # and a stray section for an undeclared mode means report/manifest drift.
+    if set(report["modes"]) != set(manifest.modes):
+        raise ManifestError("MODEL_MANIFEST_MISMATCH",
+                            "accuracy report modes do not match manifest modes")
+    if not report["passed"] or not all(
+            _verify_mode_section(report["modes"][mode]) for mode in report["modes"]):
         raise ManifestError("MODEL_MANIFEST_MISMATCH", "supported layout lacks passing report")
     if report["manifestSha256"] != manifest.manifest_sha256:
         raise ManifestError("MODEL_MANIFEST_MISMATCH", "accuracy report was produced by another manifest")

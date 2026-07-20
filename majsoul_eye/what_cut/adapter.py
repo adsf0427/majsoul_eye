@@ -65,6 +65,11 @@ def draft_to_observed(draft: WhatCutDraftV1) -> DraftAdapterResult:
     overrides = ReconstructionOverrides()
     observed = ObservedState()
     round_ = draft["round"]
+    # v1 drafts carry neither key; they are four-player by construction.
+    # Game-logic violations (occupied phantom, 2m-8m, chi, …) are check_observed's
+    # job downstream — this projection only carries the declared mode.
+    observed.sanma = draft["nPlayers"] == 3
+    observed.phantom_rel = round_.get("phantomRelSeat") if observed.sanma else None
     observed.bakaze = round_["bakaze"]
     observed.kyoku = round_["kyoku"]
     observed.honba = round_["honba"]
@@ -89,6 +94,7 @@ def draft_to_observed(draft: WhatCutDraftV1) -> DraftAdapterResult:
     for seat, player in enumerate(draft["players"]):
         observed.reach[seat] = player["reach"]
         observed.concealed_counts[seat] = player["concealedCount"]
+        observed.nukidora[seat] = player.get("nukiCount", 0)
         if seat == 0:
             if player["hand"] is None:
                 issues.append(_issue("MISSING_HERO_HAND", "players.0.hand"))

@@ -1,12 +1,28 @@
 from majsoul_eye.recognize.accuracy_gate import (
-    evaluate_gate_metrics, verify_layout_support,
+    build_accuracy_report, evaluate_gate_metrics, verify_layout_support,
 )
 from majsoul_eye.recognize.manifest import ManifestError
 
 
+def fake_manifest(modes=("4p", "3p"), sha="a" * 64, dataset="gold-v1"):
+    return type("M", (), {
+        "support_status": "supported", "manifest_sha256": sha,
+        "modes": tuple(modes),
+        "raw": {"goldenGate": {"datasetVersion": dataset,
+                                 "comparisonVersion": "what-cut-semantic-v2"}},
+    })()
+
+
+def passing_section():
+    return evaluate_gate_metrics(
+        modified_fields=[0] * 89 + [2] * 11,
+        game_ids=[f"g{i // 5}" for i in range(100)],
+        structurally_entered=[True] * 95 + [False] * 5,
+        near_duplicate_pairs=[])
+
+
 def test_gate_rejects_small_or_non_independent_set():
     report = evaluate_gate_metrics(
-        manifest_sha256="a" * 64, dataset_version="tiny-v1",
         modified_fields=[0] * 50, game_ids=[f"g{i // 5}" for i in range(50)],
         structurally_entered=[True] * 50, near_duplicate_pairs=[])
     assert report["passed"] is False
@@ -17,7 +33,6 @@ def test_gate_rejects_small_or_non_independent_set():
 def test_gate_enforces_all_user_cost_thresholds():
     edits = [0] * 89 + [3] * 11
     report = evaluate_gate_metrics(
-        manifest_sha256="a" * 64, dataset_version="gold-v1",
         modified_fields=edits, game_ids=[f"g{i // 5}" for i in range(100)],
         structurally_entered=[True] * 94 + [False] * 6,
         near_duplicate_pairs=[])
@@ -27,12 +42,7 @@ def test_gate_enforces_all_user_cost_thresholds():
 
 
 def test_gate_passes_only_complete_de_duplicated_target():
-    report = evaluate_gate_metrics(
-        manifest_sha256="a" * 64, dataset_version="gold-v1",
-        modified_fields=[0] * 89 + [2] * 11,
-        game_ids=[f"g{i // 5}" for i in range(100)],
-        structurally_entered=[True] * 95 + [False] * 5,
-        near_duplicate_pairs=[])
+    report = passing_section()
     assert report["passed"] is True
     assert report["medianModifiedFields"] == 0
     assert report["p90ModifiedFields"] == 2
@@ -40,7 +50,6 @@ def test_gate_passes_only_complete_de_duplicated_target():
 
 def test_conventional_even_median_does_not_round_down():
     report = evaluate_gate_metrics(
-        manifest_sha256="a" * 64, dataset_version="gold-v1",
         modified_fields=[0] * 50 + [1] * 50,
         game_ids=[f"g{i // 5}" for i in range(100)],
         structurally_entered=[True] * 100, near_duplicate_pairs=[])
@@ -49,23 +58,52 @@ def test_conventional_even_median_does_not_round_down():
 
 
 def test_supported_report_rejects_non_finite_metric():
-    report = evaluate_gate_metrics(
+    report = build_accuracy_report(
         manifest_sha256="a" * 64, dataset_version="gold-v1",
-        modified_fields=[0] * 100,
-        game_ids=[f"g{i // 5}" for i in range(100)],
-        structurally_entered=[True] * 100, near_duplicate_pairs=[])
-    report["structuralEntryRate"] = float("nan")
-    manifest = type("M", (), {
-        "support_status": "supported", "manifest_sha256": "a" * 64,
-        "raw": {"goldenGate": {"datasetVersion": "gold-v1",
-                                 "comparisonVersion": "what-cut-semantic-v1"}},
-    })()
+        modes={"4p": passing_section(), "3p": passing_section()})
+    report["modes"]["3p"]["structuralEntryRate"] = float("nan")
     try:
-        verify_layout_support(manifest, report)
+        verify_layout_support(fake_manifest(), report)
     except ManifestError as exc:
         assert exc.code == "MODEL_MANIFEST_MISMATCH"
     else:
         raise AssertionError("NaN report metric must never promote a layout")
+
+
+def test_supported_requires_every_declared_mode_to_pass():
+    # A passing 4p-only report must not promote a manifest that also serves 3p.
+    report = build_accuracy_report(
+        manifest_sha256="a" * 64, dataset_version="gold-v1",
+        modes={"4p": passing_section()})
+    try:
+        verify_layout_support(fake_manifest(("4p", "3p")), report)
+    except ManifestError as exc:
+        assert "modes do not match" in str(exc)
+    else:
+        raise AssertionError("missing 3p section must never promote a 3p manifest")
+    # And a failing 3p section blocks even when 4p is perfect.
+    failing = evaluate_gate_metrics(
+        modified_fields=[0] * 30, game_ids=[f"g{i // 5}" for i in range(30)],
+        structurally_entered=[True] * 30, near_duplicate_pairs=[])
+    report = build_accuracy_report(
+        manifest_sha256="a" * 64, dataset_version="gold-v1",
+        modes={"4p": passing_section(), "3p": failing})
+    assert report["passed"] is False
+    assert any(failure.startswith("mode 3p:") for failure in report["failures"])
+    try:
+        verify_layout_support(fake_manifest(("4p", "3p")), report)
+    except ManifestError as exc:
+        assert exc.code == "MODEL_MANIFEST_MISMATCH"
+    else:
+        raise AssertionError("failing 3p section must never promote the manifest")
+
+
+def test_supported_accepts_fully_passing_two_mode_report():
+    report = build_accuracy_report(
+        manifest_sha256="a" * 64, dataset_version="gold-v1",
+        modes={"4p": passing_section(), "3p": passing_section()})
+    assert report["passed"] is True
+    verify_layout_support(fake_manifest(), report)
 
 
 def test_semantic_diff_excludes_ids_evidence_baseline_and_provenance():

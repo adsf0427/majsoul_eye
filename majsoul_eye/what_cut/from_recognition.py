@@ -47,6 +47,9 @@ def recognized_field_paths(field_key: str) -> tuple[str, ...]:
     score = re.fullmatch(r"round\.scores\.([0-3])", field_key)
     if score is not None:
         return (f"round.scores.{score.group(1)}",)
+    nuki = re.fullmatch(r"nuki:([0-3])", field_key)
+    if nuki is not None:
+        return (f"players.{nuki.group(1)}.nukiCount",)
     for pattern, render in _ITEM_KEY_PATTERNS:
         match = pattern.fullmatch(field_key)
         if match is not None:
@@ -59,6 +62,8 @@ def _draft_editable_field_paths(draft: WhatCutDraftV1) -> set[str]:
              ("gameLength", "bakaze", "kyoku", "honba", "kyotaku",
               "leftTileCount", "seatWindSelf")}
     paths.update(f"round.scores.{seat}" for seat in range(4))
+    if draft["nPlayers"] == 3:
+        paths.update(f"players.{seat}.nukiCount" for seat in range(4))
     paths.update(f"doraMarkers.{item['id']}.pai" for item in draft["doraMarkers"])
     for player in draft["players"]:
         if player["hand"] is not None:
@@ -84,9 +89,13 @@ def _annotation(field, evidence_ids):
             "evidenceIds": evidence_ids, "confirmedRevision": None}
 
 
-def build_recognized_draft(assembly: AssemblyResult, context: DraftBuildContext,
-                           recognizer: WhatCutRecognizerV1) -> WhatCutDraftV1:
-    observed = assembly.observed
+def draft_from_observed(observed, *, draft_id: str, source: dict,
+                        recognizer: WhatCutRecognizerV1 | None) -> WhatCutDraftV1:
+    """Project an ObservedState into a v2 draft skeleton (no annotations or
+    evidence). Shared by recognition (observed comes from assembly) and the
+    golden-set builder (observed comes from GT replay) — the expected draft
+    must be built by the SAME projection the recognizer uses, or every golden
+    would carry projection-convention diffs as fake edits."""
     players = []
     for seat in range(4):
         hand = None
@@ -112,7 +121,8 @@ def build_recognized_draft(assembly: AssemblyResult, context: DraftBuildContext,
         players.append({"relSeat": seat, "hand": hand, "drawnTile": drawn,
                         "concealedCount": observed.concealed_counts[seat],
                         "reach": observed.reach[seat], "rivers": rivers,
-                        "melds": melds})
+                        "melds": melds,
+                        "nukiCount": observed.nukidora[seat]})
 
     ghosts = []
     for caller in range(4):
@@ -125,12 +135,11 @@ def build_recognized_draft(assembly: AssemblyResult, context: DraftBuildContext,
                            "beforeMeldId": f"meld:{caller}:{meld_index}",
                            "tsumogiri": _mark(False)})
 
-    draft: WhatCutDraftV1 = {
-            "schemaVersion": 1, "draftId": context.draft_id, "revision": 0,
-            "nPlayers": 4, "seatFrame": "screen-relative",
-            "source": {"kind": "screenshot", "imageRef": context.image_ref,
-                       "imageHash": context.image_hash, "width": context.width,
-                       "height": context.height},
+    return {
+            "schemaVersion": 2, "draftId": draft_id, "revision": 0,
+            "nPlayers": 3 if observed.sanma else 4,
+            "seatFrame": "screen-relative",
+            "source": source,
             "recognizer": recognizer,
             "round": {"gameLength": "hanchan", "bakaze": observed.bakaze,
                       "kyoku": observed.kyoku, "honba": observed.honba,
@@ -138,12 +147,24 @@ def build_recognized_draft(assembly: AssemblyResult, context: DraftBuildContext,
                       "leftTileCount": observed.left_tile_count,
                       "seatWindSelf": observed.seat_wind_self,
                       "scores": list(observed.scores) if observed.scores is not None
-                                else [None, None, None, None]},
+                                else [None, None, None, None],
+                      "phantomRelSeat": observed.phantom_rel
+                                        if observed.sanma else None},
             "doraMarkers": [{"id": f"dora:{i}", "pai": tile}
                             for i, tile in enumerate(observed.dora_markers)],
             "players": players, "annotations": {},
             "evidence": [],
             "historyOverrides": {"ghostDiscards": ghosts}}
+
+
+def build_recognized_draft(assembly: AssemblyResult, context: DraftBuildContext,
+                           recognizer: WhatCutRecognizerV1) -> WhatCutDraftV1:
+    draft = draft_from_observed(
+        assembly.observed, draft_id=context.draft_id,
+        source={"kind": "screenshot", "imageRef": context.image_ref,
+                "imageHash": context.image_hash, "width": context.width,
+                "height": context.height},
+        recognizer=recognizer)
 
     editable_paths = _draft_editable_field_paths(draft)
     for field in assembly.fields:

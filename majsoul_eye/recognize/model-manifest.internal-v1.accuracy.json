@@ -1,0 +1,65 @@
+{
+  "comparisonVersion": "what-cut-semantic-v2",
+  "datasetVersion": "majsoul-gold-heldout-v2",
+  "failures": [
+    "mode 3p: effectiveScreenshots 9 < 100",
+    "mode 3p: distinctGames 1 < 20",
+    "mode 4p: effectiveScreenshots 54 < 100",
+    "mode 4p: distinctGames 5 < 20",
+    "mode 4p: structuralEntryRate 0.851852 < 0.950000",
+    "mode 4p: p90ModifiedFields 17 > 2"
+  ],
+  "manifestSha256": "c9660e2f57f86acae2288aa1292adcdce80c303e46a055de276aa356073f7f8b",
+  "modes": {
+    "3p": {
+      "distinctGames": 1,
+      "effectiveScreenshots": 9,
+      "failures": [
+        "effectiveScreenshots 9 < 100",
+        "distinctGames 1 < 20"
+      ],
+      "medianModifiedFields": 0.0,
+      "nearDuplicatePairs": 0,
+      "nearDuplicateSamplePairs": [],
+      "p90ModifiedFields": 0,
+      "passed": false,
+      "rawScreenshots": 9,
+      "structuralEntryRate": 1.0,
+      "thresholds": {
+        "maxMedianModifiedFields": 0,
+        "maxP90ModifiedFields": 2,
+        "minGames": 20,
+        "minScreenshots": 100,
+        "minStructuralEntryRate": 0.95,
+        "nearDuplicateHammingMax": 4
+      }
+    },
+    "4p": {
+      "distinctGames": 5,
+      "effectiveScreenshots": 54,
+      "failures": [
+        "effectiveScreenshots 54 < 100",
+        "distinctGames 5 < 20",
+        "structuralEntryRate 0.851852 < 0.950000",
+        "p90ModifiedFields 17 > 2"
+      ],
+      "medianModifiedFields": 0.0,
+      "nearDuplicatePairs": 0,
+      "nearDuplicateSamplePairs": [],
+      "p90ModifiedFields": 17,
+      "passed": false,
+      "rawScreenshots": 54,
+      "structuralEntryRate": 0.8518518518518519,
+      "thresholds": {
+        "maxMedianModifiedFields": 0,
+        "maxP90ModifiedFields": 2,
+        "minGames": 20,
+        "minScreenshots": 100,
+        "minStructuralEntryRate": 0.95,
+        "nearDuplicateHammingMax": 4
+      }
+    }
+  },
+  "passed": false,
+  "schemaVersion": 2
+}

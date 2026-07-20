@@ -32,6 +32,8 @@ class LoadedModelManifest:
     def layout_id(self): return self.raw["layout"]["layoutId"]
     @property
     def support_status(self): return self.raw["supportStatus"]
+    @property
+    def modes(self): return tuple(self.raw["modes"])
 
 
 def _sha256(path: str) -> str:
@@ -48,7 +50,7 @@ def load_model_manifest(path: str) -> LoadedModelManifest:
     raw = json.loads(raw_bytes)
     if not isinstance(raw, dict) or set(raw) != {"schemaVersion", "manifestVersion",
             "layout", "models", "inference", "candidates", "supportStatus",
-            "goldenGate"}:
+            "modes", "goldenGate"}:
         raise ManifestError("MODEL_MANIFEST_MISMATCH", "manifest keys drift")
     if raw.get("schemaVersion") != 1:
         raise ManifestError("MODEL_MANIFEST_MISMATCH", "manifest schemaVersion must be 1")
@@ -56,6 +58,15 @@ def load_model_manifest(path: str) -> LoadedModelManifest:
         raise ManifestError("MODEL_MANIFEST_MISMATCH", "manifestVersion must be non-empty")
     if raw.get("supportStatus") not in ("experimental", "supported"):
         raise ManifestError("MODEL_MANIFEST_MISMATCH", "invalid supportStatus")
+    # Board modes this manifest serves. The LAYOUT is mode-agnostic (the board
+    # is found by landmark fit either way, and the client cannot know the mode
+    # before uploading — X-Layout-ID vs X-Board-Mode); the accuracy GATE is
+    # per-mode, so the declaration lives here, not in a second layout id.
+    modes = raw.get("modes")
+    if (not isinstance(modes, list) or not modes
+            or any(mode not in ("4p", "3p") for mode in modes)
+            or len(set(modes)) != len(modes) or "4p" not in modes):
+        raise ManifestError("MODEL_MANIFEST_MISMATCH", "invalid modes declaration")
     layout = raw.get("layout") or {}
     # The board is found by landmark fit, not assumed from the frame's aspect, so
     # the contract pins the FIT's quality bars and the BOARD's minimum size — the
@@ -99,7 +110,7 @@ def load_model_manifest(path: str) -> LoadedModelManifest:
             or set(gate) != {"datasetVersion", "comparisonVersion",
                              "reportPath", "reportChecksumPath"}
             or not all(isinstance(gate[key], str) and gate[key] for key in gate)
-            or gate["comparisonVersion"] != "what-cut-semantic-v1"):
+            or gate["comparisonVersion"] != "what-cut-semantic-v2"):
         raise ManifestError("MODEL_MANIFEST_MISMATCH", "invalid golden gate paths")
     root = os.path.dirname(absolute)
     for key in ("reportPath", "reportChecksumPath"):

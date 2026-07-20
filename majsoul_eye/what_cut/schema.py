@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import math
 from copy import deepcopy
-from typing import Any, Literal, Mapping, TypedDict, cast
+from typing import Any, Literal, Mapping, NotRequired, TypedDict, cast
 
 from majsoul_eye.tiles import TILE_NAMES
 
-SCHEMA_VERSION: Literal[1] = 1
+# v2 adds sanma: nPlayers may be 3, round gains phantomRelSeat, players gain
+# nukiCount. v1 drafts (strictly four-player, no such keys) stay parseable
+# forever — they exist in the app's DB. The worker EMITS v2; readers accept
+# both. Key sets are exact per version: a v1 draft carrying v2 keys is invalid.
+SCHEMA_VERSION: Literal[2] = 2
+SCHEMA_VERSIONS = (1, 2)
 _TILES = set(TILE_NAMES) - {"back"}
 CurrentSource = Literal["forced", "inferred", "user"]
 BaselineSource = Literal["forced", "inferred"]
@@ -86,6 +91,9 @@ class WhatCutPlayerV1(TypedDict):
     reach: bool
     rivers: list[WhatCutDiscardV1]
     melds: list[WhatCutMeldV1]
+    # v2 only. Nukidora is a per-seat COUNT, not a meld (mirrors
+    # ObservedState.nukidora). Always 0 in a four-player draft.
+    nukiCount: NotRequired[int]
 
 
 class WhatCutRoundV1(TypedDict):
@@ -97,6 +105,11 @@ class WhatCutRoundV1(TypedDict):
     leftTileCount: int | None
     seatWindSelf: Literal["E", "S", "W", "N"] | None
     scores: list[int | None]
+    # v2 only. Sanma keeps the 4P screen ring; the empty chair's SCREEN slot
+    # rotates with the hero's absolute seat (phantom_rel = (3 - hero_abs) % 4),
+    # so it is an explicit observed field, never derivable from other HUD
+    # fields and never index 3. Non-null iff nPlayers == 3.
+    phantomRelSeat: NotRequired[int | None]
 
 
 class WhatCutSourceV1(TypedDict):
@@ -127,10 +140,10 @@ class WhatCutIssueV1(TypedDict):
 
 
 class WhatCutDraftV1(TypedDict):
-    schemaVersion: Literal[1]
+    schemaVersion: Literal[1, 2]
     draftId: str
     revision: int
-    nPlayers: Literal[4]
+    nPlayers: Literal[3, 4]
     seatFrame: Literal["screen-relative"]
     source: WhatCutSourceV1
     recognizer: WhatCutRecognizerV1 | None
@@ -279,18 +292,21 @@ def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:
         "doraMarkers", "players", "annotations", "evidence",
         "historyOverrides"})
     schema_version = root.get("schemaVersion")
-    if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
+    if type(schema_version) is not int or schema_version not in SCHEMA_VERSIONS:
         raise _schema_error(
             "UNSUPPORTED_SCHEMA", "schemaVersion",
-            "only schemaVersion 1 is supported",
+            "only schemaVersions 1 and 2 are supported",
         )
+    v2 = schema_version == 2
     n_players = root.get("nPlayers")
-    if (type(n_players) is not int or n_players != 4
+    if (type(n_players) is not int or n_players not in ((3, 4) if v2 else (4,))
             or root.get("seatFrame") != "screen-relative"):
         raise _schema_error(
             "INVALID_DRAFT", "nPlayers",
-            "draft must be screen-relative four-player",
+            "draft must be screen-relative three- or four-player"
+            if v2 else "schemaVersion 1 draft must be screen-relative four-player",
         )
+    sanma = n_players == 3
     _require_id(root.get("draftId"), "draftId")
     if type(root.get("revision")) is not int or root["revision"] < 0:
         raise _schema_error(
@@ -338,8 +354,26 @@ def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:
                 "invalid support status",
             )
     round_ = _require_dict(root.get("round"), "round")
-    _require_keys(round_, "round", {"gameLength", "bakaze", "kyoku", "honba",
-        "kyotaku", "leftTileCount", "seatWindSelf", "scores"})
+    round_keys = {"gameLength", "bakaze", "kyoku", "honba",
+        "kyotaku", "leftTileCount", "seatWindSelf", "scores"}
+    if v2:
+        round_keys.add("phantomRelSeat")
+    _require_keys(round_, "round", round_keys)
+    if v2:
+        phantom = round_.get("phantomRelSeat")
+        if sanma:
+            # The hero is never the phantom (it rotates over 1..3 with the
+            # hero's absolute seat), so rel 0 is never a legal value.
+            if type(phantom) is not int or phantom not in (1, 2, 3):
+                raise _schema_error(
+                    "INVALID_DRAFT", "round.phantomRelSeat",
+                    "sanma draft must name its phantom seat (1..3)",
+                )
+        elif phantom is not None:
+            raise _schema_error(
+                "INVALID_DRAFT", "round.phantomRelSeat",
+                "four-player draft must keep phantomRelSeat null",
+            )
     if not isinstance(round_["scores"], list) or len(round_["scores"]) != 4:
         raise _schema_error(
             "INVALID_DRAFT", "round.scores", "scores must have four entries",
@@ -429,10 +463,25 @@ def parse_what_cut_draft(payload: Mapping[str, Any]) -> WhatCutDraftV1:
             )
         ids.add(item_id)
 
+    player_keys = {"relSeat", "hand", "drawnTile",
+        "concealedCount", "reach", "rivers", "melds"}
+    if v2:
+        player_keys.add("nukiCount")
     for pi, player in enumerate(players):
         p = _require_dict(player, f"players.{pi}")
-        _require_keys(p, f"players.{pi}", {"relSeat", "hand", "drawnTile",
-            "concealedCount", "reach", "rivers", "melds"})
+        _require_keys(p, f"players.{pi}", player_keys)
+        if v2:
+            nuki = p.get("nukiCount")
+            if type(nuki) is not int or not 0 <= nuki <= 4:
+                raise _schema_error(
+                    "INVALID_DRAFT", f"players.{pi}.nukiCount",
+                    "nukiCount must be an integer in 0..4",
+                )
+            if not sanma and nuki != 0:
+                raise _schema_error(
+                    "INVALID_DRAFT", f"players.{pi}.nukiCount",
+                    "nukiCount must be 0 in a four-player draft",
+                )
         if not isinstance(p["reach"], bool):
             raise _schema_error(
                 "INVALID_DRAFT", f"players.{pi}.reach", "reach must be boolean",
